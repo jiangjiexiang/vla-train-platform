@@ -17,9 +17,18 @@ ARG PYPI_INDEX=https://mirrors.aliyun.com/pypi/simple/
 ENV PIP_DEFAULT_TIMEOUT=120 \
     PIP_INDEX_URL=${PYPI_INDEX}
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+# apt 也换国内源：python:3.11-slim 基于 Debian，官方 deb.debian.org 在本网络约 1.6 KB/s，
+# trixie 的 Packages 索引有 9.6 MB，单这一条就耗掉十几分钟。换成清华源后是 MB/s 级。
+# 仅在构建时需要，不影响运行。若目标环境访问不了清华源，用 --build-arg APT_MIRROR= 覆盖。
+ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
+RUN set -eux; \
+    if [ -n "${APT_MIRROR}" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" \
+            /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends libgomp1; \
+    rm -rf /var/lib/apt/lists/*
 
 # wheel 由 fetch-wheels.sh 预先放到 wheels/ 下；缺失时构建会直接失败并提示，
 # 而不是静默回退到慢速源（那会让构建卡几小时，比失败更糟）。

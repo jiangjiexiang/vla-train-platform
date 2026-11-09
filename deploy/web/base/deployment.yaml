@@ -109,6 +109,11 @@ spec:
             - name: datasets
               mountPath: /datasets
               readOnly: true
+            # checkpoint 目录：Web 从这里读 metrics.jsonl 画 loss 曲线。
+            # 只读挂载——Web 不需要也不应该修改训练产物。
+            - name: checkpoints
+              mountPath: /data/vla-platform/checkpoints
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -142,6 +147,10 @@ spec:
         - name: datasets
           hostPath:
             path: /data/vla-platform/datasets
+            type: Directory
+        - name: checkpoints
+          hostPath:
+            path: /data/vla-platform/checkpoints
             type: Directory
         - name: history
           persistentVolumeClaim:

@@ -469,3 +469,20 @@ export interface JobCheckpointsResponse {
   items: CheckpointFile[];
   truncated: boolean;
 }
+
+/** 失败原因聚合里的一项。 */
+export interface FailureReason {
+  code: string;
+  count: number;
+  summary?: string | null;
+  suggestion?: string | null;
+  /** 最近一个该原因的失败任务，点进去能看日志 */
+  example_job?: string;
+}
+
+export interface FailureSummary {
+  total_failed: number;
+  classified: number;
+  unknown: number;
+  reasons: FailureReason[];
+}

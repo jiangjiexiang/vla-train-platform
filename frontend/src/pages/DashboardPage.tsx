@@ -1,11 +1,13 @@
-import { Button, Card, Col, Empty, Progress, Row, Spin, Statistic, Table, Tag, Typography } from 'antd';
+import { Button, Card, Col, Empty, Progress, Row, Space, Spin, Statistic, Table, Tag, Typography } from 'antd';
 import { CloudServerOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
 import { api, getErrorMessage, isAbortError } from '../api/client';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { usePolling } from '../hooks/usePolling';
-import type { ClusterNode, ClusterSummary, GpuMetric } from '../types/api';
+import { useAuth } from '../context/AuthContext';
+import type { ClusterNode, ClusterSummary, FailureReason, FailureSummary, GpuMetric } from '../types/api';
 import { percent } from '../utils/format';
 
 const nodeColumns: ColumnsType<ClusterNode> = [
@@ -81,6 +83,60 @@ export function DashboardPage() {
   });
 
   const jobs = summary?.jobs;
+  // 失败原因分布：运维判断「是不是平台在制造失败」的依据。
+  // 只对管理员展示——聚合结果会暴露他人的失败情况。
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const navigate = useNavigate();
+  const [failures, setFailures] = useState<FailureSummary | null>(null);
+  const [failuresLoading, setFailuresLoading] = useState(false);
+  const loadFailures = useCallback(async () => {
+    if (!isAdmin) return;
+    setFailuresLoading(true);
+    try {
+      setFailures(await api.getFailureSummary());
+    } catch {
+      // 聚合失败不该让整个总览页报错，静静地留空即可
+      setFailures(null);
+    } finally {
+      setFailuresLoading(false);
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    void loadFailures();
+  }, [loadFailures]);
+
+  const failureColumns: ColumnsType<FailureReason> = useMemo(
+    () => [
+      {
+        title: '原因',
+        dataIndex: 'summary',
+        render: (_, row) => (
+          <Space direction="vertical" size={0}>
+            <Typography.Text strong>{row.summary || row.code}</Typography.Text>
+            <Typography.Text type="secondary" className="hint">{row.suggestion}</Typography.Text>
+          </Space>
+        ),
+      },
+      {
+        title: '次数',
+        dataIndex: 'count',
+        width: 80,
+        render: (count: number) => <Tag color={count > 3 ? 'red' : 'orange'}>{count}</Tag>,
+      },
+      {
+        title: '示例',
+        dataIndex: 'example_job',
+        width: 200,
+        render: (job: string) => (
+          <Typography.Link onClick={() => navigate(`/jobs/${job}`)}>{job}</Typography.Link>
+        ),
+      },
+    ],
+    [navigate],
+  );
+
   return (
     <div>
       <div className="page-heading">
@@ -140,6 +196,31 @@ export function DashboardPage() {
             <Col xs={12} md={4}><Statistic title="已取消" value={jobs?.cancelled ?? 0} /></Col>
             <Col xs={12} md={4}><Statistic title="状态未知" value={jobs?.unknown ?? 0} /></Col>
           </Row>
+        </Card>
+
+        <Card
+          title="失败原因分布"
+          className="section-card"
+          extra={<Button size="small" onClick={refresh}>刷新</Button>}
+        >
+          {failures && failures.total_failed === 0 ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="最近没有失败任务" />
+          ) : (
+            <Table<FailureReason>
+              rowKey="code"
+              size="small"
+              columns={failureColumns}
+              dataSource={failures?.reasons || []}
+              pagination={false}
+              loading={failuresLoading}
+              locale={{ emptyText: <Empty description="暂无失败记录" /> }}
+            />
+          )}
+          {failures && failures.unknown > 0 ? (
+            <Typography.Text type="secondary" className="hint">
+              还有 {failures.unknown} 个失败任务没有诊断结论（日志可能已被回收）
+            </Typography.Text>
+          ) : null}
         </Card>
 
         <Card title={`节点 (${summary?.nodes.length ?? 0})`} className="section-card">

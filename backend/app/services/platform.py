@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import time
@@ -14,6 +15,12 @@ from pydantic import ValidationError
 from ..config import ROLE_ADMIN, ROLE_USER, Settings
 from ..history import HistoryStore, utc_now
 from ..models import SubmitSpec, check_labels, check_payload_size
+from ..params_templates import (
+    BUILTIN_TEMPLATE,
+    MAX_TEMPLATE_BYTES,
+    parse_template,
+    validate_image_name,
+)
 from ..templates.pytorchjob import render_pytorch_job
 from .errors import ServiceError
 from .kubernetes import KubernetesClient
@@ -235,6 +242,37 @@ class PlatformService:
         if limit is not None:
             items = items[effective_offset : effective_offset + limit]
         return {"items": items, "total": total, "limit": limit, "offset": effective_offset}
+
+    def get_params_template(self, image: str) -> dict[str, Any]:
+        """返回镜像的参数模板；未登记时回退内置通用模板。"""
+        if not validate_image_name(image):
+            raise ServiceError(404, f"image {image} not found")
+        record = self.history.get_image_params(image)
+        if record is None:
+            return {
+                "image": image,
+                "source": "builtin",
+                "template": copy.deepcopy(BUILTIN_TEMPLATE),
+            }
+        return {"image": image, "source": "file", "template": record["template"]}
+
+    def put_params_template(self, image: str, payload: Any) -> dict[str, Any]:
+        if not validate_image_name(image):
+            raise ServiceError(404, f"image {image} not found")
+        try:
+            template = parse_template(payload)
+        except ValueError as exc:
+            raise ServiceError(422, str(exc)) from exc
+        serialized = template.model_dump_json(exclude_none=True)
+        if len(serialized.encode("utf-8")) > MAX_TEMPLATE_BYTES:
+            raise ServiceError(422, f"template must not exceed {MAX_TEMPLATE_BYTES} bytes")
+        self.history.put_image_params(image, serialized, utc_now())
+        return {"image": image, "source": "file", "template": json.loads(serialized)}
+
+    def delete_params_template(self, image: str) -> None:
+        if not validate_image_name(image):
+            raise ServiceError(404, f"image {image} not found")
+        self.history.delete_image_params(image)
 
     def list_images(self) -> list[dict[str, Any]]:
         """Image suggestions for the submit form.

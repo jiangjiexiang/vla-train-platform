@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,13 @@ class HistoryStore:
                     created_at TEXT,
                     cancelled_at TEXT NOT NULL,
                     status TEXT
+                );
+                -- v0.9.1：镜像的训练参数模板。平台无法直接读 containerd，
+                -- 由管理员通过 PUT /images/{image}/params 登记，这里负责持久化。
+                CREATE TABLE IF NOT EXISTS image_params (
+                    image TEXT PRIMARY KEY,
+                    template_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
                 """
             )
@@ -93,6 +101,47 @@ class HistoryStore:
         if row is None:
             return None
         return spec_from_stored_json(row["spec_json"]), row["submitted_at"]
+
+    def get_image_params(self, image: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT image, template_json, updated_at FROM image_params WHERE image = ?",
+                (image,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "image": row["image"],
+            "template": json.loads(row["template_json"]),
+            "updated_at": row["updated_at"],
+        }
+
+    def put_image_params(self, image: str, template_json: str, updated_at: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO image_params(image, template_json, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(image) DO UPDATE SET
+                    template_json = excluded.template_json,
+                    updated_at = excluded.updated_at
+                """,
+                (image, template_json, updated_at),
+            )
+
+    def delete_image_params(self, image: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM image_params WHERE image = ?", (image,))
+        return cursor.rowcount > 0
+
+    def list_image_params(self) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT image, template_json, updated_at FROM image_params ORDER BY image"
+            ).fetchall()
+        return [
+            {"image": row["image"], "template": json.loads(row["template_json"]), "updated_at": row["updated_at"]}
+            for row in rows
+        ]
 
     def iter_submissions(self) -> list[tuple[SubmitSpec, str]]:
         """Every submission record, newest first, de-duplicated by job name.

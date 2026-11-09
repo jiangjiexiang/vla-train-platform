@@ -171,6 +171,30 @@ def put_quota(
 # --- 任务 ----------------------------------------------------------------
 
 
+@router.get("/images/{image:path}/params", dependencies=[Depends(require_user)])
+def get_image_params(image: str, service: PlatformService = Depends(get_service)) -> dict[str, Any]:
+    """镜像的训练参数模板；未登记时回退内置通用模板（source=builtin）。"""
+    return service.get_params_template(image)
+
+
+@router.put("/images/{image:path}/params", dependencies=[Depends(require_admin)])
+def put_image_params(
+    image: str,
+    payload: dict[str, Any],
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    """登记/更新镜像的参数模板（仅 admin）。"""
+    return service.put_params_template(image, payload)
+
+
+@router.delete("/images/{image:path}/params", status_code=204, dependencies=[Depends(require_admin)])
+def delete_image_params(image: str, service: PlatformService = Depends(get_service)) -> Response:
+    """删除登记，之后回退内置模板（仅 admin）。"""
+    service.delete_params_template(image)
+    # 204 不能带响应体，FastAPI 要求显式返回 Response 而不是 None
+    return Response(status_code=204)
+
+
 @router.get("/images", dependencies=[Depends(require_user)])
 def list_images(service: PlatformService = Depends(get_service)) -> dict[str, Any]:
     """镜像候选列表，供提交页下拉选择。默认镜像排在最前。"""

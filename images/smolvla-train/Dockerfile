@@ -157,6 +157,12 @@ assert abs(n - 450_000_000) < 10_000_000, f'权重不对: {n}'; \
 print('离线加载成功')"
 
 WORKDIR /app
+# 指标 hook：把 lerobot 的 loss 转写成平台能读的 metrics.jsonl。
+# lerobot 自己不写任何指标文件，不接这一层平台上就没有 loss 曲线。
+COPY metrics_hook.py /app/metrics_hook.py
+# metrics_boot/sitecustomize.py 由 train_vla.py 塞进训练子进程的 PYTHONPATH，
+# 让 hook 在**训练进程本身**生效。主进程里 patch 不会传染给 subprocess。
+COPY metrics_boot/ /app/metrics_boot/
 COPY train_vla.py /app/train_vla.py
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

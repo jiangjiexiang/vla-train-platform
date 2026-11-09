@@ -88,12 +88,19 @@ def resolve_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        # 平台把产物根目录设在 /checkpoints/<任务名>/，lerobot 自己再往里写
-        # train_config.json、checkpoints/ 等。这里**不要** mkdir：
-        # lerobot 要求 output_dir 不存在（除非 resume），预先建好会直接
-        # FileExistsError，而报错信息里没有「是谁建的这个目录」，很难排查。
-        root = os.environ.get("CHECKPOINT_DIR") or "/checkpoints"
-        output_dir = Path(root) / (os.environ.get("JOB_NAME") or "local")
+        # 平台注入的 CHECKPOINT_DIR **已经是** /checkpoints/<任务名>。
+        # 早先这里又拼了一次 JOB_NAME，产物落进 /checkpoints/<任务名>/<任务名>/，
+        # 而后端读的是 checkpoint_root/<任务名>/metrics.jsonl——多出的那一层
+        # 让 loss 曲线永远是空的。只有 CHECKPOINT_DIR 缺失时才回退到 JOB_NAME。
+        checkpoint_dir = os.environ.get("CHECKPOINT_DIR")
+        if checkpoint_dir:
+            # 产物根是 CHECKPOINT_DIR。但 lerobot 要求它的 output_dir **完全不存在**
+            # （空目录也算已存在，会直接 FileExistsError），而平台预创建了这个根目录，
+            # 所以训练产物写进它的子目录 run/，根目录留给平台的 metrics.jsonl。
+            output_dir = Path(checkpoint_dir) / "run"
+        else:
+            job = os.environ.get("JOB_NAME") or "local"
+            output_dir = Path("/checkpoints") / job / "run"
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     return dataset_root, output_dir
 
@@ -184,14 +191,16 @@ def build_train_command(
     if args.gradient_accumulation_steps and args.gradient_accumulation_steps > 1:
         command.append(f"--policy.gradient_accumulation_steps={args.gradient_accumulation_steps}")
     if not args.resume and output_dir.exists():
-        # 重试同一个任务时目录可能已经存在。lerobot 不认识「空目录」，
-        # 直接报 FileExistsError。这里把旧的挪到 .attempt-N，
-        # 既不丢数据也不阻塞重跑。
+        # lerobot 要求 output_dir 不存在或为空（除非 resume）。
+        # 平台预创建了这个目录作为任务产物根，里面可能已经有 metrics.jsonl
+        # （指标 hook 会往里写），所以不能简单删掉——把已有内容挪到 .attempt-N，
+        # 既不丢指标文件也不阻塞重跑。
         index = 1
         while (output_dir.parent / f".attempt-{index}").exists():
             index += 1
-        os.rename(output_dir, output_dir.parent / f".attempt-{index}")
-        print(f"输出目录已存在，旧内容移动到 .attempt-{index}", flush=True)
+        legacy = output_dir.parent / f".attempt-{index}"
+        output_dir.rename(legacy)
+        print(f"输出目录已存在，历史内容移动到 {legacy.name}", flush=True)
 
     command.append(f"--resume={'true' if args.resume else 'false'}")
     return command
@@ -211,14 +220,33 @@ def main(argv: list[str] | None = None) -> int:
         print("错误：CUDA 不可用，无法训练。请确认 GPU 已挂载到容器。", file=sys.stderr)
         return 1
 
+    # 注意：这里**不能**安装指标 hook。训练是 subprocess 起的独立 Python 进程，
+    # 在父进程里 monkey-patch 不会被子进程继承——之前就是在父进程装、日志也打印了，
+    # 但训练进程里根本没有 hook，曲线始终为空，排查了很多轮。
+    # 真正的安装点在 metrics_boot/sitecustomize.py，它由 PYTHONPATH 注入，
+    # 任何 Python 进程启动时都会执行。
+
     command = build_train_command(args, dataset_root, output_dir)
     print("即将执行：", " ".join(command), flush=True)
     if args.dry_run:
         return 0
 
-    # 用 exec 语义替换当前进程：信号能直接传给训练进程，
-    # 平台取消任务时不会留下孤儿进程继续占着 GPU。
-    os.execvp(command[0], command)
+    # 用子进程而不是 exec：指标 hook 需要在训练进程内生效，
+    # exec 会换掉当前进程，patch 就白做了。
+    # 取消任务时平台会 SIGTERM 整个 Pod，子进程会一并收到。
+    import subprocess
+
+    # 同目录下的 metrics_boot/sitecustomize.py 会被 Python 自动导入，
+    # 在那里安装 hook 才能作用于训练进程本身。
+    env = dict(os.environ)
+    boot_dir = Path(__file__).resolve().parent / "metrics_boot"
+    if boot_dir.is_dir():
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{boot_dir}{os.pathsep}{existing}" if existing else str(boot_dir)
+
+    child = subprocess.Popen(command, env=env)
+    child.wait()
+    return child.returncode
 
 
 if __name__ == "__main__":

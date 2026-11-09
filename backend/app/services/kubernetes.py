@@ -139,20 +139,32 @@ class KubernetesClient:
         return [item.to_dict() for item in response.items]
 
     def read_pod_log(self, pod_name: str, tail_lines: int) -> str:
-        try:
-            return self._call(
-                lambda: self._core_api().read_namespaced_pod_log(
-                    pod_name,
-                    self.settings.namespace,
-                    container="pytorch",
-                    tail_lines=tail_lines,
-                    timestamps=False,
+        """读取容器日志。
+
+        容器退出后（尤其是异常退出），当前实例的日志会随容器一起被回收，
+        直接读会拿到 `unable to retrieve container logs`。此时必须回退到
+        ``previous=True`` 读上一个已终止实例的日志——失败任务的日志几乎总是
+        在 previous 里，不回退等于让诊断系统对真实失败完全失明。
+        """
+        for previous in (False, True):
+            try:
+                text = self._call(
+                    lambda prev=previous: self._core_api().read_namespaced_pod_log(
+                        pod_name,
+                        self.settings.namespace,
+                        container="pytorch",
+                        tail_lines=tail_lines,
+                        timestamps=False,
+                        previous=prev,
+                    )
                 )
-            )
-        except ServiceError as exc:
-            if exc.status_code in (400, 404):
-                return ""
-            raise
+            except ServiceError as exc:
+                if exc.status_code not in (400, 404):
+                    raise
+                continue
+            if text and "unable to retrieve container logs" not in text:
+                return text
+        return ""
 
     def list_events(self, object_names: list[str]) -> list[dict[str, Any]]:
         """Return events for the given involved objects, newest last.

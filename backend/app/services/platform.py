@@ -27,6 +27,7 @@ from ..recipes.loader import Recipe, RecipeStore
 from ..templates.pytorchjob import render_pytorch_job
 from .errors import ServiceError
 from .kubernetes import KubernetesClient
+from .queue_est import estimate_durations, queue_info
 from .quotas import ACTIVE_STATUSES, Quota, QuotaStore, Usage, check_quota, effective_quota
 from .sessions import SessionStore
 
@@ -225,6 +226,10 @@ class PlatformService:
             workload = self._matching_workload(job, workloads, job_pods)
             response = self._job_response(job, workload, job_pods, submitters.get(name))
             live[name] = response
+
+        # 排队位置与等待估算。需要「同一队列里所有 Pending 的 Workload」做全局排序，
+        # 因此放在收集完所有任务之后统一计算，而不是每个任务各算一次。
+        self._annotate_queue(live, workloads)
 
         cancelled = {
             name: self._cancelled_response(record)
@@ -663,6 +668,62 @@ class PlatformService:
                 }
             ]
         }
+
+    def _annotate_queue(self, live: dict[str, dict[str, Any]], workloads: list[dict[str, Any]]) -> None:
+        """给每个任务补上 queue_position / queue_eta_seconds / queue_state。
+
+        估算依赖三份数据，都在这一次调用里一次算好，避免 O(n^2)：
+          - 同一个 ClusterQueue 里 Pending Workload 的排队序位
+          - 正在运行任务的已运行时长（用于扣减）
+          - 同配方任务的历史运行时长中位数（用于推断典型耗时）
+        """
+        durations: dict[str, float] = {}
+        try:
+            records = []
+            for spec, submitted_at in self.history.iter_submissions():
+                # 历史提交记录本身没有耗时，真正的耗时来自实时任务的 duration_seconds
+                del spec, submitted_at
+            records = [
+                {"labels": item.get("labels") or {}, "duration_seconds": item.get("duration_seconds")}
+                for item in live.values()
+                if item.get("status") in ("SUCCEEDED", "FAILED")
+            ]
+            durations = estimate_durations(records)
+        except Exception:  # noqa: BLE001 - 估算失败不能影响任务列表本身
+            durations = {}
+
+        running = [
+            {
+                "labels": item.get("labels") or {},
+                "elapsed_seconds": item.get("duration_seconds") or 0.0,
+            }
+            for item in live.values()
+            if item.get("status") == "RUNNING"
+        ]
+
+        for name, item in live.items():
+            workload = self._workload_for_name(workloads, name)
+            info = queue_info(
+                workload=workload,
+                workloads=workloads,
+                status=str(item.get("status")),
+                ahead=running,
+                durations=durations,
+                recipe=(item.get("labels") or {}).get("recipe"),
+                elapsed_seconds=item.get("duration_seconds"),
+            )
+            item.update(info)
+
+    @staticmethod
+    def _workload_for_name(workloads: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+        for workload in workloads:
+            metadata = workload.get("metadata", {})
+            if metadata.get("labels", {}).get("vla-platform/job-name") == name:
+                return workload
+            for owner in metadata.get("ownerReferences", []):
+                if owner.get("name") == name:
+                    return workload
+        return None
 
     def _job_response(
         self,

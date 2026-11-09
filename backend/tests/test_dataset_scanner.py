@@ -279,3 +279,37 @@ def test_meta_roundtrips_through_dict(tmp_path):
     assert restored.episodes == meta.episodes
     assert restored.cameras == meta.cameras
     assert restored.as_dict() == meta.as_dict()
+
+def test_deep_scan_flags_missing_quantiles(tmp_path):
+    """π0.5 的 QUANTILES 归一化需要 q01/q99，缺失时应提前提示。"""
+    dataset = build_dataset(tmp_path, make_info())
+    (dataset / "meta" / "stats.json").write_text(
+        json.dumps({"action": {"count": [1], "min": [-1], "max": [1]}}), encoding="utf-8"
+    )
+
+    meta = scan_deep(dataset)
+
+    assert ("info", "missing_quantiles") in {(issue.level, issue.code) for issue in meta.issues}
+
+
+def test_deep_scan_accepts_stats_with_quantiles(tmp_path):
+    dataset = build_dataset(tmp_path, make_info())
+    (dataset / "meta" / "stats.json").write_text(
+        json.dumps({"action": {"count": [1], "min": [-1], "max": [1], "q01": [-0.9], "q99": [0.9]}}),
+        encoding="utf-8",
+    )
+
+    meta = scan_deep(dataset)
+
+    assert not any(issue.code == "missing_quantiles" for issue in meta.issues)
+
+
+def test_shallow_scan_flags_leftover_backup_dirs(tmp_path):
+    """meta.bak 这类残留目录会让按 glob 统计的工具重复计数。"""
+    dataset = build_dataset(tmp_path, make_info())
+    (dataset / "meta.bak").mkdir()
+
+    meta = scan_shallow(dataset)
+
+    assert ("info", "leftover_backup") in {(issue.level, issue.code) for issue in meta.issues}
+

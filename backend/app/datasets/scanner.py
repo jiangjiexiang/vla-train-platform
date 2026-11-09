@@ -327,6 +327,16 @@ def _append_basic_issues(meta: DatasetMeta, root: Path) -> None:
     data_dir = root / "data"
     if not data_dir.is_dir():
         meta.issues.append(DatasetIssue("error", "missing_data_dir", "缺少 data/ 目录，数据集不完整"))
+    # 手工备份目录（meta.bak / data.bak 等）会让按 glob 统计的工具重复计数
+    for leftover in ("meta.bak", "data.bak", "videos.bak"):
+        if (root / leftover).exists():
+            meta.issues.append(
+                DatasetIssue(
+                    "info",
+                    "leftover_backup",
+                    f"发现残留备份目录 {leftover}/，部分工具按 glob 统计时会重复计数，建议移出数据集目录",
+                )
+            )
 
 
 def _derive_status(meta: DatasetMeta) -> str:
@@ -437,6 +447,19 @@ def _check_stats(meta: DatasetMeta, root: Path) -> None:
     if not isinstance(stats, dict) or "action" not in stats:
         meta.issues.append(
             DatasetIssue("info", "incomplete_stats", "stats.json 缺少 action 的归一化统计，训练时会补齐")
+        )
+        return
+    # π0/π0.5 的 QUANTILES 归一化需要 q01/q99；缺失会在训练启动时直接抛 ValueError。
+    # 这是「数据集 ↔ 模型兼容性」里最容易被忽略的阻塞点，提前标出来。
+    action_stats = stats.get("action")
+    if isinstance(action_stats, dict) and "q01" not in action_stats:
+        meta.issues.append(
+            DatasetIssue(
+                "info",
+                "missing_quantiles",
+                "stats.json 没有 q01/q99 分位数统计，无法直接用于 π0.5 的 QUANTILES 归一化；"
+                "需要先跑 lerobot 的 augment_dataset_quantile_stats.py",
+            )
         )
 
 

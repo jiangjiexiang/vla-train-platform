@@ -2,6 +2,18 @@
 
 本项目遵循语义化版本。每次大版本更新提交一次 commit 并打 tag，新条目追加到文件顶部。
 
+## [0.1.1] - 2026-11-09
+
+### 新增
+
+- `scripts/release.sh`：发版脚本，校验版本号、CHANGELOG 小节与工作区状态，跑验收脚本后
+  更新 `VERSION`、提交并打 tag。
+
+### 修复
+
+- `scripts/deploy-web.sh` 在 `frontend/dist` 缺失时直接失败于 Dockerfile 的 COPY 步骤，
+  报错不直观。改为构建前显式检查并提示先执行 `npm ci && npm run build`。
+
 ## [0.1.0] - 2026-11-09
 
 首个可运行版本：单节点 K3s + Kueue + Kubeflow Training Operator 的 VLA 训练排队平台。

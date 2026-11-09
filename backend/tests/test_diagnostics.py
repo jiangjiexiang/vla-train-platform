@@ -182,3 +182,56 @@ def test_hf_auth_suggestion_mentions_push():
 
     assert "推送" in result["suggestion"] or "push" in result["suggestion"].lower()
 
+
+# ---------------------------------------------------------------------------
+# 共享内存不足：这是容器训练最容易踩、也最难自己看出来的坑
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "log",
+    [
+        "RuntimeError: DataLoader worker (pid 192) is killed by signal: Bus error.",
+        "ERROR: Unexpected bus error encountered in worker. "
+        "This might be caused by insufficient shared memory (shm).",
+        "It is possible that dataloader's workers are out of shared memory.",
+    ],
+)
+def test_shm_exhaustion_is_diagnosed(log):
+    """Bus error 必须与其他 python 异常区分开。
+
+    被归成 python_error 时提示是"查看 traceback 定位出错行"，
+    而真正原因是共享内存小，用户看着 traceback 也想不到去改 /dev/shm。
+    """
+    result = diagnose(status="FAILED", reason=None, message=None, log_tail=log, events=[])
+
+    assert result is not None
+    assert result["code"] == "shm_exhausted"
+    # 建议必须包含可执行的下一步
+    assert "shm" in result["suggestion"].lower() or "worker" in result["suggestion"].lower()
+
+
+def test_shm_suggestion_is_actionable():
+    result = diagnose(
+        status="FAILED",
+        reason=None,
+        message=None,
+        log_tail="DataLoader worker is killed by signal: Bus error",
+        events=[],
+    )
+
+    # 要么告诉用户调 shm，要么告诉用户降 worker，不能只说"去看看日志"
+    suggestion = result["suggestion"].lower()
+    assert any(word in suggestion for word in ("shm", "shared memory", "num_workers", "worker"))
+
+
+def test_other_python_error_still_classified():
+    """不能把普通 Python 异常也误判成 shm 问题。"""
+    result = diagnose(
+        status="FAILED",
+        reason=None,
+        message=None,
+        log_tail="Traceback (most recent call last):\nValueError: bad config",
+        events=[],
+    )
+
+    assert result is not None
+    assert result["code"] != "shm_exhausted"

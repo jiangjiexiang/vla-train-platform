@@ -91,6 +91,12 @@ DIAGNOSES: dict[str, tuple[str, str]] = {
         "训练框架报缺少必填参数。通常意味着配方里的参数名与框架版本不匹配，"
         "对照 docs 下的参数调研修正配方。",
     ),
+    "shm_exhausted": (
+        "共享内存不足",
+        "DataLoader 用 /dev/shm 在进程间传 batch，容器默认只有 64MB，"
+        "worker 一多就会触发 Bus error。平台默认已给到 4Gi；"
+        "若仍出现，把 PLATFORM_SHM_SIZE 调大，或降低 num_workers。",
+    ),
     "torchcodec": (
         "视频解码后端不可用",
         "torchcodec 在当前 torch 版本上加载失败。加 --dataset.video_backend=pyav 可绕过；"
@@ -124,6 +130,16 @@ class Diagnosis:
 LOG_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # 下面几条来自真实跑 SmolVLA 训练时遇到的失败，不是推测的
     ("hf_auth", re.compile(r"401 Client Error|Unauthorized for url.*huggingface|Invalid username or password", re.I)),
+    (
+        # Bus error / SIGBUS 在 DataLoader 里几乎只有一种原因：共享内存不够。
+        # 必须排在 python_error 前面，否则会被吞成"训练脚本抛异常"，
+        # 而真正的建议（调 shm 或减 worker）完全给不出来。
+        "shm_exhausted",
+        re.compile(
+            r"Bus error|signal: Bus|insufficient shared memory|out of shared memory",
+            re.I,
+        ),
+    ),
     ("torchcodec", re.compile(r"Could not load libtorchcodec", re.I)),
     ("output_dir_exists", re.compile(r"already exists and resume is False", re.I)),
     ("missing_required_arg", re.compile(r"Missing required field", re.I)),

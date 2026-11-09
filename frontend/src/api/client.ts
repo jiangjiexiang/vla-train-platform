@@ -1,20 +1,4 @@
-import type {
-  ClusterSummary,
-  CurrentUser,
-  HealthResponse,
-  Job,
-  JobEventsResponse,
-  JobListResponse,
-  JobLogs,
-  JobStatus,
-  LoginResponse,
-  PlatformConfig,
-  QuotaUpdate,
-  QuotaUpdateResponse,
-  QueueListResponse,
-  SubmitJobRequest,
-  UserListResponse,
-} from '../types/api';
+import type { ClusterSummary, CurrentUser, HealthResponse, Job, JobEventsResponse, JobListResponse, JobLogs, JobStatus, LoginResponse, PlatformConfig, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, SubmitJobRequest, UserListResponse, ImageListResponse } from '../types/api';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE || '/api/v1').replace(/\/+$/, '');
 // ldap 模式下的会话令牌
@@ -136,6 +120,8 @@ export const api = {
   getHealth: (signal?: AbortSignal) => request<HealthResponse>('/health', { signal, token: null, ignoreUnauthorized: true }),
   getConfig: (signal?: AbortSignal, token?: string | null) =>
     request<PlatformConfig>('/config', { signal, token }),
+  // 提交页镜像候选：默认镜像 + 历史/运行中任务用过的镜像（这些镜像确定已存在节点上）
+  getImages: (signal?: AbortSignal) => request<ImageListResponse>('/images', { signal }),
 
   // ---- v0.9 鉴权 ----
   // 401 = 账号或密码错误；503 = LDAP 不可达（前端据此提示「认证服务不可用」而不是密码错误）

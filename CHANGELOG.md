@@ -65,6 +65,15 @@
   模式的区别；故障速查表补充登录 401/503 与配额 422。
 - `PLAN.md`：阶段 F 标为「进行中」，把「暂不包含」中已纳入范围的 SSO/LDAP、按用户配额、多机
   标注为 v0.9.0；API 初版契约补充新端点。
+- `docs/operations.md`：新增第 6 节「容器运行时选型：buildah + K3s，而不是 Docker」，给出
+  Docker 命令与本机等价命令对照表（buildah / `k3s crictl` / `k3s ctr` / `kubectl`）、不安装 Docker 的
+  三条理由、手动 `docker run` 绕过 Kueue 的风险，以及需要 Docker 的两种场景与「不推荐生产机执行」的
+  安装与回归验证清单；原「安全提示」顺延为第 7 节。
+- `docs/troubleshooting.md`：新增第 9 节「`docker: command not found` 不是故障」，指向上述章节与
+  等价命令，避免把缺少 Docker 误判为环境残缺。
+- `README.md`：「前置条件」与「构建并导入镜像」各补一条说明——本机没有也不需要 Docker，不要为了
+  省事安装；只有无 K3s 的开发机用 `docker-compose.yml` 时才需要。
+
 ## [0.8.0] - 2026-11-09
 
 ### 更名

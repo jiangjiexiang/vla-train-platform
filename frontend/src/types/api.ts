@@ -218,3 +218,13 @@ export interface JobEventsResponse {
   name: string;
   items: JobEvent[];
 }
+
+/** 提交页镜像下拉的一项。sources 说明该镜像的来源：default / running / history。 */
+export interface ImageOption {
+  image: string;
+  sources: string[];
+}
+
+export interface ImageListResponse {
+  items: ImageOption[];
+}

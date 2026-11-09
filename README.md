@@ -58,6 +58,8 @@ v0.9.0 起支持三种鉴权模式（`off` / `token` / `ldap`，默认 `token`�
 
 平台安装脚本用于专用目标机器，不会替代运维人员判断现有 Docker/Kubernetes 环境是否适合改动。不要在未确认影响的生产集群上直接安装或卸载。
 
+> **本机没有 Docker，也不需要 Docker。** 目标机器由 K3s 自带的 containerd 负责运行容器，构建用 buildah、运维用 `k3s ctr` / `kubectl` / `crictl` 即可，Docker 命令与本机等价命令的对照见 `docs/operations.md` 第 7 节。**不要为了跑测试或图省事安装 Docker**：该机器是多用户共享的 GPU 工作站，Docker 与 K3s containerd 同时管理 iptables/cgroup 可能干扰 NodePort `30080` 和 Pod 网络。只有「在没有 K3s 的开发机上用 `docker-compose.yml` 跑平台」或「独立的专用机器」才需要 Docker。
+
 ## 3. 部署顺序
 
 在仓库根目录执行。4090 使用 `PROFILE=4090`；A100 机器从第一步起就统一改成 `PROFILE=a100`：
@@ -80,6 +82,8 @@ Web 镜像是**自包含的多阶段构建**（根目录 `Dockerfile`）：
 3. 最终镜像只保留运行时的 Python、应用代码与静态资源，并以非 root 用户 `vla` 运行。
 
 因此构建只需要 Docker 或 buildah，不需要在宿主机装 Node，也不需要提前准备 `frontend/dist`。
+
+> **本机没有 Docker，也不需要 Docker**：目标机器是 buildah + K3s containerd，直接看本节末尾「目标机器没有 Docker 时（buildah 路径）」。下面用 `docker build` 的写法适用于有 Docker 的开发机；只有「要在没有 K3s 的开发机上用 `docker-compose.yml` 跑平台」时才需要 Docker，在这台生产/共享机器上装 Docker 没有必要且有网络风险。
 
 Web 默认标签为 `vla-platform:local`，与 `deploy/web/base/deployment.yaml` 一致。手动构建和导入：
 

@@ -207,3 +207,25 @@ curl -fsS -H "Authorization: Bearer $PLATFORM_API_TOKEN" \
 curl -fsS -H "Authorization: Bearer $PLATFORM_API_TOKEN" \
   http://127.0.0.1:30080/api/v1/cluster/summary
 ```
+
+## 9. `docker: command not found` 不是故障
+
+**现象**：执行 `docker ps`、`docker build` 或沿用旧习惯的命令时提示 `docker: command not found`，
+于是被判断为「环境残缺、需要装 Docker」。
+
+**这不是故障，是设计。** 本机没有 Docker，容器运行时是 K3s 内置的 containerd，构建用 buildah，
+`docker.service` 与 Docker/containerd 软件包本来就没有安装。不要为此安装 Docker，原因与替代命令见
+`docs/operations.md` 第 6 节「容器运行时选型：buildah + K3s，而不是 Docker」。
+
+| 原来想执行 | 改用它 |
+|---|---|
+| `docker ps` | `sudo k3s crictl ps`（endpoint 配置见 `docs/operations.md` 6.5） |
+| `docker logs <x>` | `kubectl -n <ns> logs <pod> -c <container> --tail=500` |
+| `docker exec -it <x> sh` | `sudo k3s crictl exec -it <container-id> sh` |
+| `docker build -t <tag> .` | `buildah bud -t <tag> .` |
+| `docker images` | `sudo k3s ctr -n k8s.io images ls` |
+| `docker run --gpus all ...` | 走平台提交 PyTorchJob，不要手动占卡 |
+
+需要排查的「真故障」是下游环节，不是 `docker` 缺失：镜像没导入看 `sudo k3s ctr -n k8s.io images ls`
+（见第 6 节），Pod 起不来看 `kubectl describe pod`（见第 3 节），NodePort 不通见
+`docs/operations.md` 4.8。

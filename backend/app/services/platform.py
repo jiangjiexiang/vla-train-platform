@@ -236,6 +236,38 @@ class PlatformService:
             items = items[effective_offset : effective_offset + limit]
         return {"items": items, "total": total, "limit": limit, "offset": effective_offset}
 
+    def list_images(self) -> list[dict[str, Any]]:
+        """Image suggestions for the submit form.
+
+        The web pod cannot query the node's container runtime, and the
+        Kubernetes API does not expose local images, so suggestions come from
+        the configured default plus every image that a live or historical job
+        already used. An image in that set has provably been pulled onto the
+        node at least once, which is exactly what the form needs.
+        """
+        seen: dict[str, dict[str, Any]] = {}
+
+        def add(image: str, source: str) -> None:
+            image = (image or "").strip()
+            if not image:
+                return
+            entry = seen.setdefault(image, {"image": image, "sources": []})
+            if source not in entry["sources"]:
+                entry["sources"].append(source)
+
+        add(self.settings.default_image, "default")
+        for job in self.kubernetes.list_jobs():
+            add(_spec_image(job), "running")
+        for record in self.history.list_cancellations():
+            add(record["spec"].image, "history")
+        for spec, _submitted_at in self.history.iter_submissions():
+            add(spec.image, "history")
+
+        return sorted(
+            seen.values(),
+            key=lambda item: (item["image"] != self.settings.default_image, item["image"]),
+        )
+
     def get_job(self, name: str) -> dict[str, Any]:
         job = self.kubernetes.get_job(name)
         if job is None:
@@ -896,3 +928,17 @@ def _workload_gpus(workload: dict[str, Any]) -> int:
 def _format_time_text(value: Any) -> str | None:
     """把任意时间表示规整成 Z 结尾的 ISO 字符串；解析不了的原样返回。"""
     return _format_time(value)
+
+def _spec_image(job: dict[str, Any]) -> str:
+    """Best-effort image lookup on a live PyTorchJob object."""
+    try:
+        raw = job.get("metadata", {}).get("annotations", {}).get("vla-platform/spec")
+        if raw:
+            return json.loads(raw).get("image", "")
+    except (ValueError, TypeError, AttributeError):
+        pass
+    try:
+        containers = job["spec"]["pytorchReplicaSpecs"]["Master"]["template"]["spec"]["containers"]
+        return containers[0].get("image", "")
+    except (KeyError, IndexError, TypeError):
+        return ""

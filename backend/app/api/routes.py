@@ -171,6 +171,12 @@ def put_quota(
 # --- 任务 ----------------------------------------------------------------
 
 
+@router.get("/images", dependencies=[Depends(require_user)])
+def list_images(service: PlatformService = Depends(get_service)) -> dict[str, Any]:
+    """镜像候选列表，供提交页下拉选择。默认镜像排在最前。"""
+    return {"items": service.list_images()}
+
+
 @router.post("/jobs", status_code=201)
 def submit_job(
     request_model: SubmitRequest,

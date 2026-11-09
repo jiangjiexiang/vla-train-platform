@@ -14,6 +14,7 @@ vi.mock('../api/client', async () => {
     api: {
       getHealth: vi.fn(),
       getConfig: vi.fn(),
+      getImages: vi.fn(),
       me: vi.fn(),
       submitJob: vi.fn(),
     },
@@ -25,6 +26,7 @@ const getHealthMock = vi.mocked(api.getHealth);
 const getConfigMock = vi.mocked(api.getConfig);
 const meMock = vi.mocked(api.me);
 const submitJobMock = vi.mocked(api.submitJob);
+const getImagesMock = vi.mocked(api.getImages);
 
 const BASE_CONFIG: PlatformConfig = {
   allowed_gpus: [1],
@@ -43,6 +45,10 @@ const SUBMITTED_JOB = {
 
 function renderPage(userRole: 'admin' | 'user' = 'user') {
   getHealthMock.mockImplementation(() => Promise.resolve({ status: 'ok', auth_required: true, auth_mode: 'ldap' }));
+  // 镜像候选默认返回空列表 + 默认镜像；用例需要验证下拉选项时再覆盖
+  getImagesMock.mockImplementation(() =>
+    Promise.resolve({ items: [{ image: 'vla-smoke:latest', sources: ['default'] }] }),
+  );
   localStorage.setItem('vla-platform-token', 'session-token');
   // 用 mockImplementation 而不是 mockResolvedValue，避免实现泄漏到后续用例
   meMock.mockImplementation(() => Promise.resolve({

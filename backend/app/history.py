@@ -94,6 +94,29 @@ class HistoryStore:
             return None
         return spec_from_stored_json(row["spec_json"]), row["submitted_at"]
 
+    def iter_submissions(self) -> list[tuple[SubmitSpec, str]]:
+        """Every submission record, newest first, de-duplicated by job name.
+
+        Used to suggest image names the operator has used before. Old rows whose
+        stored spec predates a field still parse because ``SubmitSpec`` fills
+        defaults, and a corrupted row is skipped rather than breaking the list.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT name, spec_json, submitted_at FROM submissions ORDER BY id DESC"
+            ).fetchall()
+        seen_names: set[str] = set()
+        result: list[tuple[SubmitSpec, str]] = []
+        for row in rows:
+            if row["name"] in seen_names:
+                continue
+            seen_names.add(row["name"])
+            try:
+                result.append((SubmitSpec.model_validate_json(row["spec_json"]), row["submitted_at"]))
+            except Exception:  # noqa: BLE001 - a bad row must not break the listing
+                continue
+        return result
+
     def mark_cancelled(
         self,
         spec: SubmitSpec,

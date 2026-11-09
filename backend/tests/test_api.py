@@ -575,3 +575,54 @@ def test_cluster_summary_reports_gpu_usage(api_client, service, kube):
     ]
     assert body["jobs"]["running"] == 1
     assert body["gpu_metrics"] == {"available": False, "items": []}
+
+def test_images_lists_default_and_history_images(api_client, service, kube):
+    """/images 供提交页下拉：默认镜像排最前，历史任务用过的镜像也要出现。"""
+    from app.models import SubmitSpec
+
+    spec = SubmitSpec(
+        name="histimg",
+        image="my-train:v1",
+        gpus=1,
+        queue="default",
+        priority="normal",
+        command="true",
+        env={},
+        max_retries=0,
+        termination_grace_period_seconds=30,
+    )
+    service.history.record_submission(spec, "2026-01-01T00:00:00Z")
+
+    response = api_client.get("/api/v1/images")
+
+    assert response.status_code == 200, response.text
+    images = [item["image"] for item in response.json()["items"]]
+    # 默认镜像必须排第一，历史用过的镜像也要在列表里
+    assert images[0] == "vla-smoke:latest"
+    assert "my-train:v1" in images
+    assert images.count("vla-smoke:latest") == 1
+
+
+def test_images_dedupes_repeated_uses(api_client, service):
+    from app.models import SubmitSpec
+
+    for _ in range(3):
+        service.history.record_submission(
+            SubmitSpec(
+                name="dupimg",
+                image="dup:v1",
+                gpus=1,
+                queue="default",
+                priority="normal",
+                command="true",
+                env={},
+                max_retries=0,
+                termination_grace_period_seconds=30,
+            ),
+            "2026-01-01T00:00:00Z",
+        )
+
+    images = [item["image"] for item in api_client.get("/api/v1/images").json()["items"]]
+
+    assert images.count("dup:v1") == 1
+

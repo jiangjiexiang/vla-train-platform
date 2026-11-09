@@ -881,9 +881,101 @@ kubectl -n nvidia-device-plugin get ds -o wide
 重点确认：PV 是否有节点亲和、训练模板是否加了亲和、每个节点的镜像是否存在、所有节点
 的 GPU 容量之和是否等于计划配额、异构 GPU 是否需要拆分 flavor。
 
-## 6. 安全提示
+## 6. 容器运行时选型：buildah + K3s，而不是 Docker
 
-### 6.1 当前状态和风险
+**结论：本机没有 Docker，也不需要 Docker。** 容器运行时由 K3s 内置的 containerd 提供
+（`k3s ctr version` → v2.3.7-k3s1.36），镜像构建由 buildah 1.23.1 完成，podman 未安装。
+日常运维用 `k3s ctr` / `k3s crictl` / `kubectl` 覆盖全部操作。本节写给「想装 Docker 跑个
+`docker ps`」的场景，先看完再动手。
+
+### 6.1 现状与等价命令
+
+| 用途 | Docker | 本机用法 |
+|---|---|---|
+| 构建镜像 | `docker build` | `buildah bud -t <tag> .` |
+| 列出容器 | `docker ps` | `sudo k3s crictl ps` |
+| 进入容器 | `docker exec -it` | `sudo k3s crictl exec -it <container-id> sh` |
+| 容器日志 | `docker logs` | `kubectl -n <ns> logs <pod> -c <container> --tail=500` |
+| 镜像列表 | `docker images` | `sudo k3s ctr -n k8s.io images ls` |
+| 跑训练 | `docker run --gpus all` | 平台提交 PyTorchJob（经 Kueue 排队） |
+| 导入镜像 | —（本机无 registry） | `buildah push <img> docker-archive:<tar>:<ref>` + `sudo k3s ctr -n k8s.io images import <tar>` |
+
+镜像导入的完整命令见 README 3.1「目标机器没有 Docker 时（buildah 路径）」；`crictl` 需要一个
+containerd endpoint 配置文件，K3s 环境下的写法见 6.5。
+
+### 6.2 为什么不装 Docker
+
+1. **无功能收益**：上表每一行都有等价手段；Web 服务、Kueue、Training Operator、
+   nvidia-device-plugin、GPU metrics 全部已通过 containerd 正常运行。
+2. **有实际风险**：Docker 与 K3s containerd 会同时管理 iptables 与 cgroup。该机器是多用户
+   共享的 GPU 工作站（jjx 之外还有 panyan、embai 等用户），GPU 只有一张 RTX 4090，不是可
+   随时重装的专属测试机；网络规则一旦互相干扰，影响的是 NodePort `30080`、Pod 网络和其他人的
+   训练任务。
+3. **需要重新验证**：现有链路（buildah 构建 → docker-archive 导入 → GPU 调度 → Kueue 排队）
+   已整体验证通过。更换或叠加运行时属于基础设施变更，必须重跑
+   `docs/acceptance-4090.md` 与 `scripts/verify-4090.sh` 全套回归，收益为零、成本不为零。
+
+### 6.3 不要用 `docker run` 手动跑训练
+
+手动 `docker run --gpus all` 跑训练会**绕过 Kueue 排队**：它不受 ClusterQueue `nominalQuota: 1`
+约束，也不会出现在队列页与任务历史里。本机只有一张 4090，手动容器与平台任务同时申请 GPU 时
+会争抢显存，表现为平台任务 OOM 或设备忙——而这正是平台要解决的问题。训练统一走
+网页/CLI 提交 PyTorchJob。
+
+### 6.4 什么情况下才需要 Docker
+
+| 场景 | 说明 |
+|---|---|
+| 没有 K3s 的开发机 | 用仓库根目录 `docker-compose.yml`（`docker compose up -d web`）跑 Web 或单元测试，此时没有 containerd 冲突问题 |
+| 独立的专用机器 | 单机、非共享、可随时重装，且不与 K3s 共存 |
+
+在本机，以上两条都不成立。
+
+### 6.5 如果确实要安装（不推荐，不推荐在生产机执行）
+
+**不推荐在生产机执行。** 以下仅作为「已评估过风险、且有人愿意承担回归验证」的记录。
+安装 Docker 后它会自行启动 `docker0` 网桥并写 iptables/cgroup，与 K3s 的规则并存，
+最常见的破坏是 NodePort `30080` 从局域网不可达或 Pod 出网异常。如果要装，至少做以下缓解：
+
+1. 关闭 Docker 的 iptables 管理：在 `/etc/docker/daemon.json` 写 `{"iptables": false}`，
+   然后 `sudo systemctl restart docker`。这会改变 Docker 自身网络行为，容器间通信需另行规划。
+2. 只用于本机临时验证时，镜像与容器都用 `--network host`，不要让它建网桥。
+3. 不要把 K3s 的容器数据或运行时目录挂进 Docker 容器，也不要在 Docker 容器里操作集群。
+
+装完后必须验证（任何一项不过，立即按上文 `iptables: false` 修正或卸载 Docker）：
+
+```bash
+# 1. K3s 与平台仍健康
+kubectl get nodes
+kubectl -n vla-platform get deploy,pod -o wide
+# 2. NodePort 从节点本机可达
+curl -fsS -m 5 http://127.0.0.1:30080/api/v1/health
+# 3. NodePort 从局域网另一台机器可达（把 <node-ip> 换成节点地址）
+curl -fsS -m 5 http://<node-ip>:30080/api/v1/health
+# 4. Pod 网络：新建调试 Pod 能解析 Service、能出网
+kubectl -n vla-platform run netcheck --rm -it --restart=Never \
+  --image=busybox:latest -- wget -qO- http://vla-web.vla-platform.svc/api/v1/health
+# 5. 训练仍可用：提交一个 smoke，确认 RUNNING 且日志出现 CUDA/GPU
+kubectl -n vla-training get pytorchjob,pod -o wide
+```
+
+`crictl` 若报连接 endpoint 失败，需要配置它的 socket：
+
+```bash
+sudo tee /etc/crictl.yaml >/dev/null <<'EOF'
+runtime-endpoint: unix:///run/k3s/containerd/containerd.sock
+image-endpoint: unix:///run/k3s/containerd/containerd.sock
+timeout: 10
+EOF
+sudo k3s crictl ps
+```
+
+卸载/回退时不要直接 `apt remove docker-ce` 了事：先确认 NodePort 与 Pod 网络恢复，再删除
+`/etc/docker/daemon.json` 中新增的配置，并重新执行上面 5 条验证。
+
+## 7. 安全提示
+
+### 7.1 当前状态和风险
 
 截至编写时，4090 overlay 设置 `PLATFORM_AUTH_REQUIRED=false`，Web 以单容器运行，
 NodePort `30080` 监听在节点所有地址上，本机 `ufw` 为 inactive。在没有上游 ACL/安全组的
@@ -902,7 +994,7 @@ NodePort `30080` 监听在节点所有地址上，本机 `ufw` 为 inactive。�
 
 因此 `PLATFORM_AUTH_REQUIRED=false` 只允许用于可信内网和短期验收，不应作为长期生产配置。
 
-### 6.2 开启鉴权
+### 7.2 开启鉴权
 
 1. 确认 `vla-web-auth` Secret 存在；如果令牌已经丢失，直接生成新的并轮换：
 
@@ -944,7 +1036,7 @@ curl -fsS -H "Authorization: Bearer $PLATFORM_API_TOKEN" \
    浏览器在 `/login` 输入令牌。不要把令牌写进仓库、脚本、命令行历史或聊天记录；用完
    清理 shell 变量。
 
-### 6.3 网络与主机加固
+### 7.3 网络与主机加固
 
 - 只允许可信内网访问 TCP 30080；在交换机 ACL、云安全组或主机防火墙上限制来源，
   改完从另一台机器实测，不要只在节点本机 `curl`。

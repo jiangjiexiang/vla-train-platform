@@ -1,6 +1,7 @@
 import {
   App,
   Alert,
+  AutoComplete,
   Button,
   Card,
   Col,
@@ -98,6 +99,8 @@ export function SubmitJobPage() {
   const { user } = useAuth();
   const sourceJob = (location.state as { sourceJob?: Job } | null)?.sourceJob;
   const [config, setConfig] = useState<Awaited<ReturnType<typeof api.getConfig>> | null>(null);
+  // 镜像候选：优先用 /images 的返回，加载失败时退化成只有默认镜像，不阻塞提交
+  const [imageOptions, setImageOptions] = useState<string[]>([]);
   const [quota, setQuota] = useState<EffectiveQuota | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
   const [configLoading, setConfigLoading] = useState(true);
@@ -153,6 +156,17 @@ export function SubmitJobPage() {
     }
     return allValues.gpus ?? null;
   }, [multiNodeEnabled, multiNode, nodes, gpusPerNode, allValues]);
+
+  // 镜像候选来自后端 /images：默认镜像 + 历史任务用过的镜像。
+  // 失败时静默降级（仍可手输镜像名），避免因下拉数据缺失而无法提交。
+  useEffect(() => {
+    const controller = new AbortController();
+    api
+      .getImages(controller.signal)
+      .then((data) => setImageOptions(data.items.map((item) => item.image)))
+      .catch(() => setImageOptions([]));
+    return () => controller.abort();
+  }, []);
 
   const submit = async (values: SubmitFormValues) => {
     const env = rowsToRecord(values.env);
@@ -302,8 +316,16 @@ export function SubmitJobPage() {
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={12}>
-                  <Form.Item name="image" label="训练镜像" rules={[{ required: true, whitespace: true, message: '请输入训练镜像' }]}>
-                    <Input placeholder="例如 vla-smoke:latest" />
+                  {/* 既可从下拉里选，也可直接敲镜像名：镜像可能已导入节点但平台还没用过。
+                      AntD 的 Select 在 form 里保存的是字符串（不是数组），提交逻辑无需改动。 */}
+                  <Form.Item name="image" label="训练镜像" rules={[{ required: true, whitespace: true, message: '请选择或输入训练镜像' }]}>
+                    <AutoComplete
+                      placeholder="选择已有镜像，或直接输入镜像名"
+                      filterOption={(input, option) =>
+                        String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                      }
+                      options={imageOptions.map((image) => ({ value: image }))}
+                    />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={8}>

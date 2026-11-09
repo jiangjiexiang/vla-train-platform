@@ -1,18 +1,26 @@
 import type {
   ClusterSummary,
+  CurrentUser,
   HealthResponse,
   Job,
   JobEventsResponse,
   JobListResponse,
   JobLogs,
   JobStatus,
+  LoginResponse,
   PlatformConfig,
+  QuotaUpdate,
+  QuotaUpdateResponse,
   QueueListResponse,
   SubmitJobRequest,
+  UserListResponse,
 } from '../types/api';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE || '/api/v1').replace(/\/+$/, '');
+// ldap 模式下的会话令牌
 export const TOKEN_STORAGE_KEY = 'vla-platform-token';
+// token 模式下的静态共享令牌，与登录会话分开存储，便于 /health 之后还原
+export const STATIC_TOKEN_STORAGE_KEY = 'vla-platform-static-token';
 export const UNAUTHORIZED_EVENT = 'vla-platform:unauthorized';
 
 export class ApiError extends Error {
@@ -25,8 +33,18 @@ export class ApiError extends Error {
   }
 }
 
+export function isUnauthorized(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401;
+}
+
+export function isForbidden(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403;
+}
+
 interface RequestOptions extends RequestInit {
   token?: string | null;
+  // 登录类请求的 401 是「账号密码错误」，不应触发全局登录失效事件
+  ignoreUnauthorized?: boolean;
 }
 
 // 任务列表的服务端筛选/分页参数；空字符串与 null 视为未传
@@ -72,9 +90,17 @@ function errorDetail(payload: unknown, fallback: string): string {
   return fallback;
 }
 
+function statusFallback(status: number): string {
+  if (status === 401) return '账号或密码错误，或登录已过期，请重新登录';
+  if (status === 403) return '当前账号没有执行该操作的权限';
+  if (status === 404) return '请求的资源不存在';
+  if (status >= 500) return '集群服务暂时异常，请稍后重试或联系管理员';
+  return `请求失败（HTTP ${status}）`;
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { token: explicitToken, headers, ...init } = options;
-  const token = explicitToken === undefined ? localStorage.getItem(TOKEN_STORAGE_KEY) : explicitToken;
+  const { token: explicitToken, ignoreUnauthorized, headers, ...init } = options;
+  const token = explicitToken === undefined ? getStoredToken() : explicitToken;
   const requestHeaders = new Headers(headers);
   requestHeaders.set('Accept', 'application/json');
   if (init.body) requestHeaders.set('Content-Type', 'application/json');
@@ -95,17 +121,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     } catch {
       // The status-specific message below is more useful than an empty response body.
     }
-    if (response.status === 401 && token) {
+    // 只有确实带了令牌的 401 才代表登录失效；health 等匿名请求的 401 不应踢出登录页
+    if (response.status === 401 && token && !ignoreUnauthorized) {
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     }
-    const fallback = response.status === 401
-      ? '访问令牌无效或已过期，请重新登录'
-      : response.status === 404
-        ? '请求的资源不存在'
-        : response.status >= 500
-          ? '集群服务暂时异常，请稍后重试或联系管理员'
-          : `请求失败（HTTP ${response.status}）`;
-    throw new ApiError(errorDetail(payload, fallback), response.status);
+    throw new ApiError(errorDetail(payload, statusFallback(response.status)), response.status);
   }
 
   if (response.status === 204) return undefined as T;
@@ -113,9 +133,30 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export const api = {
-  getHealth: (signal?: AbortSignal) => request<HealthResponse>('/health', { signal, token: null }),
+  getHealth: (signal?: AbortSignal) => request<HealthResponse>('/health', { signal, token: null, ignoreUnauthorized: true }),
   getConfig: (signal?: AbortSignal, token?: string | null) =>
     request<PlatformConfig>('/config', { signal, token }),
+
+  // ---- v0.9 鉴权 ----
+  // 401 = 账号或密码错误；503 = LDAP 不可达（前端据此提示「认证服务不可用」而不是密码错误）
+  login: (username: string, password: string) =>
+    request<LoginResponse>('/auth/login', {
+      method: 'POST',
+      token: null,
+      ignoreUnauthorized: true,
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => request<void>('/auth/logout', { method: 'POST' }),
+  me: (signal?: AbortSignal) => request<CurrentUser>('/auth/me', { signal }),
+
+  // ---- v0.9 用户与配额（仅 admin）----
+  users: (signal?: AbortSignal) => request<UserListResponse>('/users', { signal }),
+  putQuota: (username: string, quota: QuotaUpdate) =>
+    request<QuotaUpdateResponse>(`/users/${encodeURIComponent(username)}/quota`, {
+      method: 'PUT',
+      body: JSON.stringify(quota),
+    }),
+
   getClusterSummary: (signal?: AbortSignal) =>
     request<ClusterSummary>('/cluster/summary', { signal }),
   getJobs: (params: JobListParams = {}, signal?: AbortSignal) =>
@@ -146,4 +187,31 @@ export function getErrorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   if (error instanceof Error) return error.message;
   return '发生未知错误，请稍后重试';
+}
+
+// 当前应随请求发送的令牌：优先 ldap 会话令牌，其次 token 模式的静态令牌
+export function getStoredToken(): string | null {
+  return localStorage.getItem(TOKEN_STORAGE_KEY) || localStorage.getItem(STATIC_TOKEN_STORAGE_KEY);
+}
+
+export function getSessionToken(): string | null {
+  return localStorage.getItem(TOKEN_STORAGE_KEY);
+}
+
+export function getStaticToken(): string | null {
+  return localStorage.getItem(STATIC_TOKEN_STORAGE_KEY);
+}
+
+export function storeSessionToken(token: string) {
+  localStorage.setItem(TOKEN_STORAGE_KEY, token);
+}
+
+export function storeStaticToken(token: string) {
+  localStorage.removeItem(TOKEN_STORAGE_KEY);
+  localStorage.setItem(STATIC_TOKEN_STORAGE_KEY, token);
+}
+
+export function clearStoredTokens() {
+  localStorage.removeItem(TOKEN_STORAGE_KEY);
+  localStorage.removeItem(STATIC_TOKEN_STORAGE_KEY);
 }

@@ -119,6 +119,8 @@ export function JobDetailPage() {
               <Descriptions bordered column={{ xs: 1, md: 2 }} size="small">
                 <Descriptions.Item label="任务名称">{job.name}</Descriptions.Item>
                 <Descriptions.Item label="当前状态"><StatusTag status={job.status} /></Descriptions.Item>
+                <Descriptions.Item label="提交者">{job.owner || '—'}</Descriptions.Item>
+                <Descriptions.Item label="节点数">{`${job.nodes ?? 1} 节点`}</Descriptions.Item>
                 <Descriptions.Item label="训练镜像" span={2}><Typography.Text copyable code>{job.image}</Typography.Text></Descriptions.Item>
                 <Descriptions.Item label="GPU 数量">{job.gpus} 卡</Descriptions.Item>
                 <Descriptions.Item label="优先级"><PriorityTag priority={job.priority} /></Descriptions.Item>
@@ -128,6 +130,11 @@ export function JobDetailPage() {
                 <Descriptions.Item label="训练命令" span={2}><Typography.Text code className="command-text">{job.command}</Typography.Text></Descriptions.Item>
                 <Descriptions.Item label="环境变量" span={2}>
                   {Object.keys(job.env).length ? <pre className="env-display">{Object.entries(job.env).map(([key, value]) => `${key}=${value}`).join('\n')}</pre> : '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="任务标签" span={2}>
+                  {job.labels && Object.keys(job.labels).length
+                    ? Object.entries(job.labels).map(([key, value]) => <Tag key={key}>{`${key}=${value}`}</Tag>)
+                    : '—'}
                 </Descriptions.Item>
                 <Descriptions.Item label="Checkpoint 目录" span={2}><Typography.Text copyable code>{job.checkpoint_dir}</Typography.Text></Descriptions.Item>
               </Descriptions>

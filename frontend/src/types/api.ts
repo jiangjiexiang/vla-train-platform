@@ -8,9 +8,74 @@ export type JobStatus =
 
 export type Priority = 'low' | 'normal' | 'high';
 
+// v0.9：鉴权模式（PLATFORM_AUTH_MODE），off 等价于旧版 PLATFORM_AUTH_REQUIRED=false
+export type AuthMode = 'off' | 'token' | 'ldap';
+
+// v0.9：角色。admin 可管理用户与配额、查看所有用户的任务；user 只能操作自己的任务
+export type UserRole = 'admin' | 'user';
+
 export interface HealthResponse {
   status: string;
   auth_required?: boolean;
+  // 后端可选返回；缺省时前端按旧版 auth_required 推断
+  auth_mode?: AuthMode;
+}
+
+// null 表示不限
+export interface UserQuota {
+  max_gpus: number | null;
+  max_active_jobs: number | null;
+}
+
+// GET /auth/me 返回的生效配额：比 /users 的 quota 额外带实时用量
+export interface EffectiveQuota extends UserQuota {
+  gpu_in_use?: number;
+  active_jobs?: number;
+}
+
+export interface CurrentUser {
+  username: string;
+  role: UserRole;
+  source: AuthMode | string;
+  // 匿名模式示例：{"username": "anonymous", "role": "admin", "source": "off"}
+  auth_mode?: AuthMode;
+  quotas?: EffectiveQuota;
+}
+
+export interface UserSummary {
+  username: string;
+  role: UserRole | string;
+  source: AuthMode | string;
+  last_seen_at: string | null;
+  active_jobs: number;
+  gpu_in_use: number;
+  quota: UserQuota;
+}
+
+export interface UserListResponse {
+  items: UserSummary[];
+}
+
+export interface QuotaUpdate {
+  max_gpus: number | null;
+  max_active_jobs: number | null;
+}
+
+// PUT /users/{username}/quota 的响应
+export interface QuotaUpdateResponse {
+  username: string;
+  quota: EffectiveQuota;
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  expires_at: string;
+  user: CurrentUser;
 }
 
 export interface SubmitJobRequest {
@@ -24,6 +89,11 @@ export interface SubmitJobRequest {
   max_retries: number;
   // 取消任务时留给训练进程退出的宽限秒数（1-600）
   termination_grace_period_seconds: number;
+  // v0.9：自由标签，键值均须匹配 ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$，总长 <= 256 字节
+  labels?: Record<string, string>;
+  // v0.9：多机训练预留字段（nodes > 1 时 gpus = nodes * gpus_per_node）
+  nodes?: number;
+  gpus_per_node?: number;
 }
 
 export interface Job extends SubmitJobRequest {
@@ -36,6 +106,13 @@ export interface Job extends SubmitJobRequest {
   pod_status: string | null;
   message: string | null;
   checkpoint_dir: string;
+  // v0.9：提交者用户名；v0.8 老任务回填为空串
+  owner?: string;
+  // v0.9：后端会把 nodes 归一化为 1（v0.8 老任务缺省）
+  nodes?: number;
+  // v0.9：GPU 资源名，当前固定 nvidia.com/gpu
+  gpu_type?: string;
+  gpus_per_node?: number;
 }
 
 export interface JobListResponse {
@@ -54,6 +131,10 @@ export interface PlatformConfig {
   priorities: Priority[];
   dataset_path: string;
   checkpoint_root: string;
+  // v0.9：PLATFORM_MAX_NODES，默认 1；仅该值 > 1 时前端展示多机选项
+  max_nodes?: number;
+  // v0.9：当前鉴权模式，便于登录页区分「访问令牌」与「账号密码」
+  auth_mode?: AuthMode;
 }
 
 export interface ClusterNode {
@@ -98,6 +179,8 @@ export interface QueueItem {
   priority: Priority | string;
   status: JobStatus | string;
   created_at: string | null;
+  // v0.9：任务提交者（老任务可能缺省）
+  owner?: string;
 }
 
 export interface Queue {

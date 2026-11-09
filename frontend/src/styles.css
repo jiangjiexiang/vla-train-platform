@@ -277,3 +277,92 @@ body {
 .event-placeholder {
   min-height: 48px;
 }
+
+/* v0.9：侧边栏用户信息与登录模式切换 */
+.header-user {
+  flex: 0 0 auto;
+}
+
+.user-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: rgb(255 255 255 / 85%);
+  padding: 0 8px;
+}
+
+.user-button:hover {
+  color: #fff !important;
+  background: rgb(255 255 255 / 10%) !important;
+}
+
+.user-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-tag {
+  margin-inline-end: 4px;
+}
+
+.identity-summary {
+  min-width: 160px;
+  line-height: 1.5;
+}
+
+.login-mode-switch {
+  margin-bottom: 20px;
+}
+
+.login-page .login-card {
+  padding: 12px;
+}
+
+.quota-banner {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border: 1px solid #b7e1f5;
+  border-radius: 8px;
+  background: #e6f4ff;
+  color: #1d3f6e;
+  font-size: 13px;
+}
+
+.quota-banner-exceeded {
+  border-color: #ffccc7;
+  background: #fff2f0;
+  color: #a8071a;
+}
+
+.multi-node-block {
+  margin-bottom: 8px;
+  padding: 12px 16px 4px;
+  border: 1px dashed #d0d5dd;
+  border-radius: 8px;
+  background: #fafbff;
+}
+
+.owner-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.user-quota-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.forbidden-page {
+  padding-top: 48px;
+}
+
+.field-hint {
+  display: block;
+  margin-top: -16px;
+  margin-bottom: 16px;
+  font-size: 12px;
+}

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider } from '../context/AuthContext';
 import type { Job, PlatformConfig } from '../types/api';
-import { SubmitJobPage } from './SubmitJobPage';
+import { SubmitJobPage, buildCommand } from './SubmitJobPage';
 
 vi.mock('../api/client', async () => {
   const actual = await vi.importActual<typeof import('../api/client')>('../api/client');
@@ -190,3 +190,55 @@ describe('SubmitJobPage v0.9 字段', () => {
     expect(await screen.findByText('GPU quota exceeded: 4 used of 4 allowed')).toBeInTheDocument();
   });
 });
+
+// ---- v0.9.1：训练参数字段的命令行拼装 ----
+
+describe('buildCommand', () => {
+  const base = 'python /app/train.py';
+
+  it('全部留空时原样返回基础命令', () => {
+    expect(buildCommand(base, {})).toBe(base);
+  });
+
+  it('按约定顺序拼接已填写的参数', () => {
+    const command = buildCommand(base, {
+      train_steps: 1000,
+      batch_size: 8,
+      grad_accum: 4,
+      save_every: 500,
+      log_every: 10,
+      num_workers: 4,
+    });
+    expect(command).toBe(
+      'python /app/train.py --steps 1000 --batch-size 8 --grad-accum 4 --save-freq 500 --log-freq 10 --num-workers 4',
+    );
+  });
+
+  it('跳过空格与空字符串，不产生空参数', () => {
+    expect(buildCommand(base, { train_steps: null, batch_size: 2, extra_args: '   ' })).toBe(
+      'python /app/train.py --batch-size 2',
+    );
+  });
+
+  it('extra_args 原样追加到最后', () => {
+    expect(buildCommand(base, { train_steps: 5, extra_args: '--freeze-vision-encoder' })).toBe(
+      'python /app/train.py --steps 5 --freeze-vision-encoder',
+    );
+  });
+
+  it('带空格的值加单引号，避免被 shell 拆开', () => {
+    // dtype/lr 这类「有 flag 的值」才会走引号逻辑
+    expect(buildCommand(base, { dtype: 'float 32' })).toBe("python /app/train.py --dtype 'float 32'");
+  });
+
+  it('值内的单引号被正确转义', () => {
+    expect(buildCommand(base, { dtype: "it's a test" })).toBe(
+      `python /app/train.py --dtype 'it'\\''s a test'`,
+    );
+  });
+
+  it('学习率支持字符串形式（如 1e-4）', () => {
+    expect(buildCommand(base, { learning_rate: '1e-4' })).toBe('python /app/train.py --lr 1e-4');
+  });
+});
+

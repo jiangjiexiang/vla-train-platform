@@ -50,6 +50,17 @@ interface SubmitFormValues {
   max_retries: number;
   // 表单清空时 InputNumber 会给出 null，提交前回退到 30
   termination_grace_period_seconds: number | null;
+  // 训练参数（可选）：留空表示由镜像内训练脚本的默认值决定。
+  // 这些字段不直接发给后端，而是由 buildCommand() 拼进命令行。
+  train_steps?: number | null;
+  batch_size?: number | null;
+  grad_accum?: number | null;
+  save_every?: number | null;
+  log_every?: number | null;
+  learning_rate?: number | string | null;
+  num_workers?: number | null;
+  dtype?: string | null;
+  extra_args?: string | null;
   // 仅 /config 返回 max_nodes > 1 时展示
   multi_node?: boolean;
   nodes?: number | null;
@@ -92,6 +103,42 @@ function labelsByteLength(labels: Record<string, string>): number {
   return Object.entries(labels).reduce((sum, [key, value]) => sum + utf8Length(key) + utf8Length(value), 0);
 }
 
+/**
+ * 把训练参数拼成命令行后缀。
+ *
+ * 设计约定（与 docs/training-env-guide.md 一致）：平台只负责拼参数，不假设训练脚本
+ * 一定能理解它们——镜像作者按这套约定实现即可。参数名沿用 openpi/lerobot 的常见写法：
+ *   --steps / --batch-size / --grad-accum / --save-freq / --log-freq / --lr / --num-workers
+ * 任何一个字段留空（未填）就不传该参数，交给镜像默认值，避免无意义地覆盖。
+ */
+export function buildCommand(
+  base: string,
+  values: Pick<
+    SubmitFormValues,
+    'train_steps' | 'batch_size' | 'grad_accum' | 'save_every' | 'log_every' | 'learning_rate' | 'num_workers' | 'dtype' | 'extra_args'
+  >,
+): string {
+  const parts: string[] = [base.trim()];
+  const push = (flag: string, value: unknown) => {
+    if (value === null || value === undefined || value === '') return;
+    const text = String(value).trim();
+    if (!text) return;
+    // 值里出现空格时加引号，防止被 shell 拆成多个参数后再被 /bin/bash -lc 解释错
+    parts.push(/\s/.test(text) ? `${flag} '${text.replace(/'/g, `'\\''`)}'` : `${flag} ${text}`);
+  };
+  push('--steps', values.train_steps);
+  push('--batch-size', values.batch_size);
+  push('--grad-accum', values.grad_accum);
+  push('--save-freq', values.save_every);
+  push('--log-freq', values.log_every);
+  push('--lr', values.learning_rate);
+  push('--num-workers', values.num_workers);
+  push('--dtype', values.dtype);
+  const extra = (values.extra_args ?? '').trim();
+  if (extra) parts.push(extra);
+  return parts.join(' ');
+}
+
 export function SubmitJobPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -108,6 +155,22 @@ export function SubmitJobPage() {
   const [template, setTemplate] = useState<'smoke' | 'custom'>(sourceJob ? 'custom' : 'smoke');
   const [form] = Form.useForm<SubmitFormValues>();
   const multiNode = Form.useWatch('multi_node', form) ?? false;
+  // 实时预览最终命令：训练参数会被拼接到用户填写的命令后面
+  const watchCommand = Form.useWatch('command', form);
+  const watchParams = Form.useWatch(
+    ['train_steps', 'batch_size', 'grad_accum', 'save_every', 'log_every', 'learning_rate', 'num_workers', 'dtype', 'extra_args'],
+    form,
+  );
+  const commandPreview = useMemo(() => {
+    const base = (watchCommand ?? '').trim();
+    if (!base) return '';
+    const [
+      train_steps, batch_size, grad_accum, save_every, log_every, learning_rate, num_workers, dtype, extra_args,
+    ] = watchParams ?? [];
+    return buildCommand(base, {
+      train_steps, batch_size, grad_accum, save_every, log_every, learning_rate, num_workers, dtype, extra_args,
+    });
+  }, [watchCommand, watchParams]);
   // 配额提示需要在多机/单机两种模式下都跟随表单当前选择
   const allValues = Form.useWatch([], form) ?? {};
   const nodes = Form.useWatch('nodes', form) ?? 1;
@@ -200,7 +263,8 @@ export function SubmitJobPage() {
       gpus,
       queue: values.queue,
       priority: values.priority,
-      command: values.command.trim(),
+      // 训练参数拼进命令行；自定义模板下用户可以完全不填，此时等价于原命令
+      command: buildCommand(values.command, values),
       env,
       max_retries: values.max_retries,
       termination_grace_period_seconds: values.termination_grace_period_seconds ?? 30,
@@ -416,6 +480,76 @@ export function SubmitJobPage() {
                 <InputNumber min={1} max={600} precision={0} />
               </Form.Item>
             </Card>
+            <Card title="训练参数（可选）" className="section-card" data-testid="train-params">
+              <Typography.Paragraph type="secondary" className="field-hint">
+                留空则使用镜像内训练脚本的默认值。填写后会拼接到上面的命令后面，
+                例如 <Typography.Text code>--steps 1000 --batch-size 8</Typography.Text>。
+              </Typography.Paragraph>
+              <Row gutter={16}>
+                <Col xs={12} md={6}>
+                  <Form.Item name="train_steps" label="训练步数">
+                    <InputNumber min={1} max={10000000} placeholder="如 1000" style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Form.Item name="batch_size" label="batch size">
+                    <InputNumber min={1} max={1024} placeholder="如 8" style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Form.Item name="grad_accum" label="梯度累积">
+                    <InputNumber min={1} max={1024} placeholder="如 4" style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Form.Item name="learning_rate" label="学习率">
+                    <Input placeholder="如 1e-4" />
+                  </Form.Item>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Form.Item name="save_every" label="保存 checkpoint 间隔（步）">
+                    <InputNumber min={1} placeholder="如 500" style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Form.Item name="log_every" label="打印日志间隔（步）">
+                    <InputNumber min={1} placeholder="如 10" style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Form.Item name="num_workers" label="数据加载进程数">
+                    <InputNumber min={0} max={64} placeholder="如 4" style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Form.Item name="dtype" label="精度">
+                    <Select
+                      allowClear
+                      placeholder="默认"
+                      options={[
+                        { value: 'bfloat16', label: 'bfloat16' },
+                        { value: 'float16', label: 'float16' },
+                        { value: 'float32', label: 'float32' },
+                      ]}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={24}>
+                  <Form.Item name="extra_args" label="其他参数">
+                    <Input placeholder="原样追加到命令末尾，例如 --freeze-vision-encoder" />
+                  </Form.Item>
+                </Col>
+                <Col span={24}>
+                  <Typography.Text type="secondary" className="field-hint">
+                    最终命令预览：
+                    <Typography.Text code data-testid="command-preview">
+                      {commandPreview || '（填写命令后显示）'}
+                    </Typography.Text>
+                  </Typography.Text>
+                </Col>
+              </Row>
+            </Card>
+
 
             <Card title="环境变量" className="section-card">
               <Form.List name="env">

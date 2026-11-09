@@ -1,0 +1,339 @@
+{
+  "schema_version": 1,
+  "entrypoint": "lerobot-train",
+  "version_target": "0.4.4 (lerobot-train, draccus-based; flags use snake_case + dotted groups)",
+  "flag_style_note": "lerobot-train 使用下划线 (--batch_size, --dataset.repo_id)。中划线不生效。例外: convert_dataset_v21_to_v30 使用 --repo-id。",
+  "params": [
+    {
+      "key": "policy_path",
+      "flag": "--policy.path",
+      "label": "基座权重目录",
+      "type": "path",
+      "default": "/home/jjx/workspace/models/smolvla_base",
+      "required": true,
+      "help": "本地目录或Hub id；与--policy.type互斥。不在--help中但可用",
+      "source": "site-packages/lerobot/configs/parser.py PATH_KEY + configs/policies.py:187"
+    },
+    {
+      "key": "dataset_root",
+      "flag": "--dataset.root",
+      "label": "数据集本地目录",
+      "type": "path",
+      "default": null,
+      "required": true,
+      "help": "含meta/info.json的目录；缺省则用HF_LEROBOT_HOME/repo_id",
+      "source": "lerobot/configs/default.py:41 + datasets/lerobot_dataset.py:97"
+    },
+    {
+      "key": "dataset_repo_id",
+      "flag": "--dataset.repo_id",
+      "label": "数据集标识",
+      "type": "str",
+      "default": "local/mydataset",
+      "required": true,
+      "help": "逻辑ID；纯本地时可随意命名。与root并用时root优先",
+      "source": "lerobot/configs/default.py:34 (无默认值，必填)"
+    },
+    {
+      "key": "output_dir",
+      "flag": "--output_dir",
+      "label": "输出目录",
+      "type": "path",
+      "default": null,
+      "required": false,
+      "help": "训练产物保存目录；缺省为outputs/train/日期/时间_任务名",
+      "source": "lerobot/configs/train.py:43"
+    },
+    {
+      "key": "job_name",
+      "flag": "--job_name",
+      "label": "任务名称",
+      "type": "str",
+      "default": null,
+      "required": false,
+      "help": "用于输出目录命名，缺省取policy类型",
+      "source": "lerobot/configs/train.py:44"
+    },
+    {
+      "key": "steps",
+      "flag": "--steps",
+      "label": "训练步数",
+      "type": "int",
+      "default": 20000,
+      "required": false,
+      "help": "默认20000；约50条演示的推荐起点",
+      "source": "lerobot/configs/train.py:56 (默认100000)"
+    },
+    {
+      "key": "batch_size",
+      "flag": "--batch_size",
+      "label": "批大小",
+      "type": "int",
+      "default": 32,
+      "required": false,
+      "help": "4090 48G实测bs=64仅19.5GiB；瓶颈在数据加载",
+      "source": "lerobot/configs/train.py:55 (默认8)"
+    },
+    {
+      "key": "num_workers",
+      "flag": "--num_workers",
+      "label": "数据加载线程",
+      "type": "int",
+      "default": 8,
+      "required": false,
+      "help": "视频解码耗时，建议8-16；默认4偏慢",
+      "source": "lerobot/configs/train.py:54 (默认4)"
+    },
+    {
+      "key": "policy_device",
+      "flag": "--policy.device",
+      "label": "计算设备",
+      "type": "enum",
+      "options": ["cuda", "cuda:0", "cpu", "mps"],
+      "default": "cuda",
+      "required": false,
+      "help": "默认None即自动检测；显式指定更稳妥",
+      "source": "lerobot/configs/policies.py PreTrainedConfig.device"
+    },
+    {
+      "key": "save_freq",
+      "flag": "--save_freq",
+      "label": "保存间隔",
+      "type": "int",
+      "default": 5000,
+      "required": false,
+      "help": "每N步存一个checkpoint，最后一步必存",
+      "source": "lerobot/configs/train.py:63 (默认20000)"
+    },
+    {
+      "key": "log_freq",
+      "flag": "--log_freq",
+      "label": "日志间隔",
+      "type": "int",
+      "default": 100,
+      "required": false,
+      "help": "每N步打印一次loss/lr",
+      "source": "lerobot/configs/train.py:58 (默认200)"
+    },
+    {
+      "key": "seed",
+      "flag": "--seed",
+      "label": "随机种子",
+      "type": "int",
+      "default": 1000,
+      "required": false,
+      "help": "控制模型初始化与数据打乱",
+      "source": "lerobot/configs/train.py:52 (默认1000)"
+    },
+    {
+      "key": "dataset_video_backend",
+      "flag": "--dataset.video_backend",
+      "label": "视频解码后端",
+      "type": "enum",
+      "options": ["pyav", "torchcodec"],
+      "default": "pyav",
+      "required": false,
+      "help": "torchcodec常因缺ffmpeg崩溃；pyav最稳",
+      "source": "lerobot/datasets/video_utils.py:117 get_safe_default_codec"
+    },
+    {
+      "key": "policy_push_to_hub",
+      "flag": "--policy.push_to_hub",
+      "label": "上传到HuggingFace",
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "help": "上游默认True；本地训练须设为false",
+      "source": "lerobot/configs/policies.py:70"
+    },
+    {
+      "key": "policy_repo_id",
+      "flag": "--policy.repo_id",
+      "label": "模型Hub仓库ID",
+      "type": "str",
+      "default": null,
+      "required": false,
+      "help": "push_to_hub=true时必填，否则报错",
+      "source": "lerobot/configs/policies.py:71"
+    },
+    {
+      "key": "wandb_enable",
+      "flag": "--wandb.enable",
+      "label": "启用WandB",
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "help": "开启可视化日志；无账号时保持false",
+      "source": "lerobot/configs/default.py WandBConfig.enable"
+    },
+    {
+      "key": "resume",
+      "flag": "--resume",
+      "label": "断点续训",
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "help": "需配合config_path；续训时忽略其他配置参数",
+      "source": "lerobot/configs/train.py:49"
+    },
+    {
+      "key": "config_path",
+      "flag": "--config_path",
+      "label": "续训配置文件",
+      "type": "path",
+      "default": null,
+      "required": false,
+      "help": "指向checkpoints/last/pretrained_model/train_config.json",
+      "source": "lerobot/configs/parser.py wrap()"
+    },
+    {
+      "key": "policy_chunk_size",
+      "flag": "--policy.chunk_size",
+      "label": "动作块长度",
+      "type": "int",
+      "default": 50,
+      "required": false,
+      "help": "高级：须与推理端一致，勿随意改",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py"
+    },
+    {
+      "key": "policy_n_action_steps",
+      "flag": "--policy.n_action_steps",
+      "label": "每块执行步数",
+      "type": "int",
+      "default": 50,
+      "required": false,
+      "help": "高级：必须<=chunk_size",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py"
+    },
+    {
+      "key": "policy_freeze_vision_encoder",
+      "flag": "--policy.freeze_vision_encoder",
+      "label": "冻结视觉编码器",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "help": "高级：改成false会显著增显存与风险",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py"
+    },
+    {
+      "key": "policy_train_expert_only",
+      "flag": "--policy.train_expert_only",
+      "label": "只训练动作专家",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "help": "高级：true时仅22.2%(99.9M)参数可训",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py"
+    },
+    {
+      "key": "policy_train_state_proj",
+      "flag": "--policy.train_state_proj",
+      "label": "训练状态投影层",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "help": "高级：状态维度适配层是否参与训练",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py"
+    },
+    {
+      "key": "policy_vlm_model_name",
+      "flag": "--policy.vlm_model_name",
+      "label": "VLM基座路径",
+      "type": "str",
+      "default": "HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
+      "required": false,
+      "help": "高级：离线时必须改为本地绝对路径，否则联网",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py + smolvlm_with_expert.py:78"
+    },
+    {
+      "key": "policy_load_vlm_weights",
+      "flag": "--policy.load_vlm_weights",
+      "label": "加载VLM权重",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "help": "高级：用policy.path加载时自动为true，勿手动设false",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py:88"
+    },
+    {
+      "key": "policy_optimizer_lr",
+      "flag": "--policy.optimizer_lr",
+      "label": "学习率",
+      "type": "float",
+      "default": 0.0001,
+      "required": false,
+      "help": "高级：官方预设1e-4，不建议普通用户改",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py"
+    },
+    {
+      "key": "policy_scheduler_warmup_steps",
+      "flag": "--policy.scheduler_warmup_steps",
+      "label": "学习率预热步数",
+      "type": "int",
+      "default": 1000,
+      "required": false,
+      "help": "高级：总步数<10k时建议降到100-300",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py"
+    },
+    {
+      "key": "policy_scheduler_decay_steps",
+      "flag": "--policy.scheduler_decay_steps",
+      "label": "学习率衰减步数",
+      "type": "int",
+      "default": 30000,
+      "required": false,
+      "help": "高级：余弦衰减总长度，宜>=steps",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py"
+    },
+    {
+      "key": "policy_resize_imgs_with_padding",
+      "flag": "--policy.resize_imgs_with_padding",
+      "label": "输入图像尺寸",
+      "type": "str",
+      "default": "512 512",
+      "required": false,
+      "help": "高级：空格分隔两整数；上限512，改小可提速",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py"
+    },
+    {
+      "key": "policy_empty_cameras",
+      "flag": "--policy.empty_cameras",
+      "label": "补空相机数",
+      "type": "int",
+      "default": 0,
+      "required": false,
+      "help": "高级：相机不足3路时用空图占位",
+      "source": "lerobot/policies/smolvla/configuration_smolvla.py"
+    },
+    {
+      "key": "eval_freq",
+      "flag": "--eval_freq",
+      "label": "评测间隔",
+      "type": "int",
+      "default": 20000,
+      "required": false,
+      "help": "需配置env才生效；纯数据集微调无作用",
+      "source": "lerobot/configs/train.py:57 (0.6.2改名env_eval_freq)"
+    },
+    {
+      "key": "save_checkpoint",
+      "flag": "--save_checkpoint",
+      "label": "启用保存",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "help": "关闭则完全不存checkpoint",
+      "source": "lerobot/configs/train.py:61"
+    }
+  ],
+  "extra_args": {
+    "enabled": true
+  },
+  "version_notes": {
+    "0.3.3": "无 tolerance_s / peft / rabc / rename_map / streaming",
+    "0.4.4": "生产在用；含 tolerance_s，无 peft/rename_map/streaming",
+    "0.5.0": "新增 cudnn_deterministic / peft / rabc / rename_map / dataset.streaming",
+    "0.6.2": "eval_freq→env_eval_freq；新增 dataset.eval_split / eval_steps / save_checkpoint_to_hub / checkpoint_format / accelerator.* / parallelism.* / ema.*；output_dir 已存在时报 FileExistsError；rabc 迁移为 sample_weighting"
+  }
+}

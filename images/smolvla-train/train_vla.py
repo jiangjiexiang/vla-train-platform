@@ -105,7 +105,7 @@ def resolve_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     return dataset_root, output_dir
 
 
-def check_environment(dataset_root: Path, output_dir: Path) -> dict:
+def check_environment(dataset_root: Path, output_dir: Path, args=None) -> dict:
     """环境自检：torch/CUDA、lerobot、数据集可读、产物目录可写。"""
     report: dict = {}
 
@@ -131,6 +131,21 @@ def check_environment(dataset_root: Path, output_dir: Path) -> dict:
     report["frames"] = info.get("total_frames")
     report["fps"] = info.get("fps")
     report["codebase_version"] = info.get("codebase_version")
+
+    # 共享内存：DataLoader 用它传 batch。容器默认只有 64MB，
+    # 实测 batch=8/workers=4 会直接 Bus error 崩在第 0 步。
+    # 把实际值打出来，用户遇到 "Bus error" 时能立刻确认是不是这个原因，
+    # 而不用去翻 K8s 配置。
+    try:
+        shm = os.statvfs("/dev/shm")
+        report["shm_gb"] = round(shm.f_blocks * shm.f_frsize / 1024**3, 2)
+    except OSError as exc:
+        report["shm_gb"] = f"读取失败：{exc}"
+
+    # 自检要和训练用同一套参数，否则"自检通过"没有意义
+    if args is not None:
+        report["num_workers"] = args.num_workers
+        report["batch_size"] = args.batch_size
 
     # 产物目录可写性：不可写时训练跑完才发现，白跑一次。
     # 探针写在父目录里——不能写进 output_dir 本身，那会让 lerobot 认为
@@ -209,7 +224,7 @@ def build_train_command(
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     dataset_root, output_dir = resolve_paths(args)
-    report = check_environment(dataset_root, output_dir)
+    report = check_environment(dataset_root, output_dir, args)
     print("环境自检：", json.dumps(report, ensure_ascii=False, indent=2), flush=True)
 
     if args.smoke:

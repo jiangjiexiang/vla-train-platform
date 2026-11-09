@@ -5,6 +5,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api, getErrorMessage, isAbortError } from '../api/client';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { JobActions } from '../components/JobActions';
+import { CheckpointList } from '../components/CheckpointList';
 import { JobTimeline } from '../components/JobTimeline';
 import { LossChart } from '../components/LossChart';
 import { PriorityTag, StatusTag } from '../components/StatusTag';
@@ -16,6 +17,7 @@ import type {
   JobLogs,
   JobMetricsResponse,
   JobTimelineResponse,
+  JobCheckpointsResponse,
 } from '../types/api';
 import { formatDateTime, formatDuration, formatQueueEta } from '../utils/format';
 
@@ -36,6 +38,7 @@ export function JobDetailPage() {
   const [diagnosis, setDiagnosis] = useState<JobDiagnosisResponse | null>(null);
   const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<JobTimelineResponse | null>(null);
+  const [checkpoints, setCheckpoints] = useState<JobCheckpointsResponse | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
 
@@ -107,6 +110,15 @@ export function JobDetailPage() {
       if (!isAbortError(reason)) setTimeline(null);
     }
   }, 5000);
+
+  // 产物随训练推进陆续写入，10 秒刷新一次即可
+  usePolling(async (signal) => {
+    try {
+      setCheckpoints(await api.getJobCheckpoints(name, signal));
+    } catch (reason) {
+      if (!isAbortError(reason)) setCheckpoints(null);
+    }
+  }, 10000);
 
   useEffect(() => {
     if (!followRef.current) return;
@@ -211,6 +223,7 @@ export function JobDetailPage() {
               />
             )}
             <JobTimeline data={timeline} />
+            <CheckpointList data={checkpoints} />
             <Card title="提交参数" className="section-card">
               <Descriptions bordered column={{ xs: 1, md: 2 }} size="small">
                 <Descriptions.Item label="任务名称">{job.name}</Descriptions.Item>

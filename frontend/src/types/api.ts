@@ -451,3 +451,21 @@ export interface JobTimelineResponse {
   current_stage: string | null;
   items: TimelineItem[];
 }
+
+// ---- v1.0：训练产物（backend/app/services/checkpoints.py）----
+export interface CheckpointFile {
+  name: string;
+  size_bytes: number;
+  modified_at: string | null;
+  // true 表示模型权重；metrics.jsonl 这类产物为 false
+  is_weights: boolean;
+}
+
+export interface JobCheckpointsResponse {
+  name: string;
+  exists: boolean;
+  path: string;
+  total_bytes: number;
+  items: CheckpointFile[];
+  truncated: boolean;
+}

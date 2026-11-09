@@ -170,6 +170,32 @@ def quoted_name(name):
     return quote(validate_name(name), safe="")
 
 
+def print_events(name, result, as_json):
+    items = result.get("items")
+    if not isinstance(items, list):
+        raise CliError("事件 API 响应缺少 items 列表", 5)
+    if as_json:
+        print_json(result)
+        return
+    if not items:
+        print(f"任务 {name} 暂无事件")
+        return
+    print(f"任务 {name} 共 {len(items)} 条事件（按时间倒序）")
+    for item in items:
+        kind = item.get("object_kind") or "-"
+        obj = item.get("object_name") or "-"
+        count = item.get("count") or 1
+        suffix = f" x{count}" if count > 1 else ""
+        print(
+            f"  {item.get('last_seen') or '-':20} {(item.get('type') or '-'):8} "
+            f"{(item.get('reason') or '-'):22} {kind}/{obj}{suffix}"
+        )
+        message = (item.get("message") or "").strip()
+        if message:
+            for line in message.splitlines():
+                print(f"      {line}")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="vla-train", description="VLA 训练平台 REST API 客户端")
     parser.add_argument("--config-file", help="配置文件路径（默认遵循 XDG 用户配置目录）")
@@ -202,6 +228,10 @@ def build_parser():
     logs = subparsers.add_parser("logs", help="读取任务日志")
     logs.add_argument("name")
     logs.add_argument("--tail-lines", type=int, default=500)
+
+    events = subparsers.add_parser("events", help="查看任务的 Pod / PyTorchJob 事件；省略名称时列出全部")
+    events.add_argument("name", nargs="?")
+    events.add_argument("--json", action="store_true", help="输出原始 JSON")
 
     cancel = subparsers.add_parser("cancel", help="取消任务")
     cancel.add_argument("name")
@@ -273,6 +303,20 @@ def run(args):
         if not isinstance(logs, str):
             raise CliError("日志 API 响应缺少字符串字段 logs", 5)
         print(logs, end="" if logs.endswith("\n") or not logs else "\n")
+    elif args.action == "events":
+        if args.name is None:
+            listing = request(base, token, "GET", "/jobs", timeout=args.timeout)
+            names = [item.get("name") for item in listing.get("items", []) if item.get("name")]
+            if not names:
+                print("暂无任务")
+                return
+            for name in names:
+                try:
+                    print_events(name, request(base, token, "GET", f"/jobs/{quoted_name(name)}/events", timeout=args.timeout), args.json)
+                except CliError as exc:
+                    print(f"{name}: {exc}", file=sys.stderr)
+            return
+        print_events(args.name, request(base, token, "GET", f"/jobs/{quoted_name(args.name)}/events", timeout=args.timeout), args.json)
     elif args.action == "cancel":
         print_json(request(base, token, "DELETE", "/jobs/" + quoted_name(args.name), timeout=args.timeout))
     elif args.action == "clone":

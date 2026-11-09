@@ -2,6 +2,21 @@
 
 本项目遵循语义化版本。每次大版本更新提交一次 commit 并打 tag，新条目追加到文件顶部。
 
+## [0.3.0] - 2026-11-09
+
+### 新增
+
+- `vla-train events`：按时间倒序列出 PyTorchJob 与训练 Pod 的事件，默认人类可读，
+  `--json` 输出原始响应；省略任务名时逐个列出所有任务的事件。
+- CLI 单元测试 16 例（`backend/tests/test_cli.py`）：服务地址规范化、任务名校验、
+  环境变量解析、参数解析、事件渲染与异常处理。
+- `docs/acceptance-a100.md` 补充两项检查：Kueue 是否启用 `kubeflow.org/pytorchjob`、
+  Pod 事件是否可见。
+
+### 变更
+
+- README 与 CONTRACTS 同步 `events` 子命令的用法与契约。
+
 ## [0.2.0] - 2026-11-09
 
 ### 新增

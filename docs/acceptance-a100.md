@@ -30,6 +30,21 @@
 - [ ] **真实 GPU 环境**：宿主机 `nvidia-smi` 显示 8 张预期 A100，驱动正常。
 - [ ] 节点 Capacity 和 Allocatable 均有 `nvidia.com/gpu: 8`。
 - [ ] ClusterQueue `vla-cluster-queue` 的 `nvidia.com/gpu` nominalQuota 为 8。
+- [ ] **Kueue 已启用 `kubeflow.org/pytorchjob`，排队粒度是整个 PyTorchJob 而不是单个 Pod。**
+  先看配置：
+
+  ```bash
+  kubectl -n kueue-system get cm kueue-manager-config -o yaml | grep -A20 frameworks
+  ```
+
+  应包含 `kubeflow.org/pytorchjob`。再确认 Workload 归属：
+
+  ```bash
+  kubectl -n vla-training get workloads -o custom-columns=NAME:.metadata.name,OWNER:.metadata.ownerReferences[0].kind
+  ```
+
+  `OWNER` 必须是 `PyTorchJob`。若是 `Pod`，说明集成没开，8 卡任务会被逐 Pod 放行而不是整体排队。
+  `scripts/verify-a100.sh` 已包含这项检查，可用 `SKIP_KUEUE_INTEGRATION_CHECK=1` 跳过。
 - [ ] `/login` 无令牌或错误令牌不能提交、取消任务；正确令牌可以访问。
 - [ ] `/dashboard` 显示 GPU 总数 8，节点 Ready，空闲/分配数随任务变化；实时使用情况分别显示 8 张卡的核心利用率、显存和温度。
 - [ ] `/submit` 只允许 1、2、4、8 卡，其他数值被 API 拒绝。
@@ -71,6 +86,14 @@ PLATFORM_API_TOKEN="$PLATFORM_API_TOKEN" \
 ## 6. 失败、历史与自有代码（真实 GPU）
 
 - [ ] 明确失败的短任务最终为 `FAILED`，网页展示失败原因和 Pod 事件，不无限重启。
+- [ ] **Pod 事件可见**：`GET /api/v1/jobs/{name}/events` 按 `last_seen` 倒序返回事件，
+  失败任务能查到 `reason` / `message` / `object_kind` / `object_name`；取消并删除对象后返回 200 和空 `items`。
+
+  ```bash
+  curl -s -H "Authorization: Bearer $PLATFORM_API_TOKEN" \
+    http://127.0.0.1:30080/api/v1/jobs/<job-name>/events | python3 -m json.tool | head -30
+  cli/vla-train events <job-name>
+  ```
 - [ ] Web Deployment 重启后实时任务不丢失，历史提交仍可查看。
 - [ ] 自有 VLA 代码使用小数据/适当配置完成一次小规模 8 卡训练。
 - [ ] 自有代码日志确认使用 8 卡，输出写入 `/checkpoints/<job-name>`；没有依赖任意宿主机挂载或特权容器。

@@ -205,9 +205,20 @@ cli/vla-train submit \
 cli/vla-train list
 cli/vla-train status
 cli/vla-train logs smoke001
+cli/vla-train events smoke001
 ```
 
-`status` 查看任务列表/状态，`logs` 读取日志。 queued 任务可能返回空日志；运行后应看到 CUDA/GPU、训练进度和完成信息。
+`status` 查看任务列表/状态，`logs` 读取日志。queued 任务可能返回空日志；运行后应看到 CUDA/GPU、训练进度和完成信息。
+
+`events` 按时间倒序列出 PyTorchJob 与训练 Pod 的事件，用于排查「已放行但没跑起来」这类问题：
+
+```bash
+cli/vla-train events smoke001          # 人类可读
+cli/vla-train events smoke001 --json   # 原始 JSON，便于脚本处理
+cli/vla-train events                   # 逐个列出所有任务的事件
+```
+
+典型输出会直接给出镜像拉取失败、被 Kueue 放行、Pod 创建等关键节点。
 
 ### 取消与 clone
 

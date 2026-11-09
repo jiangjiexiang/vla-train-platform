@@ -236,11 +236,14 @@ vla-train submit --name exp001 --gpus 1 --image vla-smoke:latest --priority norm
 vla-train list
 vla-train status
 vla-train logs exp001
+vla-train events exp001 [--json] [省略名称列出全部]
 vla-train cancel exp001
 vla-train clone exp001 --name exp002
 ```
 
-CLI talks to the REST API, not directly to Kubernetes. Use Python standard library where practical. Configuration is stored with mode 0600 in the user configuration directory; never hard-code a token.
+CLI talks to the REST API, not directly to Kubernetes. Use Python standard library where practical.
+`events` renders last_seen / type / reason / object and the message by default; `--json` prints the raw
+`/jobs/{name}/events` payload for scripting. Configuration is stored with mode 0600 in the user configuration directory; never hard-code a token.
 
 ## Smoke training assets
 

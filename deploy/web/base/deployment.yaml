@@ -104,6 +104,11 @@ spec:
               mountPath: /data/history
             - name: tmp
               mountPath: /tmp
+            # 数据集目录：Web 需要它才能扫描并列出可选数据集。
+            # 与训练 Pod 使用同一个宿主机路径，保证「列表里看到的」就是「训练时挂进去的」。
+            - name: datasets
+              mountPath: /datasets
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -134,6 +139,10 @@ spec:
             capabilities:
               drop: ["ALL"]
       volumes:
+        - name: datasets
+          hostPath:
+            path: /data/vla-platform/datasets
+            type: Directory
         - name: history
           persistentVolumeClaim:
             claimName: vla-web-history

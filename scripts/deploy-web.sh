@@ -207,4 +207,21 @@ kube -n vla-platform rollout status deployment/vla-web --timeout="$WAIT_TIMEOUT"
 kube -n vla-platform get deployment/vla-web service/vla-web persistentvolumeclaim/vla-web-history
 
 printf '\nWeb deployment complete. NodePort: http://<host-ip>:%s\n' "${WEB_NODE_PORT:-30080}"
+# --- 数据集目录可读性检查 -------------------------------------------------
+# Web 以 UID 10001（非 root）运行，需要能读到 /datasets 下的数据集。
+# 宿主机目录若是别的用户 700/750 创建的，Web 会扫出空列表且没有明显报错，
+# 因此这里主动检查并给出修复命令。
+DATASET_DIR="${PLATFORM_DATASET_HOST_PATH:-/data/vla-platform/datasets}"
+if [[ -d "$DATASET_DIR" ]]; then
+  # 用 Web 容器的 UID 试读第一个数据集的 meta/info.json
+  sample=$(find "$DATASET_DIR" -mindepth 2 -maxdepth 2 -name info.json 2>/dev/null | head -1)
+  if [[ -n "$sample" ]] && ! run_root -u 10001 test -r "$sample" 2>/dev/null; then
+    printf '\n[WARN] Web 容器用户 (UID 10001) 无法读取数据集：\n' >&2
+    printf '       %s\n' "$sample" >&2
+    printf '       Web 端数据集列表会是空的。修复（二选一）：\n' >&2
+    printf '         sudo chgrp -R 10001 %s && sudo chmod -R g+rX %s\n' "$DATASET_DIR" "$DATASET_DIR" >&2
+    printf '         sudo chmod -R o+rX %s   # 内网只读场景可接受\n' "$DATASET_DIR" >&2
+  fi
+fi
+
 printf 'History SQLite path: /data/history/platform.db (PersistentVolumeClaim vla-web-history).\n'

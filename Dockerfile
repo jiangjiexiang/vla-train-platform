@@ -34,6 +34,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY --from=dependencies /install /usr/local
 COPY backend/app /app/app
+# 训练配方随镜像发布（backend/app/recipes/loader.py 默认读 /app/recipes）。
+# 漏了这一行 recipes 接口会返回空列表、一键训练直接 404，已踩过。
+COPY recipes /app/recipes
 COPY --from=frontend /build/dist /app/static
 
 # 历史库目录；compose 或 -v 挂载后持久化。

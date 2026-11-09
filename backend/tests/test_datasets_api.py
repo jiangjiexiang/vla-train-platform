@@ -6,10 +6,9 @@ import json
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-
 from app.config import Settings
 from app.datasets.store import DatasetStore
+from fastapi.testclient import TestClient
 
 
 def make_dataset(root: Path, name: str, *, episodes: int = 10, frames: int = 3000, version: str = "v3.0") -> Path:

@@ -133,3 +133,52 @@ def test_pattern_table(text, expected):
 
     assert result is not None
     assert result["code"] == expected
+
+# ---------------------------------------------------------------------------
+# 以下用例的错误文本都取自真实跑 SmolVLA 训练时的日志，不是编造的
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("expected", "log"),
+    [
+        (
+            "hf_auth",
+            "huggingface_hub.errors.HfHubHTTPError: 401 Client Error: Unauthorized "
+            "for url: https://hf-mirror.com/api/repos/create",
+        ),
+        ("torchcodec", "RuntimeError: Could not load libtorchcodec"),
+        (
+            "output_dir_exists",
+            "FileExistsError: Output directory /checkpoints/x/local already exists "
+            "and resume is False. Please change your output directory",
+        ),
+        (
+            "missing_required_arg",
+            "draccus.utils.DecodingError: `dataset`: Missing required field(s) `repo_id` "
+            "for DatasetConfig",
+        ),
+    ],
+)
+def test_real_training_failures_are_diagnosed(expected, log):
+    """这些错误在接入真实训练时逐个遇到过，必须能归到正确的诊断码。
+
+    若只靠 python_error 兜底，用户看到的是一句「训练脚本抛异常」，
+    而真正的原因（缺 token、目录已存在、参数名不匹配）完全体现不出来。
+    """
+    result = diagnose(status="FAILED", reason=None, message=None, log_tail=log, events=[])
+
+    assert result is not None
+    assert result["code"] == expected
+
+
+def test_hf_auth_suggestion_mentions_push():
+    """训练成功后才抛 401 是最糟的失败形态，建议必须指向真正的原因。"""
+    result = diagnose(
+        status="FAILED",
+        reason=None,
+        message=None,
+        log_tail="401 Client Error: Unauthorized for url: https://hf-mirror.com/api/repos/create",
+        events=[],
+    )
+
+    assert "推送" in result["suggestion"] or "push" in result["suggestion"].lower()
+

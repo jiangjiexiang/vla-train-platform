@@ -71,6 +71,31 @@ DIAGNOSES: dict[str, tuple[str, str]] = {
         "参数配置错误",
         "数据集与配方/模型的参数不匹配。检查数据集格式版本、动作维度、相机数量是否被训练脚本接受",
     ),
+    "hf_auth": (
+        "缺少 HuggingFace 凭据",
+        "训练脚本尝试访问 HuggingFace Hub 但没有 token，最常见的是训练**结束后**自动推送模型。"
+        "平台上提交任务不需要推送，检查配方是否带 --push_to_hub true，或镜像是否已默认关闭。",
+    ),
+    "hf_download": (
+        "模型权重下载失败",
+        "下载预训练权重时网络出错或被限速。内网环境建议把权重预置进镜像，"
+        "或确认 HF_ENDPOINT 指向可用的镜像站。",
+    ),
+    "output_dir_exists": (
+        "输出目录已存在",
+        "训练框架要求输出目录不存在（否则拒绝覆盖），重试同一个任务时容易遇到。"
+        "清理该任务产物后重试，或换一个任务名。",
+    ),
+    "missing_required_arg": (
+        "训练参数缺失",
+        "训练框架报缺少必填参数。通常意味着配方里的参数名与框架版本不匹配，"
+        "对照 docs 下的参数调研修正配方。",
+    ),
+    "torchcodec": (
+        "视频解码后端不可用",
+        "torchcodec 在当前 torch 版本上加载失败。加 --dataset.video_backend=pyav 可绕过；"
+        "镜像若已注入 torchcodec guard 则不会出现。",
+    ),
     "nccl": (
         "分布式通信失败",
         "多卡/多机 NCCL 初始化失败。检查各节点 NCCL 与 torch 版本是否一致、GPU 是否都可访问",
@@ -97,6 +122,12 @@ class Diagnosis:
 
 # 日志/事件文本 → 诊断码的匹配规则。按顺序匹配，先命中先用。
 LOG_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    # 下面几条来自真实跑 SmolVLA 训练时遇到的失败，不是推测的
+    ("hf_auth", re.compile(r"401 Client Error|Unauthorized for url.*huggingface|Invalid username or password", re.I)),
+    ("torchcodec", re.compile(r"Could not load libtorchcodec", re.I)),
+    ("output_dir_exists", re.compile(r"already exists and resume is False", re.I)),
+    ("missing_required_arg", re.compile(r"Missing required field", re.I)),
+    ("hf_download", re.compile(r"huggingface_hub.*(?:Connection|Timeout)|Couldn't reach|Max retries exceeded", re.I)),
     # K8s 的事件消息通常是 "Failed to pull image ..."，没有 ErrImagePull 字样，也要认出来
     ("image_pull_backoff", re.compile(r"ImagePullBackOff|ErrImagePull|Failed to pull image|manifest unknown", re.I)),
     ("oom_gpu", re.compile(r"CUDA out of memory|CUDA OutOfMemoryError|torch\.cuda\.OutOfMemoryError", re.I)),

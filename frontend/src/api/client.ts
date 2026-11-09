@@ -1,4 +1,4 @@
-import type { ClusterSummary, CurrentUser, HealthResponse, Job, JobEventsResponse, JobListResponse, JobLogs, JobStatus, LoginResponse, PlatformConfig, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, SubmitJobRequest, UserListResponse, ImageListResponse } from '../types/api';
+import type { ClusterSummary, CurrentUser, HealthResponse, Job, JobEventsResponse, JobListResponse, JobLogs, JobStatus, LoginResponse, PlatformConfig, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, SubmitJobRequest, UserListResponse, ImageListResponse, ImageParamsResponse } from '../types/api';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE || '/api/v1').replace(/\/+$/, '');
 // ldap 模式下的会话令牌
@@ -122,6 +122,10 @@ export const api = {
     request<PlatformConfig>('/config', { signal, token }),
   // 提交页镜像候选：默认镜像 + 历史/运行中任务用过的镜像（这些镜像确定已存在节点上）
   getImages: (signal?: AbortSignal) => request<ImageListResponse>('/images', { signal }),
+  // v0.9.1：镜像的训练参数模板。镜像名含 `/` 和 `:`，必须整体编码，
+  // 否则 `vla-smolvla:latest` 里的 `:` 会被当成端口、`/` 会被当成路径分隔。
+  getImageParams: (image: string, signal?: AbortSignal) =>
+    request<ImageParamsResponse>(`/images/${encodeURIComponent(image)}/params`, { signal }),
 
   // ---- v0.9 鉴权 ----
   // 401 = 账号或密码错误；503 = LDAP 不可达（前端据此提示「认证服务不可用」而不是密码错误）

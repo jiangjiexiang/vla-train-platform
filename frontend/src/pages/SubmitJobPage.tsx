@@ -18,14 +18,21 @@ import {
   Typography,
 } from 'antd';
 import { MinusCircleOutlined, PlusOutlined, SendOutlined } from '@ant-design/icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { api, getErrorMessage, isUnauthorized } from '../api/client';
+import { api, getErrorMessage, isAbortError, isUnauthorized } from '../api/client';
 import { ErrorAlert } from '../components/ErrorAlert';
+import { PARAMS_FIELD, TrainParamsForm } from '../components/TrainParamsForm';
 import { useAuth } from '../context/AuthContext';
 import { usePolling } from '../hooks/usePolling';
 import { loadEffectiveQuota } from '../api/quota';
-import type { EffectiveQuota, Job, Priority, SubmitJobRequest } from '../types/api';
+import type { EffectiveQuota, ImageParamsResponse, Job, ParamsTemplate, Priority, SubmitJobRequest } from '../types/api';
+import {
+  buildCommandFromTemplate,
+  builtinTemplate,
+  resolveBaseCommand,
+  templateDefaultValues,
+} from '../utils/buildCommand';
 import { cloneName } from '../utils/format';
 
 interface EnvEntry {
@@ -50,17 +57,9 @@ interface SubmitFormValues {
   max_retries: number;
   // 表单清空时 InputNumber 会给出 null，提交前回退到 30
   termination_grace_period_seconds: number | null;
-  // 训练参数（可选）：留空表示由镜像内训练脚本的默认值决定。
-  // 这些字段不直接发给后端，而是由 buildCommand() 拼进命令行。
-  train_steps?: number | null;
-  batch_size?: number | null;
-  grad_accum?: number | null;
-  save_every?: number | null;
-  log_every?: number | null;
-  learning_rate?: number | string | null;
-  num_workers?: number | null;
-  dtype?: string | null;
-  extra_args?: string | null;
+  // v0.9.1：训练参数由当前镜像的模板决定（契约 3/6），这些字段名不直接发给后端，
+  // 而是由 buildCommandFromTemplate() 拼进命令行。
+  params?: Record<string, unknown>;
   // 仅 /config 返回 max_nodes > 1 时展示
   multi_node?: boolean;
   nodes?: number | null;
@@ -104,39 +103,25 @@ function labelsByteLength(labels: Record<string, string>): number {
 }
 
 /**
- * 把训练参数拼成命令行后缀。
- *
- * 设计约定（与 docs/training-env-guide.md 一致）：平台只负责拼参数，不假设训练脚本
- * 一定能理解它们——镜像作者按这套约定实现即可。参数名沿用 openpi/lerobot 的常见写法：
- *   --steps / --batch-size / --grad-accum / --save-freq / --log-freq / --lr / --num-workers
- * 任何一个字段留空（未填）就不传该参数，交给镜像默认值，避免无意义地覆盖。
+ * 表单里「训练命令」框此时应视为空：
+ * - 用户完全没填 → 用模板 entrypoint
+ * - 用户填的内容恰好等于 /config 的 default_command 且镜像提供了 entrypoint
+ *   → 仍然用 entrypoint（说明用户没有真正手写命令，别让默认值挡住镜像模板）
+ * 其余情况都算用户手填，优先级最高。
  */
-export function buildCommand(
-  base: string,
-  values: Pick<
-    SubmitFormValues,
-    'train_steps' | 'batch_size' | 'grad_accum' | 'save_every' | 'log_every' | 'learning_rate' | 'num_workers' | 'dtype' | 'extra_args'
-  >,
-): string {
-  const parts: string[] = [base.trim()];
-  const push = (flag: string, value: unknown) => {
-    if (value === null || value === undefined || value === '') return;
-    const text = String(value).trim();
-    if (!text) return;
-    // 值里出现空格时加引号，防止被 shell 拆成多个参数后再被 /bin/bash -lc 解释错
-    parts.push(/\s/.test(text) ? `${flag} '${text.replace(/'/g, `'\\''`)}'` : `${flag} ${text}`);
-  };
-  push('--steps', values.train_steps);
-  push('--batch-size', values.batch_size);
-  push('--grad-accum', values.grad_accum);
-  push('--save-freq', values.save_every);
-  push('--log-freq', values.log_every);
-  push('--lr', values.learning_rate);
-  push('--num-workers', values.num_workers);
-  push('--dtype', values.dtype);
-  const extra = (values.extra_args ?? '').trim();
-  if (extra) parts.push(extra);
-  return parts.join(' ');
+export function pickBaseCommand(options: {
+  formCommand?: string | null;
+  template?: ParamsTemplate | null;
+  defaultCommand?: string | null;
+}): string {
+  const formCommand = (options.formCommand ?? '').trim();
+  const entrypoint = (options.template?.entrypoint ?? '').trim();
+  const untouched = !formCommand || Boolean(entrypoint) && formCommand === (options.defaultCommand ?? '').trim();
+  return resolveBaseCommand({
+    userCommand: untouched ? '' : formCommand,
+    entrypoint,
+    defaultCommand: options.defaultCommand,
+  });
 }
 
 export function SubmitJobPage() {
@@ -153,24 +138,29 @@ export function SubmitJobPage() {
   const [configLoading, setConfigLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [template, setTemplate] = useState<'smoke' | 'custom'>(sourceJob ? 'custom' : 'smoke');
+  // v0.9.1：当前镜像的参数模板（契约 4/6）
+  const [paramsTemplate, setParamsTemplate] = useState<ParamsTemplate | null>(null);
+  const [paramsSource, setParamsSource] = useState<ImageParamsResponse['source'] | null>(null);
+  const [paramsWarning, setParamsWarning] = useState<string | undefined>(undefined);
+  const [paramsLoading, setParamsLoading] = useState(false);
+  const paramsRequestId = useRef(0);
   const [form] = Form.useForm<SubmitFormValues>();
   const multiNode = Form.useWatch('multi_node', form) ?? false;
-  // 实时预览最终命令：训练参数会被拼接到用户填写的命令后面
+  // 实时预览最终命令：训练参数会被拼接到 base command 后面
   const watchCommand = Form.useWatch('command', form);
-  const watchParams = Form.useWatch(
-    ['train_steps', 'batch_size', 'grad_accum', 'save_every', 'log_every', 'learning_rate', 'num_workers', 'dtype', 'extra_args'],
-    form,
-  );
+  const watchImage = Form.useWatch('image', form);
+  const watchParams = Form.useWatch(PARAMS_FIELD, form);
+  // 外层 Form.Item 不会因嵌套字段变化而重渲染（FormContext 每次 setFields 都会换新），
+  // 用整个表单快照兜底，保证预览随任意训练参数输入即时刷新。
+  const formSnapshot = Form.useWatch([], form) as SubmitFormValues | undefined;
+  const isAdmin = user?.role === 'admin';
+
+  const baseCommand = pickBaseCommand({ formCommand: watchCommand, template: paramsTemplate, defaultCommand: config?.default_command });
   const commandPreview = useMemo(() => {
-    const base = (watchCommand ?? '').trim();
-    if (!base) return '';
-    const [
-      train_steps, batch_size, grad_accum, save_every, log_every, learning_rate, num_workers, dtype, extra_args,
-    ] = watchParams ?? [];
-    return buildCommand(base, {
-      train_steps, batch_size, grad_accum, save_every, log_every, learning_rate, num_workers, dtype, extra_args,
-    });
-  }, [watchCommand, watchParams]);
+    const values = (watchParams ?? formSnapshot?.params ?? {}) as Record<string, unknown>;
+    if (!paramsTemplate) return baseCommand;
+    return buildCommandFromTemplate(paramsTemplate, values, baseCommand);
+  }, [paramsTemplate, watchParams, formSnapshot?.params, baseCommand]);
   // 配额提示需要在多机/单机两种模式下都跟随表单当前选择
   const allValues = Form.useWatch([], form) ?? {};
   const nodes = Form.useWatch('nodes', form) ?? 1;
@@ -231,6 +221,61 @@ export function SubmitJobPage() {
     return () => controller.abort();
   }, []);
 
+  /**
+   * 镜像变化 → 拉模板 → 重置参数为模板默认值（契约 6）。
+   *
+   * 拉取失败（网络、404/503 或接口尚未上线）时回退到前端内置模板，不阻塞提交。
+   * 用递增的 requestId 丢弃过期响应：镜像被快速切换时，先发的请求即便后到也不能覆盖。
+   */
+  useEffect(() => {
+    const image = (watchImage ?? '').trim();
+    const requestId = paramsRequestId.current + 1;
+    paramsRequestId.current = requestId;
+
+    const applyTemplate = (
+      next: ParamsTemplate,
+      source: ImageParamsResponse['source'],
+      warning?: string,
+    ) => {
+      if (paramsRequestId.current !== requestId) return;
+      setParamsTemplate(next);
+      setParamsSource(source);
+      setParamsWarning(warning);
+      // 切换镜像时已填参数一律重置为模板默认值，避免 A 镜像的参数残留到 B 镜像
+      form.setFieldValue(PARAMS_FIELD, templateDefaultValues(next));
+    };
+
+    if (!image) {
+      // 还没填镜像：先用内置模板占位，保证表单结构和预览不抖
+      applyTemplate(builtinTemplate(), 'builtin');
+      return;
+    }
+
+    const controller = new AbortController();
+    setParamsLoading(true);
+    api
+      .getImageParams(image, controller.signal)
+      .then((response) => {
+        if (response?.template && Array.isArray(response.template.params)) {
+          applyTemplate(response.template, response.source, response.warning);
+        } else {
+          // 200 但响应体不符合契约：按失败处理
+          applyTemplate(builtinTemplate(), 'error', '镜像参数模板格式无效，已回退到平台通用参数');
+        }
+      })
+      .catch((reason) => {
+        if (isAbortError(reason)) return;
+        applyTemplate(builtinTemplate(), 'error', `读取镜像参数模板失败（${getErrorMessage(reason)}），已回退到平台通用参数`);
+      })
+      .finally(() => {
+        if (paramsRequestId.current === requestId) setParamsLoading(false);
+      });
+
+    return () => controller.abort();
+    // form 实例在整个页面生命周期内不变
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchImage]);
+
   const submit = async (values: SubmitFormValues) => {
     const env = rowsToRecord(values.env);
     if (typeof env === 'string') {
@@ -257,14 +302,17 @@ export function SubmitJobPage() {
     const gpus = multiNodeEnabled && values.multi_node
       ? Math.max(1, Number(values.nodes) || 1) * Math.max(1, Number(values.gpus_per_node) || 1)
       : values.gpus;
+    // 基础命令优先级（契约 6）：用户手填 > 模板 entrypoint > /config 的 default_command
+    const chosenBase = pickBaseCommand({ formCommand: values.command, template: paramsTemplate, defaultCommand: config?.default_command });
+    const currentTemplate = paramsTemplate ?? builtinTemplate();
     const payload: SubmitJobRequest = {
       name: values.name.trim(),
       image: values.image.trim(),
       gpus,
       queue: values.queue,
       priority: values.priority,
-      // 训练参数拼进命令行；自定义模板下用户可以完全不填，此时等价于原命令
-      command: buildCommand(values.command, values),
+      // 训练参数拼进命令行；不填任何参数时等价于原命令
+      command: buildCommandFromTemplate(currentTemplate, (values.params ?? {}) as Record<string, unknown>, chosenBase),
       env,
       max_retries: values.max_retries,
       termination_grace_period_seconds: values.termination_grace_period_seconds ?? 30,
@@ -299,6 +347,7 @@ export function SubmitJobPage() {
   };
 
   const quotaHint = describeQuotaHint(quota, requestedGpus);
+  const paramsCardTitle = paramsTemplate?.entrypoint ? '训练参数（镜像模板）' : '训练参数（可选）';
 
   return (
     <div>
@@ -339,6 +388,7 @@ export function SubmitJobPage() {
               multi_node: false,
               nodes: sourceJob?.nodes && sourceJob.nodes > 1 ? sourceJob.nodes : 2,
               gpus_per_node: config.allowed_gpus[0],
+              params: {},
             }}
           >
             <Card title="任务模板" className="section-card">
@@ -466,8 +516,20 @@ export function SubmitJobPage() {
                   )}
                 </div>
               )}
-              <Form.Item name="command" label="训练命令" rules={[{ required: true, whitespace: true, message: '请输入训练命令' }]} extra="命令由容器内 /bin/bash -lc 执行">
-                <Input.TextArea rows={3} placeholder="python /app/train.py --steps 100" />
+              <Form.Item
+                name="command"
+                label="训练命令"
+                rules={[{ required: true, whitespace: true, message: '请输入训练命令' }]}
+                extra={
+                  paramsTemplate?.entrypoint
+                    ? `命令由容器内 /bin/bash -lc 执行；留空（如清空后仅剩空格）则使用镜像模板的 entrypoint：${paramsTemplate.entrypoint}`
+                    : '命令由容器内 /bin/bash -lc 执行'
+                }
+              >
+                <Input.TextArea
+                  rows={3}
+                  placeholder={paramsTemplate?.entrypoint ? `留空则使用 ${paramsTemplate.entrypoint}` : 'python /app/train.py --steps 100'}
+                />
               </Form.Item>
               <Form.Item name="max_retries" label="失败重启次数" rules={[{ required: true, message: '请设置失败重启次数' }]} extra="0 表示不重启，最多允许 2 次">
                 <InputNumber min={0} max={2} precision={0} />
@@ -480,76 +542,22 @@ export function SubmitJobPage() {
                 <InputNumber min={1} max={600} precision={0} />
               </Form.Item>
             </Card>
-            <Card title="训练参数（可选）" className="section-card" data-testid="train-params">
-              <Typography.Paragraph type="secondary" className="field-hint">
-                留空则使用镜像内训练脚本的默认值。填写后会拼接到上面的命令后面，
-                例如 <Typography.Text code>--steps 1000 --batch-size 8</Typography.Text>。
-              </Typography.Paragraph>
-              <Row gutter={16}>
-                <Col xs={12} md={6}>
-                  <Form.Item name="train_steps" label="训练步数">
-                    <InputNumber min={1} max={10000000} placeholder="如 1000" style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col xs={12} md={6}>
-                  <Form.Item name="batch_size" label="batch size">
-                    <InputNumber min={1} max={1024} placeholder="如 8" style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col xs={12} md={6}>
-                  <Form.Item name="grad_accum" label="梯度累积">
-                    <InputNumber min={1} max={1024} placeholder="如 4" style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col xs={12} md={6}>
-                  <Form.Item name="learning_rate" label="学习率">
-                    <Input placeholder="如 1e-4" />
-                  </Form.Item>
-                </Col>
-                <Col xs={12} md={6}>
-                  <Form.Item name="save_every" label="保存 checkpoint 间隔（步）">
-                    <InputNumber min={1} placeholder="如 500" style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col xs={12} md={6}>
-                  <Form.Item name="log_every" label="打印日志间隔（步）">
-                    <InputNumber min={1} placeholder="如 10" style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col xs={12} md={6}>
-                  <Form.Item name="num_workers" label="数据加载进程数">
-                    <InputNumber min={0} max={64} placeholder="如 4" style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-                <Col xs={12} md={6}>
-                  <Form.Item name="dtype" label="精度">
-                    <Select
-                      allowClear
-                      placeholder="默认"
-                      options={[
-                        { value: 'bfloat16', label: 'bfloat16' },
-                        { value: 'float16', label: 'float16' },
-                        { value: 'float32', label: 'float32' },
-                      ]}
-                    />
-                  </Form.Item>
-                </Col>
-                <Col span={24}>
-                  <Form.Item name="extra_args" label="其他参数">
-                    <Input placeholder="原样追加到命令末尾，例如 --freeze-vision-encoder" />
-                  </Form.Item>
-                </Col>
-                <Col span={24}>
-                  <Typography.Text type="secondary" className="field-hint">
-                    最终命令预览：
-                    <Typography.Text code data-testid="command-preview">
-                      {commandPreview || '（填写命令后显示）'}
-                    </Typography.Text>
-                  </Typography.Text>
-                </Col>
-              </Row>
-            </Card>
 
+            <Card title={paramsCardTitle} className="section-card">
+              <TrainParamsForm
+                template={paramsTemplate}
+                source={paramsSource}
+                warning={paramsWarning}
+                loading={paramsLoading && !paramsTemplate}
+                isAdmin={isAdmin}
+              />
+              <Typography.Text type="secondary" className="field-hint">
+                最终命令预览：
+                <Typography.Text code data-testid="command-preview">
+                  {commandPreview || '（填写命令后显示）'}
+                </Typography.Text>
+              </Typography.Text>
+            </Card>
 
             <Card title="环境变量" className="section-card">
               <Form.List name="env">

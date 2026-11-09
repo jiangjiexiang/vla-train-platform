@@ -34,6 +34,13 @@ export function formatCount(value: number | null | undefined): string {
   return number.toLocaleString('zh-CN');
 }
 
+/** 参数默认值的输入框占位文案：无默认值时返回 undefined。 */
+export function paramPlaceholder(param: { placeholder?: string; default?: unknown }): string | undefined {
+  if (param.placeholder) return param.placeholder;
+  if (param.default === null || param.default === undefined || param.default === '') return undefined;
+  return String(param.default);
+}
+
 /** 参数面板里展示的默认值（对象/数组用 JSON，空值显示「—」）。 */
 export function formatParamDefault(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—';

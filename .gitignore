@@ -17,3 +17,6 @@ artifacts/
 frontend/test-results/
 frontend/playwright-report/
 frontend/.cache/
+
+# smoke 镜像构建用的预下载 wheel（908MB），不进版本库
+images/smoke-train/wheels/

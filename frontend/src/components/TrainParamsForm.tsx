@@ -92,7 +92,7 @@ function ParamControl({ param }: { param: ParamSpec }) {
 }
 
 /** 单字段校验：required + min/max（InputNumber 已拦一部分，这里兜底字符串输入）。 */
-function paramRules(param: ParamSpec) {
+export function paramRules(param: ParamSpec) {
   const rules: Record<string, unknown>[] = [];
   if (param.type === 'bool') return rules;
   rules.push({

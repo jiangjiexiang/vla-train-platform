@@ -8,11 +8,14 @@ import {
   Empty,
   Form,
   Input,
+  InputNumber,
   Radio,
   Row,
+  Select,
   Space,
   Spin,
   Steps,
+  Switch,
   Tag,
   Tooltip,
   Typography,
@@ -28,8 +31,6 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
-import { FieldContext } from 'rc-field-form';
-import type { InternalFormInstance } from 'rc-field-form/lib/interface';
 import type { FormInstance } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -41,9 +42,10 @@ import {
   issuesByLevel,
 } from '../components/DatasetBadges';
 import { ErrorAlert } from '../components/ErrorAlert';
-import { PARAMS_FIELD, TrainParamsForm, visibleParams } from '../components/TrainParamsForm';
+import { PARAMS_FIELD, paramRules, visibleParams } from '../components/TrainParamsForm';
+import type { ParamSpec } from '../types/api';
 import type { DatasetMeta, ParamsTemplate, Priority, Recipe, RunRequest } from '../types/api';
-import { formatBytes, formatCount, formatMinutes } from '../utils/dataset';
+import { formatBytes, formatCount, formatMinutes, paramPlaceholder } from '../utils/dataset';
 
 /**
  * 页面间传递「用此数据聚集开始训练」的预选。走 history state 而不是 query，
@@ -97,18 +99,6 @@ export function recipeInitialParams(recipe: Recipe): Record<string, unknown> {
     if (key in values) values[key] = value;
   }
   return values;
-}
-
-/**
- * antd 5 的 Form.Item 不会把父级 name 前缀拼进子字段，而 rc-field-form 的 Field 会读取
- * FieldContext.prefixName。这里复用同一个 form 实例，只把 prefixName 设为 params，
- * TrainParamsForm 内部 namePath=[] 的字段就会注册成 params.<key>。
- */
-function paramsFieldContext(form: FormInstance): InternalFormInstance {
-  return {
-    ...(form as unknown as InternalFormInstance),
-    prefixName: [PARAMS_FIELD],
-  };
 }
 
 /** 只把用户真正改过的参数放进 overrides，未改的交给后端用 defaults/模板默认值。 */
@@ -290,9 +280,59 @@ function RecipeCard({
 }
 
 /**
- * 高级参数面板。文档里说 FieldContext.prefixName 会拼进字段路径，但实际 Form.Item
- * 在入口处就把 name 折算成了绝对路径，靠上下文重定向并不可靠。这里直接给每个参数
- * 渲染完整的 name=[params, key]，取值/校验/初值都由外层 Form 统一管。
+ * 快速开始的参数控件：类型映射与 TrainParamsForm.ParamControl 保持一致
+ * （int/float → InputNumber，bool → Switch，enum → Select，其余 → Input）。
+ * 表单初值由 ParamsPanel 里的 Form.Item 负责，这里只补一个占位文案。
+ */
+function QuickParamControl({ param }: { param: ParamSpec }) {
+  const placeholder = paramPlaceholder(param);
+  const width = '100%';
+  switch (param.type) {
+    case 'int':
+      return (
+        <InputNumber
+          style={{ width }}
+          placeholder={placeholder}
+          min={param.min}
+          max={param.max}
+          precision={0}
+          step={1}
+        />
+      );
+    case 'float':
+      return (
+        <InputNumber<string>
+          style={{ width }}
+          placeholder={placeholder}
+          min={param.min === undefined ? undefined : String(param.min)}
+          max={param.max === undefined ? undefined : String(param.max)}
+          stringMode
+        />
+      );
+    case 'bool':
+      return <Switch checkedChildren="开启" unCheckedChildren="关闭" />;
+    case 'enum':
+      return (
+        <Select
+          allowClear
+          placeholder={placeholder ?? '默认'}
+          options={(param.options ?? []).map((option) => ({ value: option, label: option }))}
+        />
+      );
+    case 'str':
+    case 'path':
+    default:
+      return <Input placeholder={placeholder} />;
+  }
+}
+
+/**
+ * 高级参数面板。
+ *
+ * 注意不要直接把 TrainParamsForm 塞进本页的 Form：它内部的 Form.Item 用相对路径
+ * (namePath=[])注册，而 antd 5 的 Form.Item 不会把父级 name 前缀拼进子字段，
+ * 结果参数既不进 store 也不会被校验。这里复用同一个 ParamControl / paramRules，
+ * 但显式给出 [params, key] 的绝对路径。
  */
 function ParamsPanel({
   form,
@@ -303,26 +343,31 @@ function ParamsPanel({
   recipe: Recipe;
   defaults: Record<string, unknown>;
 }) {
-  // 面板默认收起，挂载后把配方默认值写进表单（字段未挂载时 setFieldValue 也会落库，
-  // 等展开后由 Field 读出来）
+  // 面板默认收起：挂载后把配方默认值写进表单，展开时 Field 直接读出
   useEffect(() => {
     form.setFieldValue(PARAMS_FIELD, defaults);
   }, [form, defaults]);
 
+  const params = visibleParams(recipeTemplate(recipe));
   return (
-    <Form.Item noStyle shouldUpdate>
-      {() => (
-        <div data-testid="quickstart-params">
-          <Row gutter={16}>
-            {visibleParams(recipeTemplate(recipe)).map((param) => (
-              <Col xs={24} md={param.type === 'bool' ? 12 : 8} key={param.key}>
-                <ParamField param={param} />
-              </Col>
-            ))}
-          </Row>
-        </div>
-      )}
-    </Form.Item>
+    <div data-testid="quickstart-params">
+      <Row gutter={16}>
+        {params.map((param) => (
+          <Col xs={24} md={param.type === 'bool' ? 12 : 8} key={param.key}>
+            <Form.Item
+              name={[PARAMS_FIELD, param.key]}
+              label={param.label}
+              extra={param.help}
+              rules={paramRules(param)}
+              valuePropName={param.type === 'bool' ? 'checked' : 'value'}
+              data-testid={`param-${param.key}`}
+            >
+              <QuickParamControl param={param} />
+            </Form.Item>
+          </Col>
+        ))}
+      </Row>
+    </div>
   );
 }
 

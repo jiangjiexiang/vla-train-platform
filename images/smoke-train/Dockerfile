@@ -3,11 +3,32 @@ FROM python:3.11-slim
 # 单机 smoke 与多机 smoke 用同一个镜像，保证 NCCL 版本在各节点完全一致
 # （跨节点 NCCL 最常见的问题就是两台机器装了不同的 torch/CUDA 轮子）。
 # libgomp1 是 torch 的 OpenMP 运行时，原镜像已有。
+#
+# 源的选择（实测数据，别改回去）：
+#   官方 download.pytorch.org / download-r2.pytorch.org 在本网络只有 ~35 KB/s，
+#   908 MB 的 torch wheel 要下 7 小时以上，构建等于卡死。
+#   阿里云的 pytorch-wheels 是普通的文件目录（不是 pip index），但实测下载
+#   可达 18 MB/s。因此改为：构建前把 wheel 预下载到构建上下文，Dockerfile 直接
+#   从本地文件安装；其余 Python 包走阿里云 PyPI。
+#
+# 预下载（在仓库根目录执行，约 1 分钟）：
+#   bash images/smoke-train/fetch-wheels.sh
+ARG PYPI_INDEX=https://mirrors.aliyun.com/pypi/simple/
+ENV PIP_DEFAULT_TIMEOUT=120 \
+    PIP_INDEX_URL=${PYPI_INDEX}
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir torch==2.5.1+cu124 \
-        --index-url https://download.pytorch.org/whl/cu124
+    && rm -rf /var/lib/apt/lists/*
+
+# wheel 由 fetch-wheels.sh 预先放到 wheels/ 下；缺失时构建会直接失败并提示，
+# 而不是静默回退到慢速源（那会让构建卡几小时，比失败更糟）。
+COPY wheels/ /tmp/wheels/
+RUN set -eux; \
+    pip install --no-cache-dir /tmp/wheels/torch-2.5.1+cu124-cp311-cp311-linux_x86_64.whl; \
+    rm -rf /tmp/wheels; \
+    python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda); \
+assert torch.version.cuda and torch.version.cuda.startswith('12.4'), 'torch is not a cu124 build'"
 
 WORKDIR /app
 COPY train.py /app/train.py

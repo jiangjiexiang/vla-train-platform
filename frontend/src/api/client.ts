@@ -5,6 +5,7 @@ import type {
   JobEventsResponse,
   JobListResponse,
   JobLogs,
+  JobStatus,
   PlatformConfig,
   QueueListResponse,
   SubmitJobRequest,
@@ -26,6 +27,31 @@ export class ApiError extends Error {
 
 interface RequestOptions extends RequestInit {
   token?: string | null;
+}
+
+// 任务列表的服务端筛选/分页参数；空字符串与 null 视为未传
+export interface JobListParams {
+  limit?: number | null;
+  offset?: number | null;
+  status?: JobStatus | null;
+  q?: string | null;
+}
+
+function buildJobListQuery(params: JobListParams): string {
+  const search = new URLSearchParams();
+  if (params.limit !== undefined && params.limit !== null) {
+    search.set('limit', String(params.limit));
+  }
+  if (params.offset !== undefined && params.offset !== null) {
+    search.set('offset', String(params.offset));
+  }
+  if (params.status !== undefined && params.status !== null) {
+    search.set('status', params.status);
+  }
+  const keyword = params.q?.trim();
+  if (keyword) search.set('q', keyword);
+  const query = search.toString();
+  return query ? `?${query}` : '';
 }
 
 function errorDetail(payload: unknown, fallback: string): string {
@@ -92,7 +118,8 @@ export const api = {
     request<PlatformConfig>('/config', { signal, token }),
   getClusterSummary: (signal?: AbortSignal) =>
     request<ClusterSummary>('/cluster/summary', { signal }),
-  getJobs: (signal?: AbortSignal) => request<JobListResponse>('/jobs', { signal }),
+  getJobs: (params: JobListParams = {}, signal?: AbortSignal) =>
+    request<JobListResponse>(`/jobs${buildJobListQuery(params)}`, { signal }),
   getJob: (name: string, signal?: AbortSignal) =>
     request<Job>(`/jobs/${encodeURIComponent(name)}`, { signal }),
   getJobEvents: (name: string, signal?: AbortSignal) =>

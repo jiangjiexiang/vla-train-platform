@@ -49,15 +49,39 @@ class PlatformService:
         self.history.record_submission(spec, submitted_at)
         return self._job_response(job, None, [])
 
-    def list_jobs(self) -> dict[str, Any]:
-        return self._list_jobs(self.kubernetes.list_namespace_pods())
+    def list_jobs(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        status: str | None = None,
+        q: str | None = None,
+    ) -> dict[str, Any]:
+        return self._list_jobs(
+            self.kubernetes.list_namespace_pods(),
+            limit=limit,
+            offset=offset,
+            status=status,
+            q=q,
+        )
 
-    def _list_jobs(self, pods: list[dict[str, Any]]) -> dict[str, Any]:
+    def _list_jobs(
+        self,
+        pods: list[dict[str, Any]],
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        status: str | None = None,
+        q: str | None = None,
+    ) -> dict[str, Any]:
         """Build every job response from one namespace-wide pod snapshot.
 
         ``pods`` is listed once and bucketed by the ``vla-platform/job-name``
         label, so the response for a job sees exactly the pods the per-job
         label selector would have returned.
+
+        Filtering runs on the merged live + cancelled list, then pagination
+        slices the sorted result. ``total`` is counted before that slice.
         """
         pods_by_job = _group_pods_by_job(pods)
         jobs = self.kubernetes.list_jobs()
@@ -80,7 +104,16 @@ class PlatformService:
             key=lambda item: item.get("created_at") or "",
             reverse=True,
         )
-        return {"items": items, "total": len(items)}
+        if status is not None:
+            items = [item for item in items if item.get("status") == status]
+        if q:
+            needle = q.casefold()
+            items = [item for item in items if needle in str(item.get("name", "")).casefold()]
+        total = len(items)
+        effective_offset = offset if limit is not None else 0
+        if limit is not None:
+            items = items[effective_offset : effective_offset + limit]
+        return {"items": items, "total": total, "limit": limit, "offset": effective_offset}
 
     def get_job(self, name: str) -> dict[str, Any]:
         job = self.kubernetes.get_job(name)

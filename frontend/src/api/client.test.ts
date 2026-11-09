@@ -184,6 +184,42 @@ describe('api request handling', () => {
   });
 });
 
+describe('getJobs query parameters', () => {
+  beforeEach(() => {
+    fetchMock.mockResolvedValue(mockResponse(200, { items: [], total: 0 }));
+  });
+
+  it('builds limit/offset/status/q into the query string', async () => {
+    await api.getJobs({ limit: 20, offset: 40, status: 'RUNNING', q: 'llama 3' });
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe(`${API_BASE}/jobs?limit=20&offset=40&status=RUNNING&q=llama+3`);
+  });
+
+  it('omits null, undefined and blank parameters', async () => {
+    await api.getJobs({ limit: null, offset: undefined, status: null, q: '   ' });
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe(`${API_BASE}/jobs`);
+  });
+
+  it('keeps offset=0 and trims the search keyword', async () => {
+    await api.getJobs({ limit: 20, offset: 0, q: '  job-1  ' });
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe(`${API_BASE}/jobs?limit=20&offset=0&q=job-1`);
+  });
+
+  it('passes the abort signal through the request options', async () => {
+    const controller = new AbortController();
+
+    await api.getJobs({ limit: 20 }, controller.signal);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBe(controller.signal);
+  });
+});
+
 describe('getErrorMessage', () => {
   it('prefers ApiError and Error messages', () => {
     expect(getErrorMessage(new ApiError('接口错误', 500))).toBe('接口错误');

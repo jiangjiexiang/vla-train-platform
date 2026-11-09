@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 import pytest
+from fastapi import FastAPI
 
+from app.api.routes import get_service, router as api_router
 from app.config import Settings
 from app.history import HistoryStore
 from app.models import SubmitSpec
@@ -445,3 +449,193 @@ def test_gpu_metrics_degrades_on_error(tmp_path, kube):
     service = PlatformService(settings, HistoryStore(settings.db_path), kube)
     with patch("app.services.platform.urllib.request.urlopen", side_effect=OSError("down")):
         assert service.gpu_metrics() == {"available": False, "items": []}
+
+
+# --- list jobs (filtering / pagination) -----------------------------------
+
+def set_created_at(kube, name, timestamp):
+    kube.jobs[name]["metadata"]["annotations"]["vla-platform/submitted-at"] = timestamp
+
+
+def submit_with_created_at(service, kube, name, timestamp):
+    service.submit(make_spec(name))
+    set_created_at(kube, name, timestamp)
+
+
+def job_names(result):
+    return [item["name"] for item in result["items"]]
+
+
+def test_list_jobs_without_filters_keeps_legacy_response_shape(service, kube):
+    for index, name in enumerate(("exp001", "exp002", "exp003")):
+        submit_with_created_at(service, kube, name, f"2026-01-01T00:00:0{index + 1}Z")
+
+    result = service.list_jobs()
+
+    assert set(result) == {"items", "total", "limit", "offset"}
+    assert job_names(result) == ["exp003", "exp002", "exp001"]
+    assert result["total"] == len(result["items"]) == 3
+    assert result["limit"] is None
+    assert result["offset"] == 0
+
+
+def test_list_jobs_limit_offset_slice_after_created_at_sort(service, kube):
+    for index, name in enumerate((f"exp{item:03d}" for item in range(5))):
+        submit_with_created_at(service, kube, name, f"2026-01-01T00:0{index}:00Z")
+
+    result = service.list_jobs(limit=2, offset=1)
+
+    assert job_names(result) == ["exp003", "exp002"]
+    assert result["total"] == 5
+    assert result["limit"] == 2
+    assert result["offset"] == 1
+
+
+def test_list_jobs_offset_without_limit_returns_everything(service, kube):
+    for index, name in enumerate((f"exp{item:03d}" for item in range(4))):
+        submit_with_created_at(service, kube, name, f"2026-01-01T00:0{index}:00Z")
+
+    result = service.list_jobs(offset=2)
+
+    assert job_names(result) == ["exp003", "exp002", "exp001", "exp000"]
+    assert result["total"] == 4
+    assert result["limit"] is None
+    assert result["offset"] == 0, "未传 limit 时 offset 不生效"
+
+
+def test_list_jobs_total_counts_filtered_items_before_pagination(service, kube):
+    for index, name in enumerate(("exp-alpha", "exp-alpine", "exp-beta", "other")):
+        submit_with_created_at(service, kube, name, f"2026-01-01T00:0{index}:00Z")
+
+    result = service.list_jobs(q="AL", limit=1)
+
+    assert result["total"] == 2, "total 必须是过滤后、分页前的总数"
+    assert len(result["items"]) == 1
+    assert result["items"][0]["name"] == "exp-alpine"
+
+
+def test_list_jobs_status_filter_applies_to_cancelled_history(service, kube):
+    service.submit(make_spec("exp-live"))
+    add_pod(kube, "exp-live", phase="Running")
+    service.submit(make_spec("exp-gone"))
+    add_pod(kube, "exp-gone", phase="Running")
+    service.cancel("exp-gone")
+    service.submit(make_spec("exp-waiting"))
+
+    assert job_names(service.list_jobs(status="RUNNING")) == ["exp-live"]
+    assert job_names(service.list_jobs(status="CANCELLED")) == ["exp-gone"]
+    assert job_names(service.list_jobs(status="QUEUED")) == ["exp-waiting"]
+
+    cancelled = service.list_jobs(status="CANCELLED")
+    assert cancelled["total"] == 1
+    assert cancelled["items"][0]["status"] == "CANCELLED"
+
+
+def test_list_jobs_status_filter_supports_succeeded_and_failed(service, kube):
+    service.submit(make_spec("exp-ok"))
+    set_job_condition(kube, "exp-ok", "Succeeded")
+    service.submit(make_spec("exp-bad"))
+    set_job_condition(kube, "exp-bad", "Failed")
+
+    assert job_names(service.list_jobs(status="SUCCEEDED")) == ["exp-ok"]
+    assert job_names(service.list_jobs(status="FAILED")) == ["exp-bad"]
+
+
+def test_list_jobs_q_is_case_insensitive_and_matches_cancelled_history(service, kube):
+    service.submit(make_spec("exp-cancelled-run"))
+    add_pod(kube, "exp-cancelled-run", phase="Running")
+    service.cancel("exp-cancelled-run")
+    service.submit(make_spec("exp-live-run"))
+    add_pod(kube, "exp-live-run", phase="Running")
+
+    assert job_names(service.list_jobs(q="CANCELLED")) == ["exp-cancelled-run"]
+    assert job_names(service.list_jobs(q="LIVE")) == ["exp-live-run"]
+    assert set(job_names(service.list_jobs(q="EXP-"))) == {"exp-cancelled-run", "exp-live-run"}
+
+
+# --- GET /jobs API contract (ASGI without httpx) --------------------------
+
+def api_get(service, target):
+    """Drive the ASGI app directly: FastAPI's TestClient needs httpx, which is not installed."""
+    app = FastAPI()
+    app.state.settings = service.settings
+    app.include_router(api_router)
+    app.dependency_overrides[get_service] = lambda: service
+    parsed = urlsplit(target)
+    messages = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": parsed.path,
+        "raw_path": parsed.path.encode(),
+        "query_string": parsed.query.encode(),
+        "root_path": "",
+        "headers": [(b"host", b"testserver")],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+    }
+    asyncio.run(app(scope, receive, send))
+    start = next(item for item in messages if item["type"] == "http.response.start")
+    body = b"".join(
+        item.get("body", b"") for item in messages if item["type"] == "http.response.body"
+    )
+    return start["status"], json.loads(body) if body else None
+
+
+def test_jobs_api_returns_pagination_envelope(service, kube):
+    for index, name in enumerate(("exp000", "exp001", "exp002")):
+        submit_with_created_at(service, kube, name, f"2026-01-01T00:0{index}:00Z")
+
+    status, payload = api_get(service, "/api/v1/jobs")
+    assert status == 200
+    assert payload["total"] == 3
+    assert payload["limit"] is None
+    assert payload["offset"] == 0
+    assert [item["name"] for item in payload["items"]] == ["exp002", "exp001", "exp000"]
+
+    status, payload = api_get(service, "/api/v1/jobs?limit=2&offset=1")
+    assert status == 200
+    assert payload["total"] == 3
+    assert payload["limit"] == 2
+    assert payload["offset"] == 1
+    assert [item["name"] for item in payload["items"]] == ["exp001", "exp000"]
+
+
+def test_jobs_api_accepts_boundary_values(service):
+    status, payload = api_get(
+        service,
+        "/api/v1/jobs?limit=200&offset=0&status=RUNNING&q=" + "x" * 100,
+    )
+    assert status == 200
+    assert payload["limit"] == 200
+    assert payload["total"] == 0
+    assert payload["items"] == []
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/api/v1/jobs?limit=0",
+        "/api/v1/jobs?limit=201",
+        "/api/v1/jobs?limit=abc",
+        "/api/v1/jobs?offset=-1",
+        "/api/v1/jobs?offset=abc",
+        "/api/v1/jobs?status=UNKNOWN",
+        "/api/v1/jobs?status=running",
+        "/api/v1/jobs?q=" + "x" * 101,
+    ],
+)
+def test_jobs_api_rejects_invalid_query_parameters(service, target):
+    status, payload = api_get(service, target)
+    assert status == 422
+    assert "detail" in payload

@@ -5,8 +5,9 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
 PROFILE="${PROFILE:-4090}"
 KUEUE_VERSION="${KUEUE_VERSION:-v0.20.5}"
-TRAINING_OPERATOR_VERSION="${TRAINING_OPERATOR_VERSION:-v1.9.0}"
-NVIDIA_DEVICE_PLUGIN_VERSION="${NVIDIA_DEVICE_PLUGIN_VERSION:-v0.17.1}"
+# 这两个版本要与本仓库实际验证过的版本一致，避免重装时降级。
+TRAINING_OPERATOR_VERSION="${TRAINING_OPERATOR_VERSION:-v1.9.4}"
+NVIDIA_DEVICE_PLUGIN_VERSION="${NVIDIA_DEVICE_PLUGIN_VERSION:-v0.20.1}"
 KUEUE_MANIFEST="${KUEUE_MANIFEST:-https://github.com/kubernetes-sigs/kueue/releases/download/$KUEUE_VERSION/manifests.yaml}"
 TRAINING_OPERATOR_MANIFEST="${TRAINING_OPERATOR_MANIFEST:-https://github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=$TRAINING_OPERATOR_VERSION}"
 NVIDIA_DEVICE_PLUGIN_MANIFEST="${NVIDIA_DEVICE_PLUGIN_MANIFEST:-https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/$NVIDIA_DEVICE_PLUGIN_VERSION/deployments/static/nvidia-device-plugin.yml}"

@@ -41,6 +41,9 @@ export interface Job extends SubmitJobRequest {
 export interface JobListResponse {
   items: Job[];
   total: number;
+  // 本次请求实际使用的分页参数；不传分页参数时后端可能返回全部任务，故 limit 可为空
+  limit?: number | null;
+  offset?: number;
 }
 
 export interface PlatformConfig {

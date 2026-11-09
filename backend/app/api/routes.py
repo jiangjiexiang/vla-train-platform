@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path, Query, Request
@@ -8,6 +9,14 @@ from ..auth import get_settings, require_token
 from ..config import Settings
 from ..models import CloneRequest, SubmitRequest
 from ..services.platform import PlatformService
+
+
+class JobStatus(str, Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 JOB_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
@@ -49,8 +58,19 @@ def submit_job(
 
 
 @router.get("/jobs", dependencies=[Depends(require_token)])
-def list_jobs(service: PlatformService = Depends(get_service)) -> dict[str, Any]:
-    return service.list_jobs()
+def list_jobs(
+    limit: Annotated[int | None, Query(ge=1, le=200)] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    status: Annotated[JobStatus | None, Query()] = None,
+    q: Annotated[str | None, Query(max_length=100)] = None,
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    return service.list_jobs(
+        limit=limit,
+        offset=offset,
+        status=status.value if status is not None else None,
+        q=q,
+    )
 
 
 @router.get("/jobs/{name}", dependencies=[Depends(require_token)])

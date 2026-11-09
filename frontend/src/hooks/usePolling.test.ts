@@ -62,6 +62,31 @@ describe('usePolling', () => {
     expect(callback).toHaveBeenCalledTimes(2);
   });
 
+  it('restarts immediately with the latest callback when resetKey changes', async () => {
+    const signals: AbortSignal[] = [];
+    const callback = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+    });
+
+    const { rerender } = renderHook(
+      ({ resetKey }: { resetKey: string }) => usePolling(callback, 1000, true, resetKey),
+      { initialProps: { resetKey: 'page-1' } },
+    );
+    expect(callback).toHaveBeenCalledTimes(1);
+
+    rerender({ resetKey: 'page-2' });
+    expect(callback).toHaveBeenCalledTimes(2);
+    await flushMicrotasks();
+
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(callback).toHaveBeenCalledTimes(3);
+  });
+
   it('does nothing while disabled and starts when enabled becomes true', async () => {
     const callback = vi.fn();
 

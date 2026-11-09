@@ -1,9 +1,10 @@
 import { Button, Card, Empty, Input, Select, Space, Table, Typography } from 'antd';
 import { PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
 import { api, getErrorMessage, isAbortError } from '../api/client';
+import type { JobListParams } from '../api/client';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { JobActions } from '../components/JobActions';
 import { PriorityTag, StatusTag } from '../components/StatusTag';
@@ -11,6 +12,9 @@ import { usePolling } from '../hooks/usePolling';
 import type { Job, JobStatus } from '../types/api';
 import { formatDateTime, formatDuration } from '../utils/format';
 
+const DEFAULT_PAGE_SIZE = 20;
+
+// 后端仅支持这几种状态过滤；"全部" 表示不传 status
 const statusOptions: Array<{ value: JobStatus | 'ALL'; label: string }> = [
   { value: 'ALL', label: '全部状态' },
   { value: 'QUEUED', label: '排队中' },
@@ -18,35 +22,53 @@ const statusOptions: Array<{ value: JobStatus | 'ALL'; label: string }> = [
   { value: 'SUCCEEDED', label: '已成功' },
   { value: 'FAILED', label: '已失败' },
   { value: 'CANCELLED', label: '已取消' },
-  { value: 'UNKNOWN', label: '状态未知' },
 ];
 
 export function JobListPage() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<JobStatus | 'ALL'>('ALL');
   const [keyword, setKeyword] = useState('');
+  // 防抖后的实际搜索词，避免每次按键都请求后端
+  const [searchTerm, setSearchTerm] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+
+  // 输入停止 400ms 后才应用搜索词，同时回到第一页
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearchTerm(keyword.trim());
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [keyword]);
+
+  const params = useMemo<JobListParams>(() => {
+    const next: JobListParams = {
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+    };
+    if (status !== 'ALL') next.status = status;
+    if (searchTerm) next.q = searchTerm;
+    return next;
+  }, [page, pageSize, status, searchTerm]);
 
   const refresh = usePolling(async (signal) => {
     try {
-      const data = await api.getJobs(signal);
+      const data = await api.getJobs(params, signal);
+      if (signal.aborted) return;
       setJobs(data.items);
+      setTotal(data.total ?? data.items.length);
       setError(null);
     } catch (reason) {
       if (!isAbortError(reason)) setError(getErrorMessage(reason));
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  });
-
-  const filteredJobs = useMemo(() => jobs.filter((job) => {
-    const matchesStatus = status === 'ALL' || job.status === status;
-    const query = keyword.trim().toLowerCase();
-    const matchesKeyword = !query || job.name.toLowerCase().includes(query) || job.image.toLowerCase().includes(query);
-    return matchesStatus && matchesKeyword;
-  }), [jobs, status, keyword]);
+  }, 4000, true, JSON.stringify(params));
 
   const columns: ColumnsType<Job> = [
     {
@@ -73,6 +95,9 @@ export function JobListPage() {
     },
   ];
 
+  const hasFilters = status !== 'ALL' || searchTerm !== '';
+  const emptyDescription = hasFilters ? '没有匹配的任务，请调整筛选条件' : '没有任务，点击“提交任务”开始';
+
   return (
     <div>
       <div className="page-heading">
@@ -88,24 +113,46 @@ export function JobListPage() {
       <ErrorAlert error={error} onRetry={refresh} title="任务列表加载失败" />
       <Card>
         <Space className="table-filters" wrap>
+          <Select
+            value={status}
+            options={statusOptions}
+            onChange={(value: JobStatus | 'ALL') => {
+              setStatus(value);
+              setPage(1);
+            }}
+            className="status-filter"
+          />
           <Input
             allowClear
             prefix={<SearchOutlined />}
-            placeholder="搜索任务名或镜像"
+            placeholder="搜索任务名"
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
             className="job-search"
           />
-          <Select value={status} options={statusOptions} onChange={setStatus} className="status-filter" />
         </Space>
         <Table<Job>
           rowKey="name"
           columns={columns}
-          dataSource={filteredJobs}
+          dataSource={jobs}
           loading={loading && jobs.length === 0}
           scroll={{ x: 1320 }}
-          locale={{ emptyText: <Empty description={jobs.length ? '没有符合筛选条件的任务' : '暂无训练任务，点击“提交任务”开始'} /> }}
-          pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 个任务` }}
+          locale={{ emptyText: <Empty description={emptyDescription} /> }}
+          pagination={{
+            current: page,
+            pageSize,
+            total,
+            showSizeChanger: true,
+            showTotal: (count) => `共 ${count} 个任务`,
+            onChange: (nextPage, nextPageSize) => {
+              if (nextPageSize !== pageSize) {
+                setPageSize(nextPageSize);
+                setPage(1);
+              } else {
+                setPage(nextPage);
+              }
+            },
+          }}
         />
       </Card>
     </div>

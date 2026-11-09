@@ -269,3 +269,52 @@ def test_actor_falls_back_to_client_host():
 
     assert _actor_label(FakeRequest(), anonymous) == "anonymous@172.16.1.5"
 
+def test_run_create_records_actor(client, tmp_path):
+    """一键训练（POST /runs）是主路径，审计必须记录操作者。
+
+    曾经漏掉这里：jobs 三个路由改成了 set_actor，但 routes_runs 的 create_run
+    还是 require_user，导致走「选数据集→点开始」这个主流程时审计仍是 anonymous。
+    """
+    dataset_dir = tmp_path / "datasets" / "ds1"
+    (dataset_dir / "meta").mkdir(parents=True)
+    import json
+
+    (dataset_dir / "meta" / "info.json").write_text(
+        json.dumps(
+            {
+                "codebase_version": "v3.0",
+                "robot_type": "test",
+                "total_episodes": 20,
+                "total_frames": 2000,
+                "total_tasks": 1,
+                "fps": 30,
+                "features": {
+                    "observation.images.cam": {"dtype": "video", "shape": [480, 640, 3]},
+                    "observation.state": {"dtype": "float32", "shape": [7]},
+                    "action": {"dtype": "float32", "shape": [7]},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (dataset_dir / "data" / "chunk-000").mkdir(parents=True)
+    (dataset_dir / "data" / "chunk-000" / "file-000.parquet").write_bytes(b"PAR1")
+    client.get("/api/v1/datasets?refresh=true")
+
+    # 用仓库里真实存在的配方（配方目录随代码发布，测试环境也有）
+    recipes = client.get("/api/v1/recipes").json()["items"]
+    assert recipes, "仓库里应当有内置配方"
+
+    response = client.post(
+        "/api/v1/runs",
+        json={"recipe_id": recipes[0]["id"], "dataset_id": "ds1"},
+        headers={"X-Forwarded-For": "10.5.5.5"},
+    )
+    assert response.status_code == 201, response.text
+
+    target = response.json()["name"]
+    item = next(i for i in client.get("/api/v1/audit").json()["items"] if i["target"] == target)
+
+    assert item["actor"].startswith("anonymous@"), item["actor"]
+    assert "anonymous@" in item["actor"]
+

@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 
-from ..auth import AuthContext, require_user
+from ..auth import AuthContext, require_user, set_actor
 from ..models import RunSubmitRequest
 from ..services.platform import PlatformService
 from ..services.runs import RunRequest
@@ -69,7 +69,7 @@ def preflight_run(
 @router.post("/runs", status_code=201)
 def create_run(
     payload: RunSubmitRequest,
-    user: AuthContext = Depends(require_user),
+    user: AuthContext = Depends(set_actor),
     service: PlatformService = Depends(get_service),
 ) -> dict[str, Any]:
     """一键开始训练：选数据集 + 选配方即可，其余由平台填充。"""

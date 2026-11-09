@@ -57,6 +57,7 @@ Common annotations:
 ```text
 vla-platform/submitted-at=<RFC3339 UTC>
 vla-platform/spec=<compact JSON of original submit spec>
+vla-platform/user-label-<key>=<value>      # v0.9, free-form labels, max 256 bytes total
 ```
 
 GPU requests and limits must both be set to the same integer `nvidia.com/gpu` value so Kueue accounting works.
@@ -81,13 +82,30 @@ PLATFORM_LOG_TAIL_DEFAULT           default 500
 PLATFORM_GPU_METRICS_URL            default http://vla-gpu-metrics.vla-platform.svc:8080/; empty disables metrics
 ```
 
+Added in v0.9.0 (see `CONTRACTS.md` section 1):
+
+```text
+PLATFORM_AUTH_MODE                  off | token | ldap; default token (v0.8 behaviour)
+PLATFORM_SESSION_TTL_HOURS          default 12; LDAP session token lifetime
+PLATFORM_LDAP_URL                   comma-separated LDAP/AD URLs; ldap mode
+PLATFORM_LDAP_BASE_DN               LDAP search base DN; ldap mode
+PLATFORM_LDAP_USER_TEMPLATE         user DN template, e.g. uid={username},ou=people,dc=corp,dc=com
+PLATFORM_LDAP_GROUP_DN_ADMIN        group DN whose members get role admin
+PLATFORM_DEFAULT_MAX_GPUS           default empty = unlimited; per-user default GPU quota
+PLATFORM_DEFAULT_MAX_ACTIVE_JOBS    default empty = unlimited; per-user default active job quota
+PLATFORM_MAX_NODES                  default 1; >1 enables multi-node submissions
+```
+
+`PLATFORM_AUTH_REQUIRED=false` stays equivalent to `PLATFORM_AUTH_MODE=off`, and `off` wins when both
+are set. `ldap` mode does not require `PLATFORM_API_TOKEN`.
+
 Frontend build/runtime:
 
 ```text
 VITE_API_BASE                       build-time optional; default /api/v1
 ```
 
-When authentication is enabled, the browser uses `Authorization: Bearer <token>` and all endpoints except health require the token. When `PLATFORM_AUTH_REQUIRED=false`, the UI skips login and API requests do not need a token. The health response includes the boolean `auth_required` so the UI can discover the mode.
+When authentication is enabled, the browser uses `Authorization: Bearer <token>` and all endpoints except health and `POST /api/v1/auth/login` require the token. The 401 body shape stays `{"detail": "Bearer token required"}` / `{"detail": "Invalid bearer token"}` with `WWW-Authenticate: Bearer`. When `PLATFORM_AUTH_REQUIRED=false`, the UI skips login and API requests do not need a token. The health response includes the boolean `auth_required` so the UI can discover the mode.
 
 ## Submit model
 

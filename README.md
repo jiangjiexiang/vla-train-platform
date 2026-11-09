@@ -42,7 +42,9 @@ NVIDIA Device Plugin → 单机 1×4090 或 8×A100
 | 单任务 checkpoint | 容器 `/checkpoints/<job-name>` |
 | Web 历史库 | 容器内 `/data/history/platform.db`，由数据卷持久化 |
 
-任务名只能包含小写字母、数字和连字符，最长 50 字符，且不能以连字符开头或结尾。首版不开放任意宿主机路径、特权容器、宿主机 Docker Socket、Notebook、Web SSH、多机训练或按用户配额。
+任务名只能包含小写字母、数字和连字符，最长 50 字符，且不能以连字符开头或结尾。首版不开放任意宿主机路径、特权容器、宿主机 Docker Socket、Notebook、Web SSH。
+
+v0.9.0 起支持三种鉴权模式（`off` / `token` / `ldap`，默认 `token`）、按用户 GPU/任务数配额，以及多机训练的接口预留（`nodes` / `gpus_per_node`，默认关闭）。见第 3.4、3.5、3.6 节。
 
 ## 2. 前置条件
 
@@ -147,7 +149,7 @@ PROFILE=a100 bash scripts/deploy-web.sh
 
 ### 3.3 配置鉴权并启动 Web
 
-当前 4090 overlay 设置 `PLATFORM_AUTH_REQUIRED=false`，网页和 API 暂时免登录，仅限可信内网使用；A100 overlay 默认仍要求令牌。部署脚本首次运行仍会创建 `vla-web-auth` Secret，便于以后恢复鉴权。生成高随机性的静态令牌并通过环境变量交给部署脚本，不要把真实令牌写入仓库、镜像或脚本：
+当前 4090 overlay 设置 `PLATFORM_AUTH_REQUIRED=false`，等价于 `off` 模式：网页和 API 暂时免登录，仅限可信内网使用；A100 overlay 默认仍要求令牌（`token` 模式）。v0.9 的三种模式和 LDAP 配置见 3.4。部署脚本首次运行仍会创建 `vla-web-auth` Secret，便于以后恢复鉴权。生成高随机性的静态令牌并通过环境变量交给部署脚本，不要把真实令牌写入仓库、镜像或脚本：
 
 ```bash
 export PLATFORM_API_TOKEN="$(openssl rand -hex 32)"
@@ -158,7 +160,7 @@ A100 使用 `PROFILE=a100`。也可用权限受控的单行令牌文件并设置
 
 要在 4090 上恢复登录，将 `deploy/web/overlays/4090/deployment.yaml` 中 `PLATFORM_AUTH_REQUIRED` 的值改为 `"true"`，保留有效的 `vla-web-auth` Secret，再执行 `PROFILE=4090 bash scripts/deploy-web.sh`。
 
-Web 后端还支持契约中定义的 `PLATFORM_NAMESPACE`、`PLATFORM_QUEUE`、`PLATFORM_DATASET_HOST_PATH`、`PLATFORM_CHECKPOINT_HOST_PATH`、`PLATFORM_DB_PATH` 等配置；首版通常保留默认值。开启鉴权时，所有 API（健康检查除外）都要求静态令牌，请只通过受控方式分发。
+Web 后端还支持契约中定义的 `PLATFORM_NAMESPACE`、`PLATFORM_QUEUE`、`PLATFORM_DATASET_HOST_PATH`、`PLATFORM_CHECKPOINT_HOST_PATH`、`PLATFORM_DB_PATH`，以及 v0.9 的 `PLATFORM_AUTH_MODE`、`PLATFORM_SESSION_TTL_HOURS`、`PLATFORM_LDAP_*`、`PLATFORM_DEFAULT_MAX_GPUS`、`PLATFORM_DEFAULT_MAX_ACTIVE_JOBS`、`PLATFORM_MAX_NODES` 等配置；首版通常保留默认值。`token` 模式下所有 API（健康检查与登录接口除外）都要求静态令牌，请只通过受控方式分发。
 
 检查服务：
 
@@ -167,7 +169,7 @@ kubectl -n vla-platform get deployment,pod,service
 curl -fsS http://127.0.0.1:30080/api/v1/health
 ```
 
-免登录时预期健康响应为 `{"status":"ok","auth_required":false}`，开启鉴权时 `auth_required` 为 `true`。
+`off` 模式预期健康响应为 `{"status":"ok","auth_required":false}`；`token` / `ldap` 模式为 `true`。
 
 主要 HTTP 接口（前缀 `/api/v1`；开启鉴权时除 `/health` 外都要带 `Authorization: Bearer <token>`）：
 
@@ -177,9 +179,113 @@ curl -fsS http://127.0.0.1:30080/api/v1/health
 - `GET /jobs/{name}/logs?tail_lines=500`
 - `GET /jobs/{name}/events`：返回该任务的 PyTorchJob 与训练 Pod 事件，按 `last_seen` 倒序；任务不存在返回 404，已取消且对象已删除时返回空 `items`。镜像拉取失败、Pod 调度失败等问题先用它定位。
 - `GET /queues`、`GET /cluster/summary`
+- `POST /auth/login`、`POST /auth/logout`、`GET /auth/me`（v0.9 新增）
+- `GET /users`、`PUT /users/{name}/quota`（v0.9 新增，仅 admin）
 
-完整字段与语义见 `CONTRACTS.md`。
+完整字段与语义见 `docs/api.md`（HTTP 细节）与 `CONTRACTS.md`（跨模块契约）。
 
+### 3.4 鉴权与用户
+
+v0.9.0 起，登录方式由 `PLATFORM_AUTH_MODE` 决定，默认 `token`（与 v0.8 完全一致）：
+
+| 模式 | 怎么设置 | 登录方式 | 当前用户 |
+|---|---|---|---|
+| `off` | `PLATFORM_AUTH_MODE=off`，或沿用 `PLATFORM_AUTH_REQUIRED=false` | 不需要，网页直接进平台 | `anonymous`（admin） |
+| `token` | 默认 | 网页 `/login` 填「访问令牌」= `PLATFORM_API_TOKEN` | `token`（admin） |
+| `ldap` | `PLATFORM_AUTH_MODE=ldap` | 网页填公司 LDAP/AD 用户名和密码 | LDAP `uid`，按组映射角色 |
+
+**`token` 与 `off` 的区别**（快速开始最容易踩的两个点）：
+
+- `token`：除 `/health`、`/auth/login` 外的接口都要带 `Authorization: Bearer <token>`，
+  令牌就是 `PLATFORM_API_TOKEN`；浏览器登录页输入它，CLI 用 `--token` 传入。没有令牌，
+  网页拿不到数据，CLI 报 401。
+- `off`：所有接口都不校验令牌，请求带了也不会报错；网页跳过登录页，所有人都是
+  `anonymous` 且是 admin，平台不区分提交者、没有审计。**只用于可信内网和短期验收。**
+
+切换模式后 `GET /api/v1/health` 的 `auth_required` 会同步变化（`off` → `false`，
+`token`/`ldap` → `true`），网页靠它决定是否显示登录页。
+
+**LDAP 模式最小配置**（完整示例、OpenLDAP/AD 差异见 `docs/auth.md`）：
+
+```yaml
+env:
+  - name: PLATFORM_AUTH_MODE
+    value: ldap
+  - name: PLATFORM_LDAP_URL
+    value: "ldap://ldap.corp.example.com:389"
+  - name: PLATFORM_LDAP_BASE_DN
+    value: dc=corp,dc=example,dc=com
+  - name: PLATFORM_LDAP_USER_TEMPLATE
+    value: uid={username},ou=people,dc=corp,dc=example,dc=com
+  - name: PLATFORM_LDAP_GROUP_DN_ADMIN
+    value: cn=vla-admin,ou=groups,dc=corp,dc=example,dc=com
+  - name: PLATFORM_SESSION_TTL_HOURS
+    value: "12"
+```
+
+登录成功后平台签发会话令牌（有效期 `PLATFORM_SESSION_TTL_HOURS`，默认 12 小时），服务端只
+保存其 SHA-256 哈希，**不下发也不保存 LDAP 密码**，Web 重启后会话仍然有效。
+
+**按用户配额**：用 `PLATFORM_DEFAULT_MAX_GPUS` / `PLATFORM_DEFAULT_MAX_ACTIVE_JOBS` 设置全局
+默认（留空 = 不限），再用 `/users` 页面或 `PUT /users/{username}/quota` 给单个用户覆盖。
+超限的提交返回 422，例如 `GPU quota exceeded: 4 used of 4 allowed`。admin 同样受配额约束。
+
+```bash
+export TOKEN=<admin 令牌或会话令牌>
+curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:30080/api/v1/auth/me
+curl -fsS -X PUT http://127.0.0.1:30080/api/v1/users/alice/quota \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"max_gpus": 4, "max_active_jobs": 2}'
+```
+
+排障记住一条：**登录 401 是凭据不对，503 是平台连不上 LDAP**，后者不要反复重试密码。
+详见 `docs/auth.md`。
+
+### 3.5 多机训练
+
+多机训练在 v0.9.0 只有接口与校验，**默认关闭**：`PLATFORM_MAX_NODES` 默认 `1`，此时提交
+`nodes > 1` 会返回 422 `multi-node training is not enabled`。这不是客户端开关，需要先改服务端
+配置并应用多机 Kueue profile（`deploy/kueue/multi-node/`），前置条件清单见
+`docs/multi-node.md`。
+
+打开后提交方式：
+
+```bash
+export BASE=http://127.0.0.1:30080/api/v1
+curl -fsS -X POST "$BASE/jobs" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{
+    "name": "mn-smoke-1",
+    "nodes": 2,
+    "gpus_per_node": 1,
+    "command": "torchrun --nnodes=2 --nproc_per_node=1 --node_rank=$RANK /app/train.py --distributed --steps 20"
+  }'
+```
+
+- `nodes > 1` 时 `gpus` 可省略，服务端按 `nodes × gpus_per_node` 计算；显式传入必须一致。
+- `gpus_per_node` 必须属于 `PLATFORM_ALLOWED_GPUS`；2×1 卡占用 2 卡配额。
+- 训练脚本从 `MASTER_ADDR` / `MASTER_PORT` / `RANK` / `WORLD_SIZE` 读 rendezvous，走 `env://`；
+  smoke 的 `--distributed` 会打印每个 rank 的 `HOSTNAME`、GPU 和 NCCL 初始化结果。
+- Kueue 侧用 topology + nodeLabels 表达「每节点 1 卡、一个任务跨 N 节点」，避免把大任务放行到
+  装不下的单节点。
+
+回滚到单机：删掉 Web Deployment 的 `PLATFORM_MAX_NODES` 并 `rollout restart`，再 apply 回
+`deploy/kueue/4090/` 或 `deploy/kueue/a100/`。NCCL 排查与性能预期见 `docs/multi-node.md`。
+
+### 3.6 高可用
+
+Web 是**单副本 + `Recreate`**，原因是历史库是本地 SQLite 文件：同一时刻只允许一个写入者。
+因此：
+
+- 训练不受影响：Web 挂掉或升级期间，已在跑的 PyTorchJob 继续运行，恢复后状态、日志、事件照常可查。
+- 升级有明确停服窗口：`Recreate` 先删旧 Pod 再建新 Pod，期间网页和 API 不可用（通常几十秒），
+  **这是用可用性换数据安全，不要改成 `RollingUpdate`**。
+- 不能简单扩副本：PV 是 `hostPath` + `ReadWriteOnce`，两个 Pod 同时写一个 SQLite 文件会损坏；
+  多副本的前提是把历史写入迁到共享存储上的外部数据库，契约尚未覆盖。
+- 恢复靠备份：历史库按 `docs/operations.md` 2.2 在线备份，恢复时先停 Web、删 `-wal`/`-shm`/
+  `-journal`、`integrity_check` 通过后再启动。
+
+单机部署下可承诺的是「分钟级恢复 + 最近一次备份前的历史」，不是「永不断线」。升级、回滚步骤
+和 RTO/RPO 口径见 `docs/high-availability.md`。
 ## 4. 网页使用
 
 在内网浏览器打开：
@@ -188,13 +294,14 @@ curl -fsS http://127.0.0.1:30080/api/v1/health
 http://<目标机器IP>:30080
 ```
 
-如当前机器防火墙或云安全组限制端口，只向内网可信来源开放 TCP `30080`。当前 4090 配置会直接进入平台；开启鉴权后需在 `/login` 输入访问令牌。主要页面：
+如当前机器防火墙或云安全组限制端口，只向内网可信来源开放 TCP `30080`。当前 4090 配置会直接进入平台；`token` 模式需在 `/login` 输入访问令牌，`ldap` 模式输入公司账号和密码（见 3.4）。主要页面：
 
 - `/dashboard`：GPU 总量、已分配量、空闲量、节点和任务统计，以及每张卡的核心利用率、显存占用和温度。
 - `/submit`：填写任务名、镜像、GPU 数、优先级、命令、环境变量和重启次数。
 - `/jobs`：查看排队/运行状态、取消任务或复制任务。
 - `/jobs/<job-name>`：查看 Kueue、PyTorchJob、Pod 事件、日志和输出目录。
 - `/queues`：查看配额、已用量、已放行和待放行任务。
+- `/users`：用户列表、角色、活跃任务、GPU 占用与配额（v0.9 新增，仅 admin 可见）。
 
 网页每 3～5 秒轮询。“GPU 分配情况”来自 Kubernetes，表示训练任务获得多少张卡；“GPU 实时使用情况”来自 `nvidia-smi`，表示核心利用率、显存和温度，两者含义不同。`vla-gpu-metrics` DaemonSet 只读采集指标，不申请训练 GPU 配额。排队时还没有训练 Pod，因此日志为空是正常现象；先查看任务详情和队列页，不要把“无日志”直接判断为日志系统故障。
 
@@ -342,6 +449,14 @@ bash scripts/verify-a100.sh
 - `docs/acceptance-a100.md`
 - `docs/troubleshooting.md`
 
+功能与运维专题文档：
+
+- `docs/api.md`：HTTP 接口字段表与错误码（含 v0.9 的鉴权与用户端点）
+- `docs/auth.md`：三种鉴权模式、LDAP 接入、按用户配额、401/503 排查
+- `docs/multi-node.md`：多机前置条件、Kueue topology、NCCL 排查、性能预期
+- `docs/high-availability.md`：Web 可用性边界、备份恢复窗口、升级与回滚
+- `docs/operations.md`：日常巡检、备份、升级、监控
+
 只有真实提交 CUDA 训练并检查输出后，才能勾选 GPU/NCCL/checkpoint 实测项。
 
 ## 9. 卸载
@@ -381,6 +496,9 @@ bash scripts/verify-a100.sh
 | 镜像拉取失败 | 镜像是否导入 K3s/containerd、标签是否一致、`imagePullPolicy` |
 | 日志为空 | 任务是否仍排队、Pod 是否存在、容器是否已写 stdout/stderr |
 | Web 401/403 | Bearer 令牌是否正确、后端 ServiceAccount RBAC、请求是否经过正确 API 地址 |
+| 登录 401 | 用户名/密码错误（不区分用户不存在）；核对 `PLATFORM_LDAP_USER_TEMPLATE` 拼出的 DN |
+| 登录 503 | 平台连不上 LDAP：网络/DNS/证书/`PLATFORM_LDAP_URL`；不是密码问题 |
+| 提交 422 `quota exceeded` | 当前用户 GPU 或活跃任务数达到上限，用 `/users` 调整或等任务结束 |
 
 ### 镜像拉取失败：先用 events 接口定位
 

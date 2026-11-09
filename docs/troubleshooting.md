@@ -57,6 +57,10 @@ kubectl -n vla-training describe localqueue default
 - **已放行但 Pod Pending**：检查节点 Ready、GPU Allocatable、污点/容忍、镜像卷和其他调度事件。
 - **任务请求超出配置**：4090 单任务只能为 1 卡；A100 只能为 1/2/4/8 卡，且两个 8 卡任务不能同时放行。
 - **取消后仍不放行**：确认原 PyTorchJob/Pod 已删除，再检查 Workload 和 ClusterQueue 用量是否更新。
+  注意 Pod 有优雅退出期：默认 `terminationGracePeriodSeconds=30`，这 30 秒内 GPU 仍被旧 Pod 占用，
+  排队任务不会启动。若希望更快释放，提交时传 `termination_grace_period_seconds`（1-600），
+  例如 5 秒可把「取消到下一个任务开始运行」从约 32 秒降到约 8 秒。
+  Pod 仍显示 Terminating 属正常，超过宽限期+30 秒仍未删除才需要排查。
 
 Pod 的 requests 和 limits 都必须是同一个整数 `nvidia.com/gpu`，否则 Kueue 统计和实际资源可能不一致。
 

@@ -31,6 +31,10 @@ class FakeKubernetes:
         self.local_queue: dict | None = None
         self.cluster_queue: dict | None = None
         self.deleted: list[str] = []
+        # Counts calls that hit the Pod list API, mirroring the real client's
+        # one-request-per-call behaviour.
+        self.pod_list_calls = 0
+        self.job_pod_list_calls = 0
 
     # --- PyTorchJob / Workload -------------------------------------------
     def get_job(self, name):
@@ -67,7 +71,12 @@ class FakeKubernetes:
         return list(self.workloads)
 
     def list_job_pods(self, name):
+        self.job_pod_list_calls += 1
         return [pod for pod in self.pods if pod["metadata"].get("labels", {}).get("vla-platform/job-name") == name]
+
+    def list_namespace_pods(self):
+        self.pod_list_calls += 1
+        return list(self.pods)
 
     # --- core -------------------------------------------------------------
     def read_pod_log(self, pod_name, tail_lines):
@@ -77,6 +86,7 @@ class FakeKubernetes:
         return list(self.nodes)
 
     def list_training_pods(self):
+        self.pod_list_calls += 1
         return list(self.pods)
 
     def list_events(self, object_names):

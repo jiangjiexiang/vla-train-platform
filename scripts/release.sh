@@ -65,7 +65,7 @@ fi
 
 if [[ "$DRY_RUN" != "1" ]]; then
   log "运行后端单元测试"
-  bash "$SCRIPT_DIR/test.sh" -q || die "单元测试未通过，已中止发版"
+  bash "$SCRIPT_DIR/test.sh" || die "单元测试未通过，已中止发版"
 fi
 
 if [[ "$DRY_RUN" != "1" && "${SKIP_VERIFY:-0}" != "1" ]]; then
@@ -81,6 +81,13 @@ fi
 
 printf "%s\n" "$NEW_VERSION" > "$VERSION_FILE"
 git add "$VERSION_FILE"
+
+# 让前端 package.json 的版本号与 VERSION 保持一致，避免两处漂移。
+if [[ -f "$ROOT_DIR/frontend/package.json" ]]; then
+  python3 "$SCRIPT_DIR/sync_frontend_version.py" "$ROOT_DIR/frontend/package.json" "$NEW_VERSION"
+  git add "$ROOT_DIR/frontend/package.json"
+fi
+
 git commit -q -m "release: v$NEW_VERSION"
 git tag -a "v$NEW_VERSION" -m "v$NEW_VERSION"
 log "已提交并打 tag v$NEW_VERSION"

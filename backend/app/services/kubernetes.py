@@ -127,6 +127,17 @@ class KubernetesClient:
         )
         return [item.to_dict() for item in response.items]
 
+    def list_namespace_pods(self) -> list[dict[str, Any]]:
+        """Return every pod in the namespace with a single API call.
+
+        Callers group the result by the ``vla-platform/job-name`` label
+        instead of listing pods once per job.
+        """
+        response = self._call(
+            lambda: self._core_api().list_namespaced_pod(self.settings.namespace)
+        )
+        return [item.to_dict() for item in response.items]
+
     def read_pod_log(self, pod_name: str, tail_lines: int) -> str:
         try:
             return self._call(
@@ -171,10 +182,7 @@ class KubernetesClient:
         return [item.to_dict() for item in response.items]
 
     def list_training_pods(self) -> list[dict[str, Any]]:
-        response = self._call(
-            lambda: self._core_api().list_namespaced_pod(self.settings.namespace)
-        )
-        return [item.to_dict() for item in response.items]
+        return self.list_namespace_pods()
 
     def get_local_queue(self) -> dict[str, Any] | None:
         try:

@@ -394,18 +394,25 @@ kubectl -n vla-training get workload -o yaml | grep -A3 "ownerReferences:"
 
 ## 测试
 
-后端单元测试用 pytest，不需要集群：Kubernetes 客户端被替换成内存假实现，
-覆盖参数校验、状态推导、取消语义、事件映射、历史迁移和 GPU 指标解析。
+前后端各有一套单元测试，都不需要集群即可运行。
+
+后端 `backend/tests/`（pytest）用内存假实现替代 Kubernetes 客户端，覆盖：参数校验与默认值、
+状态推导、取消语义、事件映射与排序、PyTorchJob 模板渲染、历史表迁移、GPU 指标解析。
+
+前端 `frontend/src/**/*.test.ts(x)`（vitest + Testing Library）覆盖格式化工具、API 客户端错误处理、
+状态标签渲染与轮询 hook 的生命周期。
 
 ```bash
-scripts/test.sh            # 首次运行会自动建 .venv 并安装 backend/requirements-dev.txt
-scripts/test.sh -q         # 静默模式
-scripts/test.sh -k cancel  # 只跑相关用例
+scripts/test.sh              # 前后端都跑
+scripts/test.sh backend -q   # 只跑后端，其余参数透传给 pytest
+scripts/test.sh frontend     # 只跑前端，其余参数透传给 vitest
 ```
 
-`scripts/release.sh` 发版前会先跑一遍单元测试，未通过直接中止。
-集群侧的端到端验收仍由 `scripts/verify-4090.sh` 负责，两者是互补的：
-单测保证逻辑正确，验收保证真实集群跑得通。
+首次运行会自动创建后端 `.venv`；前端缺少 `node_modules` 时会先 `npm ci`，
+Node 版本低于 18 时自动改用 `/opt/node20/bin`（可用 `NODE_BIN_DIR` 覆盖）。
+
+`scripts/release.sh` 发版前会跑完整测试，未通过直接中止。集群侧端到端验收仍由
+`scripts/verify-4090.sh` 负责，两者互补：单测保证逻辑正确，验收保证真实集群跑得通。
 
 ## 版本管理
 

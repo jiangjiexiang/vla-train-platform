@@ -50,14 +50,24 @@ class PlatformService:
         return self._job_response(job, None, [])
 
     def list_jobs(self) -> dict[str, Any]:
+        return self._list_jobs(self.kubernetes.list_namespace_pods())
+
+    def _list_jobs(self, pods: list[dict[str, Any]]) -> dict[str, Any]:
+        """Build every job response from one namespace-wide pod snapshot.
+
+        ``pods`` is listed once and bucketed by the ``vla-platform/job-name``
+        label, so the response for a job sees exactly the pods the per-job
+        label selector would have returned.
+        """
+        pods_by_job = _group_pods_by_job(pods)
         jobs = self.kubernetes.list_jobs()
         workloads = self.kubernetes.list_workloads()
         live: dict[str, dict[str, Any]] = {}
         for job in jobs:
             name = job.get("metadata", {}).get("name", "")
-            pods = self.kubernetes.list_job_pods(name)
-            workload = self._matching_workload(job, workloads, pods)
-            response = self._job_response(job, workload, pods)
+            job_pods = pods_by_job.get(name, [])
+            workload = self._matching_workload(job, workloads, job_pods)
+            response = self._job_response(job, workload, job_pods)
             live[name] = response
 
         cancelled = {
@@ -180,7 +190,7 @@ class PlatformService:
 
         gpu_total = sum(node["gpu_total"] for node in node_items)
         gpu_allocated = sum(node["gpu_allocated"] for node in node_items)
-        job_items = self.list_jobs()["items"]
+        job_items = self._list_jobs(cluster_pods)["items"]
         counts = {key: 0 for key in ("queued", "running", "succeeded", "failed", "cancelled")}
         for item in job_items:
             key = item["status"].lower()
@@ -242,9 +252,10 @@ class PlatformService:
 
         workloads = self.kubernetes.list_workloads()
         jobs = self.kubernetes.list_jobs()
+        pods_by_job = _group_pods_by_job(self.kubernetes.list_namespace_pods())
         queue_items = []
         for job in jobs:
-            pods = self.kubernetes.list_job_pods(job.get("metadata", {}).get("name", ""))
+            pods = pods_by_job.get(job.get("metadata", {}).get("name", ""), [])
             workload = self._matching_workload(job, workloads, pods)
             response = self._job_response(job, workload, pods)
             if response["queue"] == self.settings.queue:
@@ -536,6 +547,16 @@ def _dict(value: Any) -> dict[str, Any]:
 def _list(value: Any) -> list[Any]:
     """Repeated fields behave the same: .get(key, []) yields None when the key is null."""
     return value if isinstance(value, list) else []
+
+
+def _group_pods_by_job(pods: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Bucket a namespace-wide pod snapshot by the vla-platform/job-name label."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for pod in pods:
+        job_name = _dict(_dict(pod.get("metadata")).get("labels")).get("vla-platform/job-name")
+        if job_name:
+            grouped.setdefault(job_name, []).append(pod)
+    return grouped
 
 
 def _active_condition(conditions: list[dict[str, Any]], types: tuple[str, ...]) -> dict[str, Any] | None:

@@ -2,6 +2,29 @@
 
 本项目遵循语义化版本。每次大版本更新提交一次 commit 并打 tag，新条目追加到文件顶部。
 
+## [0.5.0] - 2026-11-09
+
+### 新增
+
+- 前端单元测试 37 例（vitest + Testing Library + jsdom），覆盖日期/时长格式化、API 客户端
+  错误处理与 401 事件、状态标签渲染、轮询 hook 的生命周期。前端测试脚本 `npm run test`。
+- `scripts/test.sh` 升级为前后端统一入口，支持 `backend` / `frontend` 子命令与参数透传。
+- `Makefile`：`make test / verify / build / deploy / release / clean` 统一常用操作。
+- `scripts/sync_frontend_version.py`：发版时同步 `frontend/package.json` 版本号。
+
+### 改进
+
+- 消除 `GET /api/v1/jobs`、`/cluster/summary`、`/queues` 的 N+1 查询：原先每个任务都要单独
+  向 Kubernetes 请求一次 Pod 列表，任务数增长时调用数线性上升。现在改为一次拉取命名空间
+  Pod 快照后按 `vla-platform/job-name` 分组复用，接口响应与字段完全不变。
+  本机 22 个任务时 `/api/v1/jobs` 约 13-20ms。
+- 发版脚本自动同步前端版本号，避免 `VERSION` 与 `package.json` 长期漂移。
+
+### 文档
+
+- README 测试章节重写为前后端两套测试的说明。
+- `docs/troubleshooting.md` 补充取消宽限期导致「取消后仍不放行」的解释。
+
 ## [0.4.0] - 2026-11-09
 
 ### 新增

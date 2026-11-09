@@ -27,13 +27,14 @@ def make_spec(name="exp001", **overrides):
     return SubmitSpec(**payload)
 
 
-def add_pod(kube, job_name, phase="Running", waiting_reason=None, node_name=None):
+def add_pod(kube, job_name, phase="Running", waiting_reason=None, node_name=None,
+            name=None, created_at="2026-01-01T00:00:05Z", started_at=None):
     pod = {
         "metadata": {
-            "name": f"{job_name}-master-0",
-            "uid": f"pod-uid-{job_name}",
+            "name": name or f"{job_name}-master-0",
+            "uid": f"pod-uid-{name or job_name}",
             "labels": {"vla-platform/job-name": job_name},
-            "creationTimestamp": "2026-01-01T00:00:05Z",
+            "creationTimestamp": created_at,
         },
         "spec": {
             "node_name": node_name,
@@ -41,6 +42,8 @@ def add_pod(kube, job_name, phase="Running", waiting_reason=None, node_name=None
         },
         "status": {"phase": phase, "conditions": []},
     }
+    if started_at:
+        pod["status"]["start_time"] = started_at
     if waiting_reason:
         pod["status"]["container_statuses"] = [
             {"state": {"waiting": {"reason": waiting_reason, "message": "boom"}}}
@@ -269,6 +272,54 @@ def test_events_unknown_job_raises_404(service):
     assert excinfo.value.status_code == 404
 
 
+# --- list jobs (batched pod snapshot) -------------------------------------
+
+def test_list_jobs_lists_pods_once(service, kube):
+    for index in range(5):
+        name = f"exp{index:03d}"
+        service.submit(make_spec(name=name))
+        add_pod(kube, name, phase="Running")
+    kube.pod_list_calls = 0
+    kube.job_pod_list_calls = 0
+
+    result = service.list_jobs()
+
+    assert result["total"] == 5
+    assert kube.pod_list_calls == 1, "list_jobs 只能拉取一次命名空间级 Pod 快照"
+    assert kube.job_pod_list_calls == 0, "不得再按任务逐个查询 Pod（N+1）"
+
+
+def test_list_jobs_attributes_pods_to_owning_job(service, kube):
+    service.submit(make_spec("exp001"))
+    service.submit(make_spec("exp002"))
+    service.submit(make_spec("exp003"))
+    # exp001: an older failed attempt plus a newer running pod -> newest wins.
+    add_pod(kube, "exp001", phase="Failed", name="exp001-master-0",
+            created_at="2026-01-01T00:00:05Z")
+    add_pod(kube, "exp001", phase="Running", name="exp001-master-1",
+            created_at="2026-01-01T00:02:00Z", started_at="2026-01-01T00:02:10Z")
+    # exp002: its pod is newer than exp001's, so cross-contamination would show.
+    add_pod(kube, "exp002", phase="Pending", name="exp002-master-0",
+            created_at="2026-01-01T00:03:00Z")
+
+    items = {item["name"]: item for item in service.list_jobs()["items"]}
+
+    assert items["exp001"]["pod_status"] == "Running"
+    assert items["exp001"]["status"] == "RUNNING"
+    assert items["exp001"]["started_at"] == "2026-01-01T00:02:10Z"
+    assert items["exp002"]["pod_status"] == "Pending"
+    assert items["exp002"]["status"] == "QUEUED"
+    assert items["exp003"]["pod_status"] is None, "没有 Pod 的任务不能拿到别人的 Pod"
+    assert items["exp003"]["status"] == "QUEUED"
+
+    # The batched path must agree with the per-job path used by get_job().
+    for name, item in items.items():
+        single = service.get_job(name)
+        assert (item["pod_status"], item["status"], item["started_at"]) == (
+            single["pod_status"], single["status"], single["started_at"]
+        )
+
+
 # --- cluster summary ------------------------------------------------------
 
 def test_cluster_summary_counts_only_live_pods(service, kube):
@@ -290,6 +341,60 @@ def test_cluster_summary_counts_only_live_pods(service, kube):
 
     kube.pods[0]["status"]["phase"] = "Succeeded"
     assert service.cluster_summary()["gpu_allocated"] == 0
+
+
+def test_cluster_summary_reuses_one_pod_snapshot(service, kube):
+    kube.nodes = [
+        {
+            "metadata": {"name": "node1"},
+            "status": {
+                "allocatable": {"nvidia.com/gpu": "2"},
+                "conditions": [{"type": "Ready", "status": True}],
+            },
+        }
+    ]
+    for name in ("exp001", "exp002"):
+        service.submit(make_spec(name=name))
+        add_pod(kube, name, phase="Running", node_name="node1")
+    kube.pod_list_calls = 0
+    kube.job_pod_list_calls = 0
+
+    summary = service.cluster_summary()
+
+    assert summary["gpu_allocated"] == 2
+    assert summary["jobs"]["running"] == 2
+    assert kube.pod_list_calls == 1, "summary 的 GPU 统计与任务状态必须共用一次 Pod 快照"
+    assert kube.job_pod_list_calls == 0
+
+
+def test_queues_lists_pods_once(service, kube):
+    kube.local_queue = {
+        "metadata": {"name": "default"},
+        "spec": {"clusterQueue": "default"},
+        "status": {},
+    }
+    kube.cluster_queue = {
+        "spec": {
+            "resourceGroups": [
+                {
+                    "coveredResources": ["nvidia.com/gpu"],
+                    "flavors": [{"resources": [{"name": "nvidia.com/gpu", "nominalQuota": 4}]}],
+                }
+            ]
+        }
+    }
+    for name in ("exp001", "exp002"):
+        service.submit(make_spec(name=name))
+        add_pod(kube, name, phase="Running")
+    kube.pod_list_calls = 0
+    kube.job_pod_list_calls = 0
+
+    items = service.queues()["items"][0]["items"]
+
+    assert {item["name"] for item in items} == {"exp001", "exp002"}
+    assert all(item["status"] == "RUNNING" for item in items)
+    assert kube.pod_list_calls == 1
+    assert kube.job_pod_list_calls == 0
 
 
 def test_gpu_metrics_unavailable_without_service(service):

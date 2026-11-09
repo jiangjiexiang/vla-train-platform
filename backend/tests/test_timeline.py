@@ -194,3 +194,56 @@ def test_cancelled_job_has_no_current_stage():
 
     assert result["current_stage"] is None
 
+def make_terminated_pod() -> dict:
+    """任务结束后容器状态是 terminated 而不是 running。"""
+    return {
+        "metadata": {"name": "job1-master-0", "creationTimestamp": "2026-01-01T00:00:05Z"},
+        "status": {
+            "phase": "Succeeded",
+            "container_statuses": [
+                {
+                    "name": "pytorch",
+                    "state": {
+                        "terminated": {
+                            "exitCode": 0,
+                            "reason": "Completed",
+                            "startedAt": "2026-01-01T00:00:10Z",
+                            "finishedAt": "2026-01-01T01:00:00Z",
+                        }
+                    },
+                }
+            ],
+        },
+    }
+
+
+def test_terminated_container_counts_as_started():
+    """跑完的任务不能显示「容器未启动」——这是真实踩过的 bug。"""
+    result = build_timeline(
+        job=make_job(
+            conditions=[{"type": "Succeeded", "status": "True", "lastTransitionTime": "2026-01-01T01:00:00Z"}]
+        ),
+        workload=make_workload(True),
+        pod=make_terminated_pod(),
+        status="SUCCEEDED",
+    )
+
+    states = stage_states(result)
+    assert states["image"] == "done"
+    assert states["container"] == "done"
+    assert states["running"] == "done"
+    assert states["finished"] == "done"
+    assert result["current_stage"] is None
+
+
+def test_terminated_container_timestamp_is_start_time():
+    result = build_timeline(
+        job=make_job(),
+        workload=make_workload(True),
+        pod=make_terminated_pod(),
+        status="SUCCEEDED",
+    )
+
+    container = next(item for item in result["items"] if item["stage"] == "container")
+    assert container["at"] == "2026-01-01T00:00:10Z"
+

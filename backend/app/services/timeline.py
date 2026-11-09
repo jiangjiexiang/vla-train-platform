@@ -56,13 +56,12 @@ def build_timeline(
     # Pod 存在 = 已准入（Pod 通常由 PyTorchJob 在准入后创建）
     if pod is not None:
         reached.setdefault("admitted", {"at": _pod_time(pod, "created")})
-        reached["image"] = {"at": _container_start(pod)}
-        pod_status = pod.get("status") or {}
-        for container_status in pod_status.get("container_statuses") or pod_status.get("containerStatuses") or []:
-            running = container_status.get("state", {}).get("running") or {}
-            if running:
-                reached["container"] = {"at": _iso(running.get("startedAt") or running.get("started_at"))}
-                reached["running"] = dict(reached["container"])
+        started, _finished = _container_times(pod)
+        if started:
+            # 容器启动过就说明镜像已经拉好了，且训练已经开始
+            reached["image"] = {"at": started}
+            reached["container"] = {"at": started}
+            reached["running"] = {"at": started}
 
     job_running = _condition(job, "Running")
     if job_running and job_running.get("status") == "True":
@@ -131,15 +130,32 @@ def _pod_time(pod: dict[str, Any], which: str) -> str | None:
     return _iso(meta.get("creationTimestamp") or meta.get("creation_timestamp")) if which == "created" else None
 
 
-def _container_start(pod: dict[str, Any]) -> str | None:
-    """镜像拉取完成的近似时间：容器进入 running 的时刻。"""
+def _container_times(pod: dict[str, Any]) -> tuple[str | None, str | None]:
+    """容器的 (启动时间, 结束时间)。
+
+    任务结束后容器状态是 ``terminated`` 而不是 ``running``——只看 running 会让
+    已经跑完的任务在时间轴上显示「容器未启动」，这是曾经的真实 bug。
+    两种状态都要处理：running 的 startedAt，或 terminated 的 startedAt。
+    """
     pod_status = pod.get("status") or {}
     for container_status in pod_status.get("container_statuses") or pod_status.get("containerStatuses") or []:
-        running = container_status.get("state", {}).get("running") or {}
-        value = _iso(running.get("startedAt") or running.get("started_at"))
-        if value:
-            return value
-    return None
+        state = container_status.get("state") or {}
+        running = state.get("running") or {}
+        started = _iso(running.get("startedAt") or running.get("started_at"))
+        if started:
+            return started, None
+        terminated = state.get("terminated") or {}
+        if terminated:
+            return (
+                _iso(terminated.get("startedAt") or terminated.get("started_at")),
+                _iso(terminated.get("finishedAt") or terminated.get("finished_at")),
+            )
+    return None, None
+
+
+def _container_start(pod: dict[str, Any]) -> str | None:
+    """镜像拉取完成的近似时间：容器开始运行的时刻。"""
+    return _container_times(pod)[0]
 
 
 def _iso(value: Any) -> str | None:

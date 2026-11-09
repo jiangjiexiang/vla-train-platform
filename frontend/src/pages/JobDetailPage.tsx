@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Col, Collapse, Descriptions, Empty, List, Row, Space, Spin, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Col, Collapse, Descriptions, Empty, List, Row, Segmented, Space, Spin, Tag, Typography } from 'antd';
 import { ArrowDownOutlined, ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -18,8 +18,36 @@ import type {
   JobMetricsResponse,
   JobTimelineResponse,
   JobCheckpointsResponse,
+  MetricPoint,
 } from '../types/api';
 import { formatDateTime, formatDuration, formatQueueEta } from '../utils/format';
+
+
+/** 从真实指标点里推断哪些字段可以画。
+
+ * 不写死列表：不同训练脚本写的字段不同（冒烟脚本只有 loss，
+ * SmolVLA 还写 grad_norm/lr/update_s），按数据推断才不会出现空标签页。
+ */
+const METRIC_LABELS: Record<string, string> = {
+  loss: 'loss',
+  grad_norm: '梯度范数',
+  lr: '学习率',
+  update_s: '每步耗时',
+};
+
+function metricOptions(items: MetricPoint[]): Array<{ label: string; value: string }> {
+  const keys = new Set<string>();
+  for (const point of items) {
+    for (const [key, value] of Object.entries(point)) {
+      if (key === 'step') continue;
+      if (typeof value === 'number' && Number.isFinite(value)) keys.add(key);
+    }
+  }
+  // loss 永远排第一，其余按固定顺序补齐
+  return ['loss', 'grad_norm', 'lr', 'update_s']
+    .filter((key) => keys.has(key))
+    .map((key) => ({ label: METRIC_LABELS[key] ?? key, value: key }));
+}
 
 export function JobDetailPage() {
   const { name = '' } = useParams();
@@ -39,6 +67,10 @@ export function JobDetailPage() {
   const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<JobTimelineResponse | null>(null);
   const [checkpoints, setCheckpoints] = useState<JobCheckpointsResponse | null>(null);
+  // 训练脚本写出的指标不止 loss：还有 grad_norm、lr、update_s 等。
+  // 用户排查训练问题时最常看的是 grad_norm 有没有爆炸，
+  // 只看 loss 会漏掉「loss 平稳但梯度已经发散」这类情况。
+  const [metricKey, setMetricKey] = useState('loss');
   const logRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
 
@@ -286,7 +318,16 @@ export function JobDetailPage() {
       >
         <ErrorAlert error={metricsError} onRetry={refreshMetrics} title="训练指标加载失败" />
         {metrics && metrics.items.length > 0 ? (
-          <LossChart points={metrics.items} />
+          <div>
+            <Segmented
+              size="small"
+              value={metricKey}
+              onChange={(value) => setMetricKey(String(value))}
+              options={metricOptions(metrics.items)}
+              data-testid="metric-switch"
+            />
+            <LossChart points={metrics.items} metric={metricKey} />
+          </div>
         ) : (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}

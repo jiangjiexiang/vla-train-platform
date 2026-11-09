@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import struct
 import time
 from dataclasses import dataclass, field
@@ -255,16 +256,68 @@ def scan_shallow(root: Path, dataset_id: str | None = None) -> DatasetMeta:
     return meta
 
 
-def _read_tasks(root: Path, info: dict[str, Any]) -> list[str]:
-    """任务字符串。v3.0 在 meta/tasks.parquet；读不到就用数量表示。"""
+# parquet 里元数据/字典页的固定字样，提取任务文本时要排除
+_PARQUET_NOISE = {
+    "schema", "task_index", "__index_level_0__", "pandas", "ARROW:schema",
+    "parquet-cpp-arrow", "org.apache.spark", "index_columns", "column_indexes",
+    "numpy_type", "pandas_version", "metadata",
+}
+
+
+def read_task_strings(root: Path, limit: int = 20) -> list[str]:
+    """从 meta/tasks.parquet 里提取任务文本。
+
+    不引 pyarrow（Web 镜像不装）：tasks.parquet 只有「任务名 + task_index」两列，
+    数据量极小（几 KB），直接扫描文件里的可打印字符串即可可靠取出任务名。
+    需要排除 parquet 自身的元数据字样与纯数字/符号。
+
+    LeRobot v3.0 的文本列名实测是 ``__index_level_0__``（pandas index 落盘），
+    不是 ``task``，所以不能按列名定位——这也是选择扫描字符串的原因之一。
+    """
     tasks_path = root / "meta" / "tasks.parquet"
-    if tasks_path.is_file():
-        parsed = read_parquet_metadata(tasks_path)
-        if parsed:
-            # parquet 里列名含 task；具体文本要读数据页，浅扫描不读
-            pass
+    if not tasks_path.is_file():
+        return []
+    try:
+        raw = tasks_path.read_bytes()
+    except OSError:
+        return []
+
+    results: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(rb"[\x20-\x7e]{4,400}", raw):
+        text = match.group().decode("utf-8", errors="replace").strip()
+        if not text or text in seen or text in _PARQUET_NOISE:
+            continue
+        # 过滤：必须是自然语言（以字母开头、含空格），且排除 parquet 元数据
+        if not re.match(r"^[A-Za-z]", text):
+            continue
+        if " " not in text:
+            continue
+        # base64 编码的 schema/元数据会混进来：特征是超长且几乎没有空格的分词
+        # （单词平均长度 > 12 基本不可能是自然语言指令）
+        words = text.split()
+        if len(text) > 200 or sum(len(w) for w in words) / max(len(words), 1) > 12:
+            continue
+        if any(token in text for token in ("parquet", "ARROW", "column", "index_columns", "numpy", "pandas")):
+            continue
+        # 任务指令通常是小写开头的祈使句；连续 3 个以上大写字母多半是编码片段
+        if re.search(r"[A-Z]{3,}", text):
+            continue
+        # 全是同一个词的重复（parquet 字典页会重复存）只保留一份
+        seen.add(text)
+        results.append(text)
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _read_tasks(root: Path, info: dict[str, Any]) -> list[str]:
+    """任务指令列表。优先真实读取，读不到时退回数量说明。"""
+    tasks = read_task_strings(root)
+    if tasks:
+        return tasks
     total = _as_int(info.get("total_tasks"))
-    return [] if total <= 0 else [f"{total} 个任务（文本需深扫描读取）"]
+    return [] if total <= 0 else [f"{total} 个任务（未能解析出文本）"]
 
 
 def _fill_features(meta: DatasetMeta, features: dict[str, Any]) -> None:

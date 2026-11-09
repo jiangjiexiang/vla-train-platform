@@ -359,3 +359,39 @@ def test_read_stats_summary_tolerates_malformed(tmp_path):
 
     assert read_stats_summary(dataset) is None
 
+def test_read_task_strings_extracts_natural_language(tmp_path):
+    """tasks.parquet 只有几 KB，直接扫描可打印字符串即可取出任务指令。
+
+    LeRobot v3.0 的文本列名实测是 __index_level_0__（不是 task），
+    且文件里混有 base64 编码的 schema 元数据，必须过滤掉。
+    """
+    from app.datasets.scanner import read_task_strings
+
+    dataset = build_dataset(tmp_path, make_info())
+    # 构造一个含任务文本 + base64 噪声的伪 parquet
+    noise = b"eyJpbmRleF9jb2x1bW5zIjogWyJfaW5kZXhfbGV2ZWxfMF9fIl19" * 3  # 类似 schema 的 base64
+    (dataset / "meta" / "tasks.parquet").write_bytes(
+        b"PAR1\x00" + b"pick up the bowl" + b"\x00" + noise + b"\x00task_index\x00PAR1"
+    )
+
+    tasks = read_task_strings(dataset)
+
+    assert tasks == ["pick up the bowl"]
+
+
+def test_read_task_strings_missing_file(tmp_path):
+    from app.datasets.scanner import read_task_strings
+
+    dataset = build_dataset(tmp_path, make_info())
+
+    assert read_task_strings(dataset) == []
+
+
+def test_shallow_scan_uses_real_task_text(tmp_path):
+    dataset = build_dataset(tmp_path, make_info())
+    (dataset / "meta" / "tasks.parquet").write_bytes(b"PAR1\x00" + b"pick up the bowl" + b"\x00PAR1")
+
+    meta = scan_shallow(dataset)
+
+    assert meta.tasks == ["pick up the bowl"]
+

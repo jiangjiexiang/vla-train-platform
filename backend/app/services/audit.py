@@ -32,6 +32,7 @@ ACTIONS = {
     "job.cancel",
     "job.clone",
     "run.create",
+    "jobs.cleanup",
     "dataset.scan",
     "user.quota.update",
     "image.params.put",

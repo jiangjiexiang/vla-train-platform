@@ -346,6 +346,40 @@ def job_events(
     return service.events(name)
 
 
+@router.post("/maintenance/cleanup/preview", dependencies=[Depends(require_admin)])
+def preview_cleanup(
+    older_than_days: int = Query(default=7, ge=1, le=3650),
+    keep_latest: int = Query(default=20, ge=0, le=10000),
+    include_checkpoints: bool = Query(default=False),
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    """预览清理范围，不执行任何删除。
+
+    清理不可逆，先让管理员看到「会删哪些、保留哪些」再决定。
+    """
+    return service.plan_cleanup(
+        older_than_days=older_than_days,
+        keep_latest=keep_latest,
+        include_checkpoints=include_checkpoints,
+    )
+
+
+@router.post("/maintenance/cleanup")
+def run_cleanup(
+    older_than_days: int = Query(default=7, ge=1, le=3650),
+    keep_latest: int = Query(default=20, ge=0, le=10000),
+    include_checkpoints: bool = Query(default=False),
+    _admin: AuthContext = Depends(set_admin_actor),
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    """执行清理。只删终态任务，运行中的一律保留。"""
+    return service.cleanup_jobs(
+        older_than_days=older_than_days,
+        keep_latest=keep_latest,
+        include_checkpoints=include_checkpoints,
+    )
+
+
 @router.get("/audit")
 def list_audit(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,

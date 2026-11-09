@@ -209,6 +209,99 @@ class PlatformService:
         ]
         return {"items": items}
 
+    def plan_cleanup(
+        self,
+        *,
+        older_than_days: int,
+        keep_latest: int = 20,
+        include_checkpoints: bool = False,
+    ) -> dict[str, Any]:
+        """算出该清理什么，不执行。清理不可逆，先让用户看一眼。"""
+        from .cleanup import plan_cleanup as build_plan
+
+        jobs = self._list_jobs(self.kubernetes.list_namespace_pods(), limit=None)["items"]
+        plan = build_plan(
+            jobs,
+            older_than_days=older_than_days,
+            keep_latest=keep_latest,
+            include_checkpoints=include_checkpoints,
+        )
+        return plan.as_dict()
+
+    def cleanup_jobs(
+        self,
+        *,
+        older_than_days: int,
+        keep_latest: int = 20,
+        include_checkpoints: bool = False,
+    ) -> dict[str, Any]:
+        """清理历史任务：K8s 对象、历史记录、可选地删 checkpoint。
+
+        每一步独立记录成败——删 K8s 对象可能因为已被 TTL 回收而 404（这不算失败），
+        删目录可能因为权限失败。整体不因为个别失败而中断，最后汇总报告。
+        """
+        from .cleanup import plan_cleanup as build_plan
+
+        jobs = self._list_jobs(self.kubernetes.list_namespace_pods(), limit=None)["items"]
+        plan = build_plan(
+            jobs,
+            older_than_days=older_than_days,
+            keep_latest=keep_latest,
+            include_checkpoints=include_checkpoints,
+        )
+
+        deleted: list[str] = []
+        failed: list[dict[str, str]] = []
+
+        for name in plan.job_names:
+            try:
+                # 对象可能已被 ttlSecondsAfterFinished 回收，404 视为已完成
+                self.kubernetes.delete_job(name)
+            except ServiceError as exc:
+                if exc.status_code != 404:
+                    failed.append({"job": name, "stage": "k8s", "error": str(exc)})
+                    continue
+            try:
+                self.history.forget_job(name)
+            except Exception as exc:  # noqa: BLE001 - 单条失败不该中断整批
+                failed.append({"job": name, "stage": "history", "error": str(exc)})
+                continue
+            deleted.append(name)
+
+        removed_checkpoints: list[str] = []
+        for name in plan.checkpoints:
+            path = Path(self.settings.checkpoint_host_path) / name
+            try:
+                if path.is_dir():
+                    import shutil
+
+                    shutil.rmtree(path)
+                    removed_checkpoints.append(name)
+            except OSError as exc:
+                failed.append({"job": name, "stage": "checkpoint", "error": str(exc)})
+
+        self.audit.record(
+            "jobs.cleanup",
+            actor=self._current_actor,
+            target=f"{len(deleted)} jobs",
+            detail={
+                "older_than_days": older_than_days,
+                "keep_latest": keep_latest,
+                "checkpoints_removed": len(removed_checkpoints),
+            },
+        )
+        return {
+            "deleted_jobs": deleted,
+            "removed_checkpoints": removed_checkpoints,
+            "failed": failed,
+            "kept_running": plan.keep,
+            "summary": {
+                "deleted": len(deleted),
+                "checkpoints": len(removed_checkpoints),
+                "failed": len(failed),
+            },
+        }
+
     def list_jobs(
         self,
         *,

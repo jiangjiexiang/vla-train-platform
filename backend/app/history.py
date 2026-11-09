@@ -128,6 +128,19 @@ class HistoryStore:
                 (image, template_json, updated_at),
             )
 
+    def forget_job(self, name: str) -> bool:
+        """从历史库里彻底删除一个任务的两类记录。
+
+        清理历史任务时用。只删数据库记录，不动 K8s 对象也不动 checkpoint——
+        那两件事由 PlatformService 编排，因为它们有各自的失败可能，
+        需要分别报告结果。
+        """
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM submissions WHERE name = ?", (name,))
+            conn.execute("DELETE FROM cancellations WHERE name = ?", (name,))
+            conn.commit()
+            return cursor.rowcount > 0
+
     def delete_image_params(self, image: str) -> bool:
         with self._connect() as connection:
             cursor = connection.execute("DELETE FROM image_params WHERE image = ?", (image,))

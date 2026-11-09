@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+#
+# 多机（Multi-Node）profile。
+#
+# 与 4090/a100 单机 profile 一样不引用 ../base：
+#   - ../base 只放 WorkloadPriorityClass（low/normal/high），与集群全局共享，
+#     由 install-stack.sh 应用单机 profile 时已建好，重复 apply 会因 lack of
+#     namespace 之外的字段冲突而变得多余；
+#   - 多机 profile 只新增自己的 Topology / ResourceFlavor / ClusterQueue /
+#     LocalQueue，名字都带 multinode 前缀，不会覆盖单机的 vla-cluster-queue。
+#
+# 注意：本目录**不包含** PyTorchJob 提交模板（pytorchjob-template.yaml /
+# pytorchjob-single-node.yaml 是参考示例，直接 kubectl apply -f 使用），
+# 避免 `kubectl apply -k` 时把示例任务误提交成真实训练。
+resources:
+  - queues.yaml
+
+# 配额调整方式：直接编辑 queues.yaml 的 nominalQuota（每节点 1 卡时 = 节点数）。
+# 这里不写 patches，保持与 4090/a100 profile 的单一 YAML 风格一致。
+# 公共 label 已在 queues.yaml 每个对象上逐条声明，不用 commonLabels，
+# 以免 kustomize 未来版本对 deprecated 字段报 warning。

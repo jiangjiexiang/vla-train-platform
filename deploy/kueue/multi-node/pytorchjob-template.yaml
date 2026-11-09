@@ -1,0 +1,174 @@
+# 多机训练提交模板（PyTorchJob）
+#
+# 这是给「人工提交 / 调试」用的参考模板，不是平台后端渲染的产物：
+#   - 平台后端（backend/app/services/kubernetes.py）当前只渲染单机 PyTorchJob；
+#   - 多机提交走 deploy/kueue/multi-node 的 Kueue 队列，标签/队列名与
+#     examples/submit-multi-node.sh 一致。
+#
+# 关键点（缺一不可）：
+#   1. kueue.x-k8s.io/queue-name: multinode
+#      PyTorchJob 被 Kueue 整体接管，排队/配额以 job 为单位，而不是逐 Pod。
+#   2. master 副本 spec 里显式设置 MASTER_ADDR / MASTER_PORT。
+#      Kueue + TAS 调度后，Training Operator 不一定能稳定推导出跨节点
+#      DNS 名称，显式写死 master 的 Pod DNS 是最可靠的做法：
+#        <pytorchjob-name>-master-0.<pytorchjob-name>-master.<namespace>.svc
+#      该 DNS 需要.headless Service；Training Operator 会为每个副本创建
+#      <job>-master / <job>-worker Service。若集群 DNS 解析不到，退回用
+#      master Pod IP（kubectl get pod -o wide），并接受 Pod 重启后需重建 job。
+#      注意：master 的 Pod DNS 依赖 Service 先于 master Ready；K3s 默认
+#      DNS 插件支持。若启动时 DNS 失败（socket.gaierror），先确认 Service 已存在。
+#   3. 每节点 1 卡（契约默认）：worker replicas 数 = 节点数 - 1，
+#      每个容器 nvidia.com/gpu: 1。
+#   3b. checkpoint 用 hostPath /data/vla-platform/checkpoints，与后端
+#      backend/app/templates/pytorchjob.py 渲染单机任务的写法一致。
+#      多机时每个 Pod 看到的是**自己节点**上的目录，所以 rank 0 写的
+#      smoke.pt 只落在 master 所在节点；这是有意的（见 examples/README.md），
+#      不要误以为共享。要共享请自行换 NFS/CephFS 的 RWX PVC。
+#   4. 反亲和（requiredDuringSchedulingIgnoredDuringExecution）是**防御性**的：
+#      它能阻止同一 job 的两副本落到同一节点，但 Kueue 计算 flavor 用量时
+#      **不扣减 required 反亲和的资源**，所以单靠它会出现「先 admit 后
+#      Unschedulable」。真正的保证来自 TAS（ResourceFlavor.topologyName +
+#      PodSet 的 topologyRequest），反亲和只作为兜底。
+---
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: multi-node-smoke
+  namespace: vla-training
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/component: multi-node-smoke
+    kueue.x-k8s.io/queue-name: multinode
+  annotations:
+    # 仅用于人读；TAS 真正使用的字段是 Kueue 生成 Workload 时的 topologyRequest。
+    kueue.x-k8s.io/podset-required-topology: kubernetes.io/hostname
+spec:
+  # PyTorchJob 的 runPolicy：默认不设置 suspend，Kueue 会自动 suspend 并在
+  # 准入后 resume；不要手动设 suspend: true，否则 Kueue 无法接管。
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/component: multi-node-smoke
+        spec:
+          serviceAccountName: vla-web
+          # K3s 已把 nvidia 设为默认 runtime，这里保留显式声明以便非默认 runtime 集群也能跑。
+          runtimeClassName: nvidia
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          # 防御性反亲和：同一 job 的两个副本不要落到同一节点。
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/component: multi-node-smoke
+                  topologyKey: kubernetes.io/hostname
+          containers:
+            - name: pytorch
+              image: vla-smoke:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - /app/train.py
+                - --distributed
+                - --steps
+                - "20"
+                - --sleep
+                - "0"
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+                - name: JOB_NAME
+                  value: multi-node-smoke
+                - name: CHECKPOINT_DIR
+                  value: /checkpoints/multi-node-smoke
+                - name: MASTER_ADDR
+                  value: multi-node-smoke-master-0.multi-node-smoke-master.vla-training.svc
+                - name: MASTER_PORT
+                  value: "23456"
+                # 跨节点 NCCL 选网卡：K3s 的 Pod 网卡通常是 eth0；
+                # 若节点有多网卡，改成业务网卡名并验证带宽。
+                - name: NCCL_SOCKET_IFNAME
+                  value: eth0
+                - name: NCCL_DEBUG
+                  value: INFO
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+              volumeMounts:
+                - name: checkpoints
+                  mountPath: /checkpoints
+          volumes:
+            - name: checkpoints
+              hostPath:
+                path: /data/vla-platform/checkpoints
+                type: Directory
+    Worker:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/component: multi-node-smoke
+        spec:
+          serviceAccountName: vla-web
+          runtimeClassName: nvidia
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/component: multi-node-smoke
+                  topologyKey: kubernetes.io/hostname
+          containers:
+            - name: pytorch
+              image: vla-smoke:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - /app/train.py
+                - --distributed
+                - --steps
+                - "20"
+                - --sleep
+                - "0"
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+                - name: JOB_NAME
+                  value: multi-node-smoke
+                - name: CHECKPOINT_DIR
+                  value: /checkpoints/multi-node-smoke
+                - name: MASTER_ADDR
+                  value: multi-node-smoke-master-0.multi-node-smoke-master.vla-training.svc
+                - name: MASTER_PORT
+                  value: "23456"
+                - name: NCCL_SOCKET_IFNAME
+                  value: eth0
+                - name: NCCL_DEBUG
+                  value: INFO
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+              volumeMounts:
+                - name: checkpoints
+                  mountPath: /checkpoints
+          volumes:
+            - name: checkpoints
+              hostPath:
+                path: /data/vla-platform/checkpoints
+                type: Directory

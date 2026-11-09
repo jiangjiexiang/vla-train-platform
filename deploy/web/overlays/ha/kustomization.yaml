@@ -1,0 +1,40 @@
+# Web 高可用 overlay
+#
+# 与 overlays/4090、overlays/a100 并列使用，通过 `-k` 叠加在单机 profile 之上：
+#   kubectl apply -k deploy/web/overlays/4090
+#   kubectl apply -k deploy/web/overlays/ha
+#
+# 为什么必须做成「叠加」而不是替换：
+#   本 overlay 只负责把副本数、可用性策略、PDB 加到 Deployment 上，
+#   不覆盖 PLATFORM_ALLOWED_GPUS / PLATFORM_AUTH_REQUIRED 等镜像相关设置，
+#   那些仍由 4090 / a100 overlay 决定。
+#
+# Service：继续用 base 的 vla-web（NodePort 30080）。它已经按
+#   app.kubernetes.io/component: web 选择 Pod，2 副本时由 kube-proxy 自动
+#   负载均衡，无需新建「前置 Service」。不要在本 overlay 里加第二个
+#   NodePort Service —— 同一集群重复 NodePort 会冲突。
+#
+# 详见 deploy/web/overlays/ha/README.md（选型理由、SQLite 边界、回滚步骤）。
+resources:
+  - ../../base
+
+patches:
+  # 1) Deployment 补丁：副本数、滚动策略、探针、反亲和、标签。
+  - path: deployment.yaml
+  # 2) PDB 补丁：把 base 的 maxUnavailable 换成 HA 需要的 minAvailable。
+  #    kustomize 不允许两个资源占用同一个 id（同一个 PDB），所以这里用
+  #    JSON6902 在两个字段之间切换，而不是再放一个 pdb.yaml 覆盖。
+  #    minAvailable: 1 + replicas: 2 = 主动干扰期间始终保留 1 个就绪副本。
+  - target:
+      kind: PodDisruptionBudget
+      name: vla-web
+    patch: |-
+      - op: remove
+        path: /spec/maxUnavailable
+      - op: add
+        path: /spec/minAvailable
+        value: 1
+
+# PDB 语义：minAvailable: 1 表示「任何时刻至少 1 个 Web 就绪」。
+# replicas=2 时滚动升级/节点排空都受保护；如果后来把 replicas 手动降回 1，
+# 这个 PDB 会阻止排空该节点 —— 单机环境下请改用 overlays/4090 重新 apply。

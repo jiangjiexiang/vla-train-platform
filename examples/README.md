@@ -97,3 +97,74 @@ cli/vla-train clone queue-smoke-002 --name queue-smoke-003
 第一个任务运行期间第二个应保持 `QUEUED`；第一个完成或被取消后第二个由 Kueue 放行。两个任务分别写 `/checkpoints/queue-smoke-001/smoke.pt` 和 `/checkpoints/queue-smoke-002/smoke.pt`，不会因第二个任务排队而共享 checkpoint。
 
 这些脚本会真实提交或取消任务；只有上面的 `--dry-run` 命令保证不连接平台。
+
+## 多机（2 节点 × 1 卡）smoke
+
+⚠️ 需要 **≥2 个 GPU 节点**、节点已打 `vla-platform.io/node-pool=multinode` 标签、
+`deploy/kueue/multi-node` 已应用、Kueue 已启用 `TopologyAwareScheduling`。
+本仓库的单卡开发机上跑会被前置检查拦下（预期行为）。
+完整前置条件与验证步骤见 `deploy/kueue/multi-node/README.md`。
+
+```bash
+# 1. 只检查前置条件并打印将提交的 PyTorchJob，不创建资源
+MODE=inspect examples/submit-multi-node.sh
+
+# 2. 提交 2 节点 × 1 卡
+examples/submit-multi-node.sh
+
+# 3. 3 节点
+NODES=3 examples/submit-multi-node.sh
+
+# 4. 观察结果
+kubectl -n vla-training get pytorchjob,pod -o wide
+kubectl -n vla-training get workloads.kueue.x-k8s.io -o yaml | grep -A12 topologyAssignment
+kubectl -n vla-training logs -l app.kubernetes.io/component=multi-node-smoke --prefix \
+  | grep -E 'RANK_INFO|NCCL_ROUNDTRIP_OK|DDP_VERIFIED'
+
+# 5. 清理
+MODE=delete examples/submit-multi-node.sh
+```
+
+脚本参数（环境变量）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `JOB_NAME` | `multi-node-smoke` | PyTorchJob 名称 |
+| `NODES` | `2` | 节点数（master 1 + worker N-1） |
+| `GPUS_PER_NODE` | `1` | 每节点卡数 |
+| `STEPS` / `SLEEP` | `20` / `0` | smoke 步数与每步休眠 |
+| `IMAGE` | `vla-smoke:latest` | 训练镜像，需已导入**每个**节点 |
+| `QUEUE` | `multinode` | 多机 LocalQueue |
+| `NCCL_IFNAME` | `eth0` | 跨节点 NCCL 网卡，多网卡机器必须改 |
+| `MODE` | `submit` | `submit` / `inspect` / `delete` |
+
+成功判据（rank 0 日志里必须同时出现）：
+
+```
+LAUNCH_MODE multi-node world_size=2
+NCCL_ROUNDTRIP_OK {"...": "...", "world_size": 2, ...}
+DDP_VERIFIED world_size=2 ranks=[0, 1] nodes=2 mode=multi-node backend=nccl
+```
+
+`nodes=1` 表示两个副本落到了同一节点，也就是 TAS 没生效。
+
+### 与 CLI 的区别
+
+`examples/submit-multi-node.sh` **不走平台 API**，直接 `kubectl apply` 一个 PyTorchJob。
+原因：后端 `SubmitRequest` 的 `nodes` / `gpus_per_node` 字段（契约 1.7）目前只做接受与校验，
+多机 PodSet 的渲染属于 deploy 分区的落地范围；等后端渲染支持后，这个脚本可以换成
+`cli/vla-train submit --nodes 2 --gpus-per-node 1`。
+
+checkpoint 写在 `/checkpoints/<job>/smoke.pt`，每个节点看到的是自己机器上的 hostPath 目录，
+只有 master 会写；这一点与单机示例一致，**不要**期望跨节点共享。
+
+## 相关脚本一览
+
+| 脚本 | 运行环境 | 说明 |
+|---|---|---|
+| `submit-4090.sh` | 单机 1 卡 | 平台 API 提交 |
+| `submit-a100-8x.sh` | 单机 8 卡 | `torchrun --standalone` |
+| `submit-vla-custom.sh` | 任意 | 自有镜像 |
+| `queue-checkpoint-demo.sh` | 单机 | 排队/取消演示 |
+| **`submit-multi-node.sh`** | **≥2 GPU 节点** | **多机 PyTorchJob，直接 kubectl apply** |
+| `build-import-smoke.sh` | 每台训练节点 | 构建并导入 smoke 镜像 |

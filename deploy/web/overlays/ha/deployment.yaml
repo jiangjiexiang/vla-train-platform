@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vla-web
+  namespace: vla-platform
+spec:
+  replicas: 2
+  # 覆盖 base 的 Recreate。滚动升级时 maxUnavailable: 0 保证不断服；
+  # maxSurge: 1 会让新旧 Pod 短暂并存，SQLite 由 timeout=10s 串行化写入，
+  # 见 README.md「SQLite 单写者边界」。
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: web
+        # 用于 PDB 与未来可能的 Service 分流的辅助标签；不影响 selector。
+        vla-platform.io/tier: web-ha
+    spec:
+      # 追加反亲和：优先把两副本放到不同节点。这里用 preferred 而不是 required：
+      # 单机 K3s 上 required 会让第二个副本永远 Pending，把 Web 直接搞挂。
+      # 集群只有 1 个节点时，两个副本都会落在同一节点（这是预期的降级行为，
+      # 节点级冗余在单机物理上不可能成立）。跨节点尽量分散的强制约束见
+      # deploy/web/base/deployment.yaml 的 topologySpreadConstraints(DoNotSchedule)。
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: vla-train-platform
+                    app.kubernetes.io/component: web
+      containers:
+        - name: web
+          # 探针路径沿用 base 的 /api/v1/health（实测返回
+          # {"status":"ok","auth_required":...}）；这里的 overlay 显式再写一遍，
+          # 是为了让「ha」文件本身可读，不依赖 base 才能看懂可用性策略。
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          # 终止前先让 Service 端点摘除片刻，减少 in-flight 请求被截断的概率。
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]

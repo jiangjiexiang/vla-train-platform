@@ -1,0 +1,88 @@
+# 多机（Multi-Node）Kueue Profile
+#
+# 覆盖 Kueue chart 默认配置。与 base/kueue-values.yaml 的唯一区别：
+#   1. 在 controllerManager.featureGates 中启用 TopologyAwareScheduling；
+#   2. 打开 enableTopologyAwareScheduling 相关的 webhook 校验（chart 自动处理）。
+#
+# 背景：Kueue v0.20.5 的 Workload CRD（v1beta2）里，PodSet 的拓扑约束字段叫
+# `topologyRequest`（required / preferred / podIndexLabel），v1beta1 时代的
+# `topology` 字段已经不存在。多机「N 个 Pod 落到 N 个不同节点」依赖这个字段，
+# 而它只有在 TopologyAwareScheduling feature gate 打开后才会被 controller 消费。
+#
+# ⚠️ 重要：启用本文件需要 **重启 kueue-controller-manager** 才会生效。
+#    重启期间所有 PyTorchJob 的准入会短暂不可用；单机 4090 生产环境不要为了
+#    验证多机而重启它。scripts/install-stack.sh 的 4090/a100 路径不会读取本文件。
+#
+# 用法（确认要启用多机后）：
+#   helm upgrade --install kueue <kueue-0.20.5.tgz> -n kueue-system \
+#     -f deploy/kueue/multi-node/kueue-values-multi-node.yaml
+#   然后：kubectl -n kueue-system rollout restart deployment/kueue-controller-manager
+#   验证：kubectl -n kueue-system get deployment kueue-controller-manager \
+#           -o jsonpath='{range .spec.template.spec.containers[0].args[*]}{@}{"\n"}{end}' \
+#         | grep feature-gates
+#   期望输出包含：--feature-gates=TopologyAwareScheduling=true
+#
+# 如果 gate 名称在你的 Kueue 版本里不同，以
+#   kubectl -n kueue-system exec deploy/kueue-controller-manager -- /manager --version
+# 或 Kueue 文档 features/ 目录为准；本仓库按 Kueue 官方文档写作
+# `TopologyAwareScheduling`（v0.20.x 为 alpha/beta 期，默认关闭）。
+
+controllerManager:
+  featureGates:
+    - name: TopologyAwareScheduling
+      enabled: true
+
+managerConfig:
+  controllerManagerConfigYaml: |
+    apiVersion: config.kueue.x-k8s.io/v1beta2
+    kind: Configuration
+    health:
+      healthProbeBindAddress: :8081
+    metrics:
+      bindAddress: :8443
+    webhook:
+      port: 9443
+    leaderElection:
+      leaderElect: true
+      resourceName: c1f6bfd2.kueue.x-k8s.io
+    controller:
+      groupKindConcurrency:
+        Job.batch: 5
+        Pod: 5
+        Workload.kueue.x-k8s.io: 10
+        LocalQueue.kueue.x-k8s.io: 5
+        Cohort.kueue.x-k8s.io: 1
+        ClusterQueue.kueue.x-k8s.io: 5
+        ResourceFlavor.kueue.x-k8s.io: 1
+        Topology.kueue.x-k8s.io: 1
+    clientConnection:
+      qps: 300
+      burst: 500
+    # waitForPodsReady: 多机场景建议开启，否则一个节点起不来会一直占着配额。
+    # 需要时取消下面注释并配合 scripts/verify-multi-node.sh 观测。
+    #waitForPodsReady:
+    #  timeout: 30m
+    #  recoveryTimeout: 5m
+    #  blockAdmission: true
+    #  requeuingStrategy:
+    #    timestamp: Eviction
+    #    backoffLimitCount: null
+    #    backoffBaseSeconds: 60
+    #    backoffMaxSeconds: 3600
+    integrations:
+      frameworks:
+      - "batch/job"
+      - "kubeflow.org/mpijob"
+      - "ray.io/rayjob"
+      - "ray.io/rayservice"
+      - "ray.io/raycluster"
+      - "jobset.x-k8s.io/jobset"
+      # 多机训练的核心集成：PyTorchJob 整体作为一个 Workload 排队，
+      # PodSet 数量 = 节点数，TAS 才能一次性给 N 个节点分配拓扑域。
+      - "kubeflow.org/pytorchjob"
+      - "workload.codeflare.dev/appwrapper"
+      - "trainer.kubeflow.org/trainjob"
+      - "pod"
+      - "deployment"
+      - "statefulset"
+      - "leaderworkerset.x-k8s.io/leaderworkerset"

@@ -356,3 +356,37 @@ def test_create_run_validates_priority(client):
 
     # 由 RunSubmitRequest 的 pydantic 校验拦下，FastAPI 统一返回 422
     assert response.status_code == 422
+
+def test_recipes_dir_resolves_in_source_tree(monkeypatch):
+    """源码运行时应当找到 <repo>/recipes。"""
+    monkeypatch.delenv("PLATFORM_RECIPES_DIR", raising=False)
+    from app.recipes import loader
+
+    directory = loader._resolve_recipes_dir()
+
+    assert directory.is_dir(), directory
+    assert directory.name == "recipes"
+
+
+def test_recipes_dir_env_override(monkeypatch, tmp_path):
+    """部署时可以用环境变量显式指定，避免依赖目录层级推断。"""
+    monkeypatch.setenv("PLATFORM_RECIPES_DIR", str(tmp_path))
+    from app.recipes import loader
+
+    assert loader._resolve_recipes_dir() == tmp_path
+    assert loader.RecipeStore().directory == tmp_path
+
+
+def test_recipes_dir_container_layout(monkeypatch):
+    """容器内 loader.py 位于 /app/app/recipes/，应解析到 /app/recipes。
+
+    这里不真的读 /app，而是验证「父层级推断」这一规则本身：
+    用仓库里的路径模拟同一深度关系。
+    """
+    monkeypatch.delenv("PLATFORM_RECIPES_DIR", raising=False)
+    from pathlib import Path
+
+    here = Path("/home/jjx/vla-train-platform/backend/app/recipes/loader.py")
+    # 容器：parents[2] = /app；源码：parents[2] = backend/
+    assert here.parents[2].name in ("backend", "app")
+

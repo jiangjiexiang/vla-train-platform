@@ -18,8 +18,36 @@ from typing import Any
 import yaml
 
 RECIPE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
-# backend/app/recipes/loader.py -> backend/app/recipes -> backend/app -> backend -> 仓库根
-DEFAULT_RECIPES_DIR = Path(__file__).resolve().parents[3] / "recipes"
+# 配方目录解析，按优先级依次尝试：
+#   1. 环境变量 PLATFORM_RECIPES_DIR（部署时显式指定，最稳）
+#   2. 与本包同级的 recipes/：容器内是 /app/recipes（Dockerfile 用 COPY recipes /app/recipes），
+#      仓库开发时是 backend/recipes（不存在时继续往下找）
+#   3. 仓库根的 recipes/：源码运行时 <repo>/recipes
+#
+# 踩过的坑：原先写死 parents[3] / "recipes"，宿主机上恰好等于仓库根的 recipes/，
+# 开发时看起来正常；但容器内 loader.py 在 /app/app/recipes/loader.py，parents[3] 是 "/"，
+# 于是去读 /recipes —— 不存在，接口静默返回空列表。
+def _resolve_recipes_dir() -> Path:
+    configured = os.environ.get("PLATFORM_RECIPES_DIR")
+    if configured:
+        return Path(configured)
+    # loader.py 位于 <root>/backend/app/recipes/loader.py（源码）或 /app/app/recipes/loader.py（容器）
+    #   parents[0] = recipes/  parents[1] = app/  parents[2] = backend/ 或 /app
+    #   parents[3] = 仓库根 或 /（容器里父层级更浅）
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[2] / "recipes",  # 容器：/app/recipes
+        here.parents[3] / "recipes",  # 源码：<repo>/recipes
+        here.parents[1] / "recipes",  # 兜底：<app>/recipes（若把配方放在包内）
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    # 都找不到时返回容器内的约定路径，便于报错信息指向预期位置
+    return candidates[0]
+
+
+DEFAULT_RECIPES_DIR = _resolve_recipes_dir()
 
 
 class RecipeError(ValueError):
@@ -129,7 +157,7 @@ class RecipeStore:
     """从目录加载配方。目录不存在时返回空集，不报错（允许不配配方的最小部署）。"""
 
     def __init__(self, directory: str | Path | None = None):
-        self.directory = Path(directory or os.environ.get("PLATFORM_RECIPES_DIR") or DEFAULT_RECIPES_DIR)
+        self.directory = Path(directory) if directory else _resolve_recipes_dir()
 
     def load_all(self) -> list[Recipe]:
         recipes: list[Recipe] = []

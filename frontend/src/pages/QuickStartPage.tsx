@@ -5,6 +5,7 @@ import {
   Card,
   Collapse,
   Col,
+  Modal,
   Empty,
   Form,
   Input,
@@ -30,7 +31,8 @@ import {
   SearchOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FormInstance } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { ApiError, api, getErrorMessage, isAbortError, isUnauthorized } from '../api/client';
@@ -43,7 +45,15 @@ import {
 import { ErrorAlert } from '../components/ErrorAlert';
 import { PARAMS_FIELD, paramRules, visibleParams } from '../components/TrainParamsForm';
 import type { ParamSpec } from '../types/api';
-import type { DatasetMeta, ParamsTemplate, Priority, Recipe, RunRequest } from '../types/api';
+import type {
+  DatasetMeta,
+  ParamsTemplate,
+  PreflightCheck,
+  PreflightResponse,
+  Priority,
+  Recipe,
+  RunRequest,
+} from '../types/api';
 import { formatBytes, formatCount, formatMinutes, paramPlaceholder } from '../utils/dataset';
 
 /**
@@ -53,6 +63,9 @@ import { formatBytes, formatCount, formatMinutes, paramPlaceholder } from '../ut
 export interface QuickStartLocationState {
   datasetId?: string;
 }
+
+/** 参数推荐值的影子字段后缀，只用于展示，不会出现在提交的 overrides 里。 */
+const DEFAULT_VALUE_SUFFIX = '__default';
 
 export const PRIORITY_OPTIONS: Array<{ value: Priority; label: string }> = [
   { value: 'low', label: '低' },
@@ -145,6 +158,18 @@ export function describeSubmitError(error: unknown): { title: string; descriptio
     return { title: '提交参数有误', description: text };
   }
   return { title: '提交失败', description: text };
+}
+
+/** 预检 error → 页面顶部 Alert 的标题与说明。 */
+export function describePreflightErrors(errors: PreflightCheck[]): { title: string; description: string } {
+  const codes = new Set(errors.map((check) => check.code));
+  const title = codes.has('dataset_unusable') || codes.has('no_camera')
+    ? '数据集不可用，先修好再训练'
+    : codes.has('format_mismatch')
+      ? '数据集与配方不兼容'
+      : '预检未通过';
+  const description = errors.map((check) => check.message).join('；') || '请按下方建议处理后重试';
+  return { title, description };
 }
 
 const STEPS = [
@@ -331,8 +356,35 @@ function QuickParamControl({ param }: { param: ParamSpec }) {
  * 不直接复用 TrainParamsForm：它内部的 Form.Item 用相对路径 (namePath=[]) 注册，
  * 而 antd 5 的 Form.Item 不会把父级 name 前缀拼进子字段，参数既进不了 store 也不会被校验。
  * 这里沿用同一套控件类型映射与校验规则，显式给出 [params, key] 的绝对路径。
+ *
+ * 默认值处理：Field 只在挂载那一刻读一次 store，而折叠面板展开时 Field 才真正渲染，
+ * 之后写 store 不会回填到控件。因此在 ParamsPanel 渲染（早于 Field 挂载）时先把配方
+ * defaults 写进 store；另外为每个参数准备一条 `params.<key>__default` 字段，专门用来
+ * 把推荐值显示成输入框的占位文案——折叠状态下也能看出「不改会用什么值」。
  */
-function ParamsPanel({ recipe }: { recipe: Recipe }) {
+function ParamsPanel({
+  form,
+  recipe,
+  defaults,
+}: {
+  form: FormInstance;
+  recipe: Recipe;
+  defaults: Record<string, unknown>;
+}) {
+  // 渲染阶段写 store：此时的写入发生在 Field 挂载/订阅之前，控件挂载后直接读出，
+  // 之后再改用户输入也不会被覆盖。
+  const appliedRef = useRef<string | null>(null);
+  if (appliedRef.current !== recipe.id) {
+    appliedRef.current = recipe.id;
+    form.setFields([
+      ...Object.entries(defaults).map(([key, value]) => ({ name: [PARAMS_FIELD, key], value })),
+      ...Object.entries(defaults).map(([key, value]) => ({
+        name: [PARAMS_FIELD, `${key}${DEFAULT_VALUE_SUFFIX}`],
+        value,
+      })),
+    ]);
+  }
+
   const params = visibleParams(recipeTemplate(recipe));
   return (
     <div data-testid="quickstart-params">
@@ -349,10 +401,50 @@ function ParamsPanel({ recipe }: { recipe: Recipe }) {
             >
               <QuickParamControl param={param} />
             </Form.Item>
+            {param.type !== 'bool' && (
+              <Form.Item noStyle name={[PARAMS_FIELD, `${param.key}${DEFAULT_VALUE_SUFFIX}`]}>
+                <DefaultValueHint param={param} />
+              </Form.Item>
+            )}
           </Col>
         ))}
       </Row>
     </div>
+  );
+}
+
+/** 把配方推荐值渲染成「默认 5」这样的提示，不改动控件本身。 */
+function DefaultValueHint({ param }: { param: ParamSpec }) {
+  const text = paramPlaceholder(param);
+  if (param.type === 'bool' || !text) return null;
+  return (
+    <Typography.Text type="secondary" className="param-default-hint">
+      默认 {text}
+    </Typography.Text>
+  );
+}
+
+/** 预检结果：按 level 分色，逐条给出 message 与可执行的 suggestion。 */
+export function PreflightList({ checks }: { checks: PreflightCheck[] }) {
+  if (checks.length === 0) return null;
+  return (
+    <ul className="preflight-list" data-testid="preflight-list">
+      {checks.map((check, index) => (
+        <li key={`${check.code}-${index}`} className={`dataset-issue dataset-issue-${check.level}`}>
+          <div>
+            <Typography.Text
+              strong
+              type={check.level === 'error' ? 'danger' : check.level === 'warning' ? 'warning' : undefined}
+            >
+              {check.message}
+            </Typography.Text>
+            <Typography.Text type="secondary" className="preflight-suggestion">
+              {check.suggestion}
+            </Typography.Text>
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -373,6 +465,9 @@ export function QuickStartPage() {
   const [datasetId, setDatasetId] = useState<string | null>(preselectedId ?? null);
   const [recipeId, setRecipeId] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<{ title: string; description: string } | null>(null);
+  // 预检结果：error 直接拦住，warning/info 交由用户在弹窗里确认
+  const [preflight, setPreflight] = useState<PreflightResponse | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
 
@@ -465,25 +560,32 @@ export function QuickStartPage() {
   const selectedRecipeId = selectedRecipe?.id ?? null;
   useEffect(() => {
     setSubmitError(null);
+    setPreflight(null);
   }, [selectedRecipeId]);
 
   const currentStep = !selectedDataset ? 0 : !selectedRecipe ? 1 : 2;
-  (window as unknown as { __form?: unknown }).__form = form;
   const canSubmit = Boolean(selectedDataset && selectedRecipe) && !submitting;
 
-  const handleSubmit = async () => {
-    if (!selectedDataset || !selectedRecipe) return;
-    const values = form.getFieldsValue() as { name?: string; priority?: Priority; params?: Record<string, unknown> };
-    const params = (values.params ?? {}) as Record<string, unknown>;
+  /** 组装 /runs 与 /runs/preflight 共用的请求体。 */
+  const buildPayload = (): RunRequest | null => {
+    if (!selectedDataset || !selectedRecipe) return null;
+    const values = form.getFieldsValue() as {
+      name?: string;
+      priority?: Priority;
+      params?: Record<string, unknown>;
+    };
     const payload: RunRequest = {
       recipe_id: selectedRecipe.id,
       dataset_id: selectedDataset.id,
-      overrides: buildOverrides(selectedRecipe, params),
+      overrides: buildOverrides(selectedRecipe, values.params),
       priority: values.priority ?? 'normal',
     };
     const name = (values.name ?? '').trim();
     if (name) payload.name = name;
+    return payload;
+  };
 
+  const submit = async (payload: RunRequest) => {
     setSubmitError(null);
     setSubmitting(true);
     try {
@@ -495,6 +597,57 @@ export function QuickStartPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  /**
+   * 「加入训练队列」：先预检，把问题挡在入队之前。
+   *   - 有 error → 页面顶部展示（含 suggestion），不提交；
+   *   - 只有 warning/info → 弹窗确认，确认后才真正提交；
+   *   - 预检接口本身失败 → 退化为直接提交，由后端在 /runs 里再拦一次。
+   */
+  const handleSubmit = async () => {
+    const payload = buildPayload();
+    if (!payload) return;
+    // 表单校验不通过时 input 自身已提示，这里只拦下提交
+    const invalid = form.getFieldsError().some((field) => field.errors.length > 0);
+    if (invalid) return;
+
+    setSubmitError(null);
+    setSubmitting(true);
+    let result: PreflightResponse | null = null;
+    try {
+      result = await api.preflightRun(payload);
+    } catch (reason) {
+      if (isUnauthorized(reason)) return;
+      // 预检不可用不阻塞训练：后端 create_run 内部同样会预检
+      result = null;
+    } finally {
+      setSubmitting(false);
+    }
+
+    if (!result) {
+      await submit(payload);
+      return;
+    }
+    const errors = result.checks.filter((check) => check.level === 'error');
+    if (!result.ok || errors.length > 0) {
+      setPreflight(result);
+      setSubmitError(describePreflightErrors(errors));
+      return;
+    }
+    const notes = result.checks.filter((check) => check.level !== 'error');
+    if (notes.length > 0) {
+      setPreflight(result);
+      setConfirming(true);
+      return;
+    }
+    await submit(payload);
+  };
+
+  const continueSubmit = async () => {
+    setConfirming(false);
+    const payload = buildPayload();
+    if (payload) await submit(payload);
   };
 
   const datasetEmpty = !loadingDatasets && !datasetError && filteredDatasets.length === 0;
@@ -528,11 +681,31 @@ export function QuickStartPage() {
           closable
           onClose={() => setSubmitError(null)}
           message={submitError.title}
-          description={submitError.description}
+          description={(
+            <div>
+              <div>{submitError.description}</div>
+              {preflight && <PreflightList checks={preflight.checks} />}
+            </div>
+          )}
           data-testid="submit-error"
           className="error-alert"
         />
       )}
+
+      <Modal
+        open={confirming}
+        title="预检发现一些提醒，仍要加入队列吗？"
+        okText="仍然提交"
+        cancelText="返回修改"
+        okButtonProps={{ loading: submitting }}
+        onOk={() => void continueSubmit()}
+        onCancel={() => setConfirming(false)}
+      >
+        <Typography.Paragraph type="secondary">
+          这些提醒不会阻止训练开始，但可能影响效果或排队时间。
+        </Typography.Paragraph>
+        {preflight && <PreflightList checks={preflight.checks} />}
+      </Modal>
 
       {/* ---- 第一步：数据集 ---- */}
       <Card
@@ -653,13 +826,6 @@ export function QuickStartPage() {
             </Col>
           </Row>
 
-          {selectedRecipe && (
-            <div data-testid="probe-native">
-              <Form.Item name="probe_plain" label="P1" initialValue="hello"><Input /></Form.Item>
-              <Form.Item name={['params', 'steps']} label="P2" initialValue={42}><InputNumber /></Form.Item>
-              <Form.Item name={['params', 'batch_size']} label="P3"><InputNumber /></Form.Item>
-            </div>
-          )}
           <Collapse
             ghost
             className="quickstart-advanced"
@@ -670,7 +836,12 @@ export function QuickStartPage() {
                   ? `高级参数（可选，共 ${paramCount} 项，默认使用配方推荐值）`
                   : '高级参数（该配方没有可调参数）',
                 children: selectedRecipe ? (
-                  <ParamsPanel key={selectedRecipe.id} recipe={selectedRecipe} />
+                  <ParamsPanel
+                    key={selectedRecipe.id}
+                    form={form}
+                    recipe={selectedRecipe}
+                    defaults={recipeInitialParams(selectedRecipe)}
+                  />
                 ) : (
                   <Typography.Text type="secondary">请先选择数据集和配方</Typography.Text>
                 ),

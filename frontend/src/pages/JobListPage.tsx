@@ -11,7 +11,7 @@ import { JobActions } from '../components/JobActions';
 import { PriorityTag, StatusTag } from '../components/StatusTag';
 import { usePolling } from '../hooks/usePolling';
 import type { Job, JobStatus, UserQuota } from '../types/api';
-import { formatDateTime, formatDuration } from '../utils/format';
+import { formatDateTime, formatDuration, formatQueueEta } from '../utils/format';
 
 const DEFAULT_PAGE_SIZE = 20;
 
@@ -115,6 +115,25 @@ export function JobListPage() {
             <br />
             <Typography.Text type="secondary">{`${nodes} 节点`}</Typography.Text>
           </span>
+        );
+      },
+    },
+    {
+      // v1.0：排队位置与预估等待。非排队任务显示 —，估算值统一带「约」
+      title: '排队位置',
+      dataIndex: 'queue_position',
+      key: 'queue_position',
+      width: 130,
+      render: (value: number | null | undefined, job) => {
+        if (job.status !== 'QUEUED' || value === null || value === undefined) {
+          return <Typography.Text type="secondary">—</Typography.Text>;
+        }
+        const eta = formatQueueEta(job.queue_eta_seconds, job.queue_eta_source);
+        return (
+          <Space direction="vertical" size={0}>
+            <Typography.Text strong>{`第 ${value} 位`}</Typography.Text>
+            <Typography.Text type="secondary" className="cell-secondary">{eta.text}</Typography.Text>
+          </Space>
         );
       },
     },

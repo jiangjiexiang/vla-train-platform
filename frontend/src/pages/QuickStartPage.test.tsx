@@ -6,8 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DatasetMeta, Recipe } from '../types/api';
 import { QuickStartPage, buildOverrides, describeSubmitError, isRecipeCompatible } from './QuickStartPage';
 
-let formRefOfTest: unknown = null;
-
 vi.mock('../api/client', async () => {
   const actual = await vi.importActual<typeof import('../api/client')>('../api/client');
   const api = {
@@ -15,6 +13,7 @@ vi.mock('../api/client', async () => {
     me: vi.fn(),
     listDatasets: vi.fn(),
     listRecipes: vi.fn(),
+    preflightRun: vi.fn(),
     createRun: vi.fn(),
   };
   return { ...actual, api };
@@ -23,6 +22,7 @@ vi.mock('../api/client', async () => {
 const { api, ApiError } = await import('../api/client');
 const listDatasetsMock = vi.mocked(api.listDatasets);
 const listRecipesMock = vi.mocked(api.listRecipes);
+const preflightRunMock = vi.mocked(api.preflightRun);
 const createRunMock = vi.mocked(api.createRun);
 
 function dataset(overrides: Partial<DatasetMeta> = {}): DatasetMeta {
@@ -128,6 +128,7 @@ beforeEach(() => {
   listDatasetsMock.mockReset();
   listRecipesMock.mockReset();
   createRunMock.mockReset();
+  preflightRunMock.mockReset();
   listDatasetsMock.mockImplementation(() => Promise.resolve({
     items: [READY, NOISY, BROKEN],
     summary: { total: 3, ready: 1, warning: 1, unusable: 1, total_frames: 1024000 },
@@ -135,6 +136,12 @@ beforeEach(() => {
   }));
   listRecipesMock.mockImplementation(() => Promise.resolve({ items: [SMOKE, SMOLVLA, OPENPI] }));
   createRunMock.mockImplementation(() => Promise.reject(new Error('unexpected createRun call')));
+  // 默认预检通过：无 error / 无提醒，直接提交
+  preflightRunMock.mockImplementation(() => Promise.resolve({
+    ok: true,
+    checks: [],
+    summary: { errors: 0, warnings: 0 },
+  }));
 });
 
 /** 等数据集与配方两次请求都落地：默认配方是列表里的第一个（与后端 order 排序一致）。 */
@@ -186,22 +193,15 @@ describe('QuickStartPage', () => {
 
     // 默认选中第一个兼容配方（smolvla）；改成冒烟测试验证选择会写进 payload
     fireEvent.click(screen.getByTestId('recipe-card-smoke-test'));
-    // 自定义一个任务名 + 高优先级
+    // 自定义任务名 + 高优先级
     fireEvent.change(screen.getByLabelText('任务名'), { target: { value: 'my-first-run' } });
     fireEvent.click(screen.getByText('高'));
 
-    // 高级参数展开后，配方默认值已经预填进表单（overrides 只为「改过」的参数生成）
+    // 展开高级参数：配方 defaults 已经预填，overrides 只为「改过」的参数生成
     fireEvent.click(screen.getByText(/高级参数/));
-    // 配方的 defaults 已经预填进参数表单（antd 表单初值经 rAF 落地，直接读 DOM）
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    });
-    const stepsInput = document.querySelector('[data-testid="param-steps"] input') as HTMLInputElement;
-    expect(stepsInput).not.toBeNull();
-    // 参数框以占位文案展示配方默认值（antd 的 Form 初值只落到 store，展开即可见）
-    expect(stepsInput.placeholder).toBe('5');
-    console.log('PROBE', JSON.stringify([...document.querySelectorAll('[data-testid="probe-native"] input')].map((i) => [(i as HTMLInputElement).value, i.id])), 'store', JSON.stringify((window as any).__form?.getFieldsValue(true)));
-    console.log('CHK value=', JSON.stringify(stepsInput.value), 'htmlLabel=', document.querySelector('[data-testid="param-steps"] label')?.getAttribute('for'), 'id=', stepsInput.id);
+    // 参数控件按配方模板渲染，并标出推荐值
+    expect((await screen.findByTestId('param-steps')).querySelector('input')).not.toBeNull();
+    expect(screen.getByText('默认 5')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /加入训练队列/ }));
 
@@ -211,7 +211,7 @@ describe('QuickStartPage', () => {
     expect(payload.dataset_id).toBe('pick1028');
     expect(payload.priority).toBe('high');
     expect(payload.name).toBe('my-first-run');
-    // 没改参数 → 不传 overrides 差异，交给后端用配方 defaults
+    // 没改参数 → 不带 overrides，交给后端用配方 defaults
     expect(payload.overrides).toEqual({});
     expect(payload.env).toBeUndefined();
     // 成功 → 跳到任务详情
@@ -269,6 +269,77 @@ describe('QuickStartPage', () => {
       expect(screen.queryByTestId('dataset-card-pick1028')).not.toBeInTheDocument();
       expect(screen.getByTestId('dataset-card-broken')).toBeInTheDocument();
     });
+  });
+});
+
+describe('QuickStartPage 提交前预检', () => {
+  async function pickAndSubmit() {
+    fireEvent.click(screen.getByTestId('dataset-card-pick1028'));
+    await screen.findByTestId('recipe-card-smolvla-finetune');
+    fireEvent.click(screen.getByRole('button', { name: /加入训练队列/ }));
+  }
+
+  it('预检有 error 时展示建议并阻止提交', async () => {
+    preflightRunMock.mockImplementation(() => Promise.resolve({
+      ok: false,
+      checks: [
+        {
+          level: 'error',
+          code: 'dataset_unusable',
+          message: '数据集 pick1028 不可用：缺少 meta/info.json',
+          suggestion: '按数据集页面的提示修复后重新扫描',
+        },
+      ],
+      summary: { errors: 1, warnings: 0 },
+    }));
+    renderPage();
+    await waitForReady();
+    await pickAndSubmit();
+
+    const alert = await screen.findByTestId('submit-error');
+    expect(within(alert).getByText('数据集不可用，先修好再训练')).toBeInTheDocument();
+    expect(within(alert).getByText(/修复后重新扫描/)).toBeInTheDocument();
+    expect(createRunMock).not.toHaveBeenCalled();
+    // 预检拿到了与提交一致的 payload
+    // 默认选中列表第一个配方（order 最小的 smoke-test）
+    expect(preflightRunMock).toHaveBeenCalledWith(expect.objectContaining({
+      recipe_id: 'smoke-test',
+      dataset_id: 'pick1028',
+    }));
+  });
+
+  it('只有 warning 时弹窗确认，确认后才提交', async () => {
+    preflightRunMock.mockImplementation(() => Promise.resolve({
+      ok: true,
+      checks: [{
+        level: 'warning',
+        code: 'few_episodes',
+        message: '只有 3 个 episode，样本偏少',
+        suggestion: '建议至少几十个 episode',
+      }],
+      summary: { errors: 0, warnings: 1 },
+    }));
+    createRunMock.mockImplementation(() => Promise.resolve({ name: 'smolvla-pick1028-002' } as never));
+    renderPage();
+    await waitForReady();
+    await pickAndSubmit();
+
+    expect(await screen.findByText('预检发现一些提醒，仍要加入队列吗？')).toBeInTheDocument();
+    expect(createRunMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '仍然提交' }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('任务详情页')).toBeInTheDocument();
+  });
+
+  it('预检接口不可用时不阻塞，直接提交', async () => {
+    preflightRunMock.mockImplementation(() => Promise.reject(new Error('preflight down')));
+    createRunMock.mockImplementation(() => Promise.resolve({ name: 'smolvla-pick1028-003' } as never));
+    renderPage();
+    await waitForReady();
+    await pickAndSubmit();
+
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
   });
 });
 

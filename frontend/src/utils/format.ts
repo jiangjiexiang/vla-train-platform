@@ -27,3 +27,21 @@ export function percent(used: number, total: number): number {
   if (total <= 0) return 0;
   return Math.min(100, Math.round((used / total) * 100));
 }
+
+/**
+ * 排队预估等待：返回 { text, approximate }。
+ * approximate=true 表示后端没有历史数据、走的是默认假设，文案要带「约」而不是确定倒计时。
+ */
+export function formatQueueEta(seconds: number | null | undefined, source?: string | null): {
+  text: string;
+  approximate: boolean;
+} {
+  if (seconds === null || seconds === undefined) return { text: '暂无法估算', approximate: true };
+  const approximate = !source || source === 'default';
+  if (seconds < 60) return { text: '不到 1 分钟', approximate };
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return { text: `${approximate ? '约 ' : ''}${minutes} 分钟`, approximate };
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return { text: `${approximate ? '约 ' : ''}${hours} 小时${rest ? ` ${rest} 分钟` : ''}`, approximate };
+}

@@ -1,4 +1,4 @@
-import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, HealthResponse, Job, JobEventsResponse, JobListResponse, JobLogs, JobStatus, LoginResponse, PlatformConfig, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, Recipe, RecipeListResponse, RunRequest, SubmitJobRequest, UserListResponse, ImageListResponse, ImageParamsResponse } from '../types/api';
+import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, HealthResponse, Job, JobDiagnosisResponse, JobEventsResponse, JobListResponse, JobLogs, JobMetricsResponse, JobStatus, LoginResponse, PlatformConfig, PreflightResponse, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, Recipe, RecipeListResponse, RunRequest, SubmitJobRequest, UserListResponse, ImageListResponse, ImageParamsResponse } from '../types/api';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE || '/api/v1').replace(/\/+$/, '');
 // ldap 模式下的会话令牌
@@ -180,9 +180,22 @@ export const api = {
   listRecipes: (signal?: AbortSignal) => request<RecipeListResponse>('/recipes', { signal }),
   getRecipe: (id: string, signal?: AbortSignal) =>
     request<Recipe>(`/recipes/${encodeURIComponent(id)}`, { signal }),
+  // 提交前预检：不创建任务，返回能否提交与问题清单。ok=false 时 /runs 也会以 422 拒绝
+  preflightRun: (payload: RunRequest) =>
+    request<PreflightResponse>('/runs/preflight', { method: 'POST', body: JSON.stringify(payload) }),
   // 201 返回新建的 Job；422 = 格式不兼容 / 数据集不可用 / 参数未知，409 = 任务名重复
   createRun: (payload: RunRequest) =>
     request<Job>('/runs', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // 训练指标（loss 曲线）。老任务没有 metrics.jsonl 时返回空 items + path_exists=false
+  getJobMetrics: (name: string, limit = 500, signal?: AbortSignal) =>
+    request<JobMetricsResponse>(
+      `/jobs/${encodeURIComponent(name)}/metrics?limit=${limit}`,
+      { signal },
+    ),
+  // 失败诊断；任务没失败时 diagnosis 为 null
+  getJobDiagnosis: (name: string, signal?: AbortSignal) =>
+    request<JobDiagnosisResponse>(`/jobs/${encodeURIComponent(name)}/diagnosis`, { signal }),
 };
 
 export function isAbortError(error: unknown): boolean {

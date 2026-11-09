@@ -1,14 +1,15 @@
-import { Alert, Button, Card, Col, Descriptions, Empty, List, Row, Space, Spin, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Col, Collapse, Descriptions, Empty, List, Row, Space, Spin, Tag, Typography } from 'antd';
 import { ArrowDownOutlined, ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, getErrorMessage, isAbortError } from '../api/client';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { JobActions } from '../components/JobActions';
+import { LossChart } from '../components/LossChart';
 import { PriorityTag, StatusTag } from '../components/StatusTag';
 import { usePolling } from '../hooks/usePolling';
-import type { Job, JobEventsResponse, JobLogs } from '../types/api';
-import { formatDateTime, formatDuration } from '../utils/format';
+import type { Job, JobDiagnosisResponse, JobEventsResponse, JobLogs, JobMetricsResponse } from '../types/api';
+import { formatDateTime, formatDuration, formatQueueEta } from '../utils/format';
 
 export function JobDetailPage() {
   const { name = '' } = useParams();
@@ -22,6 +23,10 @@ export function JobDetailPage() {
   const [eventsError, setEventsError] = useState<string | null>(null);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [following, setFollowing] = useState(true);
+  const [metrics, setMetrics] = useState<JobMetricsResponse | null>(null);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
+  const [diagnosis, setDiagnosis] = useState<JobDiagnosisResponse | null>(null);
+  const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
 
@@ -62,6 +67,28 @@ export function JobDetailPage() {
     }
   });
 
+  // 训练中随轮询自动刷新曲线；任务结束后指标文件不再变化，用 15 秒兜底
+  const refreshMetrics = usePolling(async (signal) => {
+    try {
+      const data = await api.getJobMetrics(name, 500, signal);
+      setMetrics(data);
+      setMetricsError(null);
+    } catch (reason) {
+      if (!isAbortError(reason)) setMetricsError(getErrorMessage(reason));
+    }
+  }, 10000);
+
+  // 诊断只在任务失败时有内容，接口本身在未失败时返回 diagnosis: null
+  const refreshDiagnosis = usePolling(async (signal) => {
+    try {
+      const data = await api.getJobDiagnosis(name, signal);
+      setDiagnosis(data);
+      setDiagnosisError(null);
+    } catch (reason) {
+      if (!isAbortError(reason)) setDiagnosisError(getErrorMessage(reason));
+    }
+  }, 30000);
+
   useEffect(() => {
     if (!followRef.current) return;
     const frame = requestAnimationFrame(() => {
@@ -88,7 +115,12 @@ export function JobDetailPage() {
     refreshJob();
     refreshLogs();
     refreshEvents();
+    refreshMetrics();
+    refreshDiagnosis();
   };
+
+  // 排队 ETA 只在这一个地方算，页面上多处引用同一结果，避免重复调用与不一致
+  const etaInfo = formatQueueEta(job?.queue_eta_seconds ?? null, job?.queue_eta_source ?? null);
 
   return (
     <div>
@@ -106,6 +138,50 @@ export function JobDetailPage() {
       <Spin spinning={jobLoading && !job}>
         {job ? (
           <>
+            {diagnosis?.diagnosis && (
+              <Alert
+                className="section-card"
+                type="error"
+                showIcon
+                message={diagnosis.diagnosis.summary}
+                description={(
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    <Typography.Text>{`建议：${diagnosis.diagnosis.suggestion}`}</Typography.Text>
+                    <Collapse
+                      ghost
+                      size="small"
+                      items={[{
+                        key: 'evidence',
+                        label: '查看原始证据',
+                        children: <pre className="env-display">{diagnosis.diagnosis.evidence || '—'}</pre>,
+                      }]}
+                    />
+                  </Space>
+                )}
+                data-testid="job-diagnosis"
+              />
+            )}
+            {diagnosisError && (
+              <ErrorAlert error={diagnosisError} onRetry={refreshDiagnosis} title="失败诊断加载失败" />
+            )}
+            {job.queue_state === 'queued' && job.queue_position !== null && job.queue_position !== undefined && etaInfo && (
+              <Alert
+                className="job-message"
+                type="info"
+                showIcon
+                // queue_position 的语义是「自己在队列中的位置」，队首为 1，
+                // 所以它前面的任务数是 position - 1。两种说法都显示，避免读者误解。
+                message={`排队中：排在第 ${job.queue_position} 位${
+                  job.queue_position > 1 ? `（前面还有 ${job.queue_position - 1} 个任务）` : '（下一个就是你）'
+                }，预计等待${etaInfo.text === '暂无法估算' ? '' : ' '}${etaInfo.text}`}
+                description={
+                  etaInfo.approximate
+                    ? '当前集群没有该配方的历史数据，等待时间按默认假设估算，仅供参考。'
+                    : undefined
+                }
+                data-testid="queue-position"
+              />
+            )}
             {job.message && (
               <Alert
                 className="job-message"
@@ -165,6 +241,31 @@ export function JobDetailPage() {
           </>
         ) : !jobLoading && !jobError ? <Empty description="未找到任务详情" /> : null}
       </Spin>
+
+      <Card
+        title="训练 Loss 曲线"
+        className="section-card"
+        extra={metrics && (
+          <Tag color={metrics.path_exists ? 'blue' : 'default'}>
+            {metrics.path_exists ? `${metrics.total_points} 个点${metrics.truncated ? '（仅显示最近部分）' : ''}` : '暂无数据'}
+          </Tag>
+        )}
+      >
+        <ErrorAlert error={metricsError} onRetry={refreshMetrics} title="训练指标加载失败" />
+        {metrics && metrics.items.length > 0 ? (
+          <LossChart points={metrics.items} />
+        ) : (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={metrics && !metrics.path_exists
+              ? '暂无训练指标（训练脚本还没有写出 metrics.jsonl）'
+              : '正在加载训练指标…'}
+          />
+        )}
+        <Typography.Paragraph type="secondary" className="chart-hint">
+          训练脚本把每步指标写入 /checkpoints/&lt;任务名&gt;/metrics.jsonl，平台从宿主机读取，任务结束后仍可查看。
+        </Typography.Paragraph>
+      </Card>
 
       <Card
         title="事件"

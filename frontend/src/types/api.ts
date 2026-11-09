@@ -113,6 +113,12 @@ export interface Job extends SubmitJobRequest {
   // v0.9：GPU 资源名，当前固定 nvidia.com/gpu
   gpu_type?: string;
   gpus_per_node?: number;
+  // v1.0：排队位置与预估等待（非排队任务为 null）
+  queue_position?: number | null;
+  queue_eta_seconds?: number | null;
+  // 估算依据；default 表示没有历史数据，前端要显示「约」
+  queue_eta_source?: 'recipe' | 'history' | 'default' | string | null;
+  queue_state?: QueueState | string;
 }
 
 export interface JobListResponse {
@@ -373,4 +379,56 @@ export interface RunRequest {
   overrides?: Record<string, unknown>;
   priority?: Priority;
   env?: Record<string, string>;
+}
+
+// ---- v1.0：提交前预检（backend/app/services/preflight.py）----
+
+export interface PreflightCheck {
+  level: 'error' | 'warning' | 'info' | string;
+  code: string;
+  message: string;
+  // 可执行的修复建议，前端必须展示
+  suggestion: string;
+}
+
+export interface PreflightResponse {
+  // false 表示有 error，后端会拒绝提交
+  ok: boolean;
+  checks: PreflightCheck[];
+  summary: { errors: number; warnings: number };
+}
+
+// ---- v1.0：排队位置与 ETA（backend/app/services/queue_est.py）----
+
+export type QueueState = 'queued' | 'admitted' | 'running' | 'finished';
+
+// ---- v1.0：训练指标与失败诊断 ----
+
+export interface MetricPoint {
+  step: number;
+  // 其余是训练脚本写入的数值字段（loss / lr / epoch ...）
+  [key: string]: number | string | undefined;
+}
+
+export interface JobMetricsResponse {
+  name: string;
+  items: MetricPoint[];
+  total_points: number;
+  truncated: boolean;
+  // false = 还没有 metrics.jsonl（老任务或刚开始的任务），不是错误
+  path_exists: boolean;
+}
+
+export interface JobDiagnosis {
+  code: string;
+  summary: string;
+  suggestion: string;
+  evidence: string;
+}
+
+export interface JobDiagnosisResponse {
+  name: string;
+  status: JobStatus | string;
+  // 任务没失败时为 null
+  diagnosis: JobDiagnosis | null;
 }

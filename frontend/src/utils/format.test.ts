@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { cloneName, formatDateTime, formatDuration, percent } from './format';
+import { cloneName, formatDateTime, formatDuration, formatQueueEta, percent } from './format';
 
 describe('formatDateTime', () => {
   it('returns an em dash for empty values', () => {
@@ -55,5 +55,23 @@ describe('cloneName', () => {
   it('appends a copy suffix and trims trailing dashes', () => {
     expect(cloneName('job-1')).toBe('job-1-copy');
     expect(cloneName(`${'a'.repeat(44)}--`)).toBe(`${'a'.repeat(44)}-copy`);
+  });
+});
+
+describe('formatQueueEta', () => {
+  it('没有历史数据时带「约」并标记 approximate', () => {
+    expect(formatQueueEta(1800, 'default')).toEqual({ text: '约 30 分钟', approximate: true });
+    expect(formatQueueEta(1800, null)).toEqual({ text: '约 30 分钟', approximate: true });
+  });
+
+  it('有历史数据时给出确定数值', () => {
+    expect(formatQueueEta(1800, 'history')).toEqual({ text: '30 分钟', approximate: false });
+  });
+
+  it('分钟/小时/未知三档', () => {
+    expect(formatQueueEta(30, 'recipe').text).toBe('不到 1 分钟');
+    expect(formatQueueEta(5400, 'recipe').text).toBe('1 小时 30 分钟');
+    expect(formatQueueEta(7200, 'recipe').text).toBe('2 小时');
+    expect(formatQueueEta(null, 'history').text).toBe('暂无法估算');
   });
 });

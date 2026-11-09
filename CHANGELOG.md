@@ -2,6 +2,69 @@
 
 本项目遵循语义化版本。每次大版本更新提交一次 commit 并打 tag，新条目追加到文件顶部。
 
+## [0.9.0] - 待发布
+
+生产化版本：多用户鉴权、按用户配额、多机训练接口与 Web 可用性边界。接口契约冻结在
+`CONTRACTS.md`。既有字段语义不变，v0.8 的历史库与老任务无需迁移。
+
+### 新增
+
+- **鉴权模式** `PLATFORM_AUTH_MODE`（`off` / `token` / `ldap`，默认 `token`，行为与 v0.8 一致）。
+  `PLATFORM_AUTH_REQUIRED=false` 等价于 `off`，同时设置时 `off` 优先，旧配置无需改动。
+- **LDAP/AD 登录**：`POST /auth/login` 用公司账号换平台会话令牌，`POST /auth/logout` 立即失效，
+  `GET /auth/me` 返回当前身份与生效配额。令牌有效期 `PLATFORM_SESSION_TTL_HOURS`（默认 12 小时），
+  服务端只存 SHA-256 哈希，LDAP 密码不下发、不落库；会话持久化在历史库中，Web 重启后仍有效。
+  LDAP 连接失败返回 503，不吞成 401。
+- **角色与任务归属**：`admin` 可查看所有用户任务并管理用户与配额；`user` 只能提交、查看与取消
+  自己的任务。任务对象新增 `owner` 字段，老任务回填为空串。
+- **按用户配额**：`GET /users`、`PUT /users/{username}/quota`；全局默认由
+  `PLATFORM_DEFAULT_MAX_GPUS` / `PLATFORM_DEFAULT_MAX_ACTIVE_JOBS` 控制，单用户覆盖存 SQLite
+  `user_quotas` 表。超限提交返回 422（`GPU quota exceeded: …` / `Active job quota exceeded: …`），
+  取消任务后额度立即释放；admin 同样受限。
+- **多机训练接口预留**：`POST /jobs` 新增 `nodes`、`gpus_per_node`、`labels`；任务对象新增
+  `labels`、`gpu_type`、`nodes`；`GET /config` 新增 `max_nodes`。`nodes > 1` 时 `gpus` 由
+  `nodes × gpus_per_node` 计算。首版默认 `PLATFORM_MAX_NODES=1`，此时 `nodes > 1` 返回 422
+  `multi-node training is not enabled`。
+- **label**：可选自由标签，写入 PyTorchJob 的 `vla-platform/user-label-*` 注解，不参与调度。
+- **Kueue 多机 profile**（`deploy/kueue/multi-node/`）：用 topology + nodeLabels 表达「每节点 1 卡、
+  一个任务跨 N 节点」；配套 `examples/submit-multi-node.sh` 与 `scripts/preflight.sh` 的多机检查项。
+- **smoke 多节点模式**：`images/smoke-train/train.py` 从 `MASTER_ADDR` / `MASTER_PORT` / `RANK` /
+  `WORLD_SIZE` 读 rendezvous 走 `env://`，并打印每个 rank 的 `HOSTNAME`、GPU 与 NCCL 初始化结果。
+- **Web 高可用边界**：`deploy/web/overlays/ha/`；`deploy/web/base/` 增加
+  `topologySpreadConstraints` 与 PodDisruptionBudget（不破坏单机部署）。
+- **网页**：登录页（`token` 模式填访问令牌，`ldap` 模式填账号密码）、`/users` 用户与配额管理页
+  （仅 admin）、提交页新增 `owner` 只读展示、`labels` 键值编辑器、多机选项与 GPU 剩余额度提示、
+  侧边栏按角色显示菜单与登出。
+
+### 改进
+
+- 401 的 JSON 形状保持不变（`Bearer token required` / `Invalid bearer token` + `WWW-Authenticate`），
+  既有路由从静态令牌平滑迁移到统一用户解析。
+- `submissions` 表以幂等 `ALTER TABLE` 增加 `owner` 列，旧库首次启动自动补齐；老任务与历史记录
+  缺字段时回填默认值，不抛 `ValidationError`。
+- 提交时按用户配额校验，计数口径为「K3s 实时任务 ∪ 历史中未取消的记录」，避免取消后额度残留。
+
+### 修复
+
+- LDAP 登录的失败语义：连接层错误返回 503，凭据错误才返回 401 `Invalid username or password`
+  （不区分用户不存在与密码错，避免枚举账号），两者可在客户端明确区分。
+
+### 文档
+
+- 新增 `docs/auth.md`：三种鉴权模式、LDAP 配置示例（OpenLDAP / AD）、配额分配、401 与 503 的
+  故障排查。
+- 新增 `docs/multi-node.md`：多机前置条件清单、Kueue topology 配置思路、rendezvous 来源、
+  NCCL 排查、性能预期与最小验证流程。
+- 新增 `docs/high-availability.md`：Web 可用性边界（SQLite 单写者）、备份恢复窗口与 RTO/RPO、
+  滚动升级与回滚步骤。
+- `docs/api.md`：补齐 `/auth/login`、`/auth/logout`、`/auth/me`、`/users`、
+  `PUT /users/{username}/quota` 的字段表与错误码；任务对象新增 `owner` / `labels` / `gpu_type` /
+  `nodes`；`POST /jobs` 新增字段与配额、多机错误码；`GET /config` 增加 `max_nodes`；新增 §10.2.1
+  说明 v0.9 部分的来源与待确认项。
+- `README.md`：新增「鉴权与用户」「多机训练」「高可用」三节，并在快速开始说明 `token` 与 `off`
+  模式的区别；故障速查表补充登录 401/503 与配额 422。
+- `PLAN.md`：阶段 F 标为「进行中」，把「暂不包含」中已纳入范围的 SSO/LDAP、按用户配额、多机
+  标注为 v0.9.0；API 初版契约补充新端点。
 ## [0.8.0] - 2026-11-09
 
 ### 更名

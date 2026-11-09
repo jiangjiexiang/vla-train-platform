@@ -2,7 +2,7 @@
 
 面向调用方（CLI、前端、脚本）的 HTTP API 说明。字段名与类型以线上 `GET /openapi.json` 和 `backend/app/api/routes.py` 为准；示例响应取自 4090 overlay 的真实返回（校验范围见 [§10](#10-附录文档来源与校验)）。
 
-- 仓库版本：`VERSION` = `0.5.0`
+- 仓库版本：`VERSION` = `0.8.0`；本文已并入 0.9.0 的鉴权/配额/多机字段（标注为「v0.9 新增」）
 - OpenAPI 文档版本：`info.version` = `1.0.0`（FastAPI 应用内声明）
 - 接口前缀：`/api/v1`
 
@@ -23,22 +23,36 @@
 
 ### 1.2 鉴权
 
-除 `/health` 外的所有端点都要求 `Authorization: Bearer <token>`。
+除 `/health` 与 `POST /auth/login` 外的所有端点都要求 `Authorization: Bearer <token>`。
+令牌由当前的**鉴权模式**决定（v0.9 新增 `PLATFORM_AUTH_MODE`，默认 `token`，与 v0.8 行为一致）：
+
+| 模式 | 触发方式 | 登录方式 | 当前用户 | 令牌来源 |
+| --- | --- | --- | --- | --- |
+| `off` | `PLATFORM_AUTH_MODE=off` 或 `PLATFORM_AUTH_REQUIRED=false` | 无 | `anonymous`（`admin`） | 不需要令牌 |
+| `token` | 默认 | 自带静态令牌 | `token`（`admin`） | 环境变量 `PLATFORM_API_TOKEN` |
+| `ldap` | `PLATFORM_AUTH_MODE=ldap` | `POST /auth/login` 用户名 + 密码 | LDAP `uid` | 登录签发的会话令牌 |
+
+`PLATFORM_AUTH_REQUIRED=false` 等价于 `PLATFORM_AUTH_MODE=off`；两者同时设置时 `off` 优先。
+配置项与用户/配额模型的完整说明见 [`auth.md`](auth.md)。
 
 | 项 | 说明 |
 | --- | --- |
 | 请求头 | `Authorization: Bearer <token>` |
-| Token 来源 | 服务端环境变量 `PLATFORM_API_TOKEN` |
-| 开关 | `PLATFORM_AUTH_REQUIRED`（默认 `true`）；为 `true` 时 `PLATFORM_API_TOKEN` 不得为空，否则进程启动失败 |
-| 校验方式 | 常量时间比较（`hmac.compare_digest`） |
-| 当前 4090 overlay | **鉴权关闭**：`GET /health` 返回 `"auth_required": false`，所有端点都不校验请求头，带了也不会报错 |
+| 令牌解析顺序（v0.9） | 先查会话表（LDAP 登录签发）；未命中且在 `token` 模式下再与 `PLATFORM_API_TOKEN` 做常数时间比较 |
+| 会话令牌有效期 | `PLATFORM_SESSION_TTL_HOURS`，默认 12 小时；服务端只存 SHA-256 哈希 |
+| 常量时间比较 | `hmac.compare_digest` |
+| `/health` 的 `auth_required` | `off` → `false`；`token` / `ldap` → `true` |
+| 当前 4090 overlay | 设置 `PLATFORM_AUTH_REQUIRED=false`：`GET /health` 返回 `"auth_required": false`，所有端点都不校验请求头，带了也不会报错 |
 
-鉴权开启时的失败响应：
+鉴权失败响应（形状与 v0.8 一致，未改变）：
 
 | 场景 | 状态码 | 响应体 | 响应头 |
 | --- | --- | --- | --- |
 | 未带 Token，或 scheme 不是 `bearer` | 401 | `{"detail":"Bearer token required"}` | `WWW-Authenticate: Bearer` |
-| Token 不匹配 | 401 | `{"detail":"Invalid bearer token"}` | `WWW-Authenticate: Bearer` |
+| Token 不匹配（会话表未命中且静态令牌不符） | 401 | `{"detail":"Invalid bearer token"}` | `WWW-Authenticate: Bearer` |
+| 登录接口用户名/密码错误 | 401 | `{"detail":"Invalid username or password"}` | — |
+| 登录接口 LDAP 不可达 | 503 | `{"detail":"..."}` | — |
+| `user` 角色调用 admin 端点 | 403 | `{"detail":"..."}` | — |
 
 > 当前部署鉴权关闭，以上 401 行为依据 `backend/app/auth.py`（未实测，**待确认**实际网关是否会先行拦截）。
 
@@ -80,6 +94,7 @@
 | 时间 | UTC，ISO 8601，秒级精度，固定 `YYYY-MM-DDTHH:MM:SSZ`（如 `2026-11-09T08:18:55Z`） |
 | 任务名 | 1–50 字符，仅小写字母、数字和内部连字符，且必须以字母或数字开头/结尾（`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`） |
 | 未知字段 | 请求体为 `extra="forbid"`：多传字段直接 422 |
+| 标签值 | `labels` 的键与值均须匹配 `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`，键值总长 ≤ 256 字节（v0.9 新增） |
 | 列表与分页 | `GET /jobs` 支持 `limit` / `offset` / `status` / `q`；默认不分页、全量返回 |
 | 布尔与 null | 字段可为 `null` 时按 `string \| null` 标注 |
 
@@ -90,8 +105,13 @@
 | 方法 | 路径 | 用途 | 成功状态码 | 鉴权 |
 | --- | --- | --- | --- | --- |
 | GET | `/health` | 存活与鉴权模式探测 | 200 | 否 |
-| GET | `/config` | 平台默认配置（镜像、命令、GPU、优先级） | 200 | 是 |
-| GET | `/jobs` | 任务列表（含已取消历史，支持过滤/分页） | 200 | 是 |
+| POST | `/auth/login` | 用户名 + 密码换取会话令牌（v0.9 新增） | 200 | 否 |
+| POST | `/auth/logout` | 使当前会话令牌失效（v0.9 新增） | 204 | 是 |
+| GET | `/auth/me` | 当前用户与生效配额（v0.9 新增） | 200 | 是 |
+| GET | `/users` | 用户列表与用量，仅 admin（v0.9 新增） | 200 | 是（admin） |
+| PUT | `/users/{username}/quota` | 设置单用户配额，仅 admin（v0.9 新增） | 200 | 是（admin） |
+| GET | `/config` | 平台默认配置（镜像、命令、GPU、优先级、多机上限） | 200 | 是 |
+| GET | `/jobs` | 任务列表（含已取消历史，支持过滤/分页；按角色过滤） | 200 | 是 |
 | POST | `/jobs` | 提交训练任务 | 201 | 是 |
 | GET | `/jobs/{name}` | 单个任务详情 | 200 | 是 |
 | DELETE | `/jobs/{name}` | 取消任务并删除工作负载 | 200 | 是 |
@@ -127,12 +147,19 @@
 | `pod_status` | string | **是** | Kubernetes Pod phase：`Pending` / `Running` / `Succeeded` / `Failed` / `Unknown`；无 Pod 或取消历史为 `null` |
 | `message` | string | 否 | 人类可读状态说明，如 `Cancelled by user`、`PyTorchJob qb is successfully completed.` |
 | `checkpoint_dir` | string | 否 | 固定为 `/checkpoints/<name>`，容器内对应可写挂载点 |
+| `owner` | string | 否 | 提交者用户名；v0.8 之前的老任务与历史记录无 owner，回填为 `""`（v0.9 新增） |
+| `labels` | object(string→string) | 否 | 提交时的自由标签，未指定为 `{}`；只写进 `vla-platform/user-label-*` 注解，不参与调度（v0.9 新增） |
+| `gpu_type` | string | 否 | 加速卡资源名，固定 `nvidia.com/gpu`（v0.9 新增） |
+| `nodes` | integer | 否 | 任务节点数；v0.9 固定为 `1`，多机预留字段（v0.9 新增） |
 
 补充说明：
 
 - `env` 里若客户端传入 `CHECKPOINT_DIR`，会被平台覆盖为 `/checkpoints/<name>`，不会出现在响应的 `env` 中。
 - 由取消历史合成的对象（Kubernetes 对象已删除）固定 `started_at: null`、`duration_seconds: null`、`pod_status: null`。
 - `duration_seconds`：`RUNNING` 时为「当前时间 − `started_at`」，终态时为「`finished_at` − `started_at`」，秒级取整；`started_at` 为 `null` 或状态为 `QUEUED` 时为 `null`。
+- `owner` 只用于展示与过滤，不参与调度；`user` 角色的任务列表只包含 `owner` 为自己的任务。
+- `labels` 的键值拼成 `vla-platform/user-label-<key>` 注解；键与值都不符合 `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`、或总长超过 256 字节时提交直接 422。
+- `nodes` 在 v0.9 恒为 `1`：多机调度落地前，提交 `nodes > 1` 会被拒绝（见 [§5.2](#52-post-jobs)）。
 - 删除一个**已终态**任务时，历史记录保留原状态（`SUCCEEDED` / `FAILED`），此时 `message` 为 `Deleted after the job finished with SUCCEEDED`，`workload_status` 为 `Finished`。
 
 ---
@@ -141,7 +168,7 @@
 
 ### 4.1 GET /health
 
-**用途**：存活探测，并返回当前是否强制鉴权。无参数、无请求体、不需要 Token。
+**用途**：存活探测，并返回当前是否强制鉴权。无参数、无请求体、不需要 Token。前端用它探测 `auth_required`，决定是否显示登录页。
 
 **响应 200**（实测）：
 
@@ -177,19 +204,24 @@
   "default_queue": "default",
   "priorities": ["low", "normal", "high"],
   "dataset_path": "/datasets",
-  "checkpoint_root": "/checkpoints"
+  "checkpoint_root": "/checkpoints",
+  "max_nodes": 1
 }
 ```
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `allowed_gpus` | array(integer) | 允许申请的 GPU 数集合，提交时 `gpus` 必须命中 |
+| `allowed_gpus` | array(integer) | 允许申请的 GPU 数集合，提交时 `gpus`（及多机的 `gpus_per_node`）必须命中 |
 | `default_image` | string | `image` 缺省值 |
 | `default_command` | string | `command` 缺省值 |
 | `default_queue` | string | 唯一可用队列名 |
 | `priorities` | array(string) | 允许的优先级枚举 |
 | `dataset_path` | string | 容器内只读数据集挂载点，固定 `/datasets` |
 | `checkpoint_root` | string | 容器内可写检查点根目录，固定 `/checkpoints` |
+| `max_nodes` | integer | 单任务允许的最大节点数，等于 `PLATFORM_MAX_NODES`，默认 `1`；`> 1` 时前端才显示多机选项（v0.9 新增） |
+
+`max_nodes` 反映的是**服务端能力**，不是客户端参数：值为 `1` 时，提交 `nodes > 1` 一定
+422。多机说明见 [`multi-node.md`](multi-node.md)。
 
 **常见错误**
 
@@ -199,11 +231,225 @@
 
 ---
 
+### 4.3 POST /auth/login （v0.9 新增）
+
+**用途**：用用户名 + 密码换取平台会话令牌。仅 `ldap` 模式有意义；`off` 模式不需要登录，
+`token` 模式使用静态令牌、不经过本接口。**本接口不需要 Authorization 头。**
+
+**请求体**（`Content-Type: application/json`）：
+
+| 字段 | 类型 | 必填 | 约束与说明 |
+| --- | --- | --- | --- |
+| `username` | string | **是** | 公司 LDAP/AD 账号；服务端套用 `PLATFORM_LDAP_USER_TEMPLATE` 拼出 DN |
+| `password` | string | **是** | 仅用于本次 LDAP 绑定，不下发、不落库、不写日志 |
+
+```json
+{"username": "alice", "password": "correct horse battery staple"}
+```
+
+**响应 200**：
+
+```json
+{
+  "token": "6d1f0c9a8f4b2e7d…（不透明随机串，约 43 字符）",
+  "expires_at": "2026-11-10T08:00:00Z",
+  "user": {"username": "alice", "role": "user", "source": "ldap"}
+}
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `token` | string | 会话令牌（不透明），后续请求放在 `Authorization: Bearer <token>` |
+| `expires_at` | string | 过期时间，UTC ISO 8601，秒级；有效期 = `PLATFORM_SESSION_TTL_HOURS`（默认 12 小时） |
+| `user.username` | string | LDAP 的 `uid`（AD 上为 `sAMAccountName`） |
+| `user.role` | string | `admin` / `user`；属于 `PLATFORM_LDAP_GROUP_DN_ADMIN` 组为 `admin` |
+| `user.source` | string | 固定 `ldap` |
+
+服务端只保存该令牌的 SHA-256 哈希；令牌在服务重启后仍然有效，登出后立即失效。
+
+**常见错误**
+
+| 状态码 | 场景 | `detail` |
+| --- | --- | --- |
+| 401 | 用户名不存在 **或** 密码错误（两者不区分，避免枚举账号） | `Invalid username or password` |
+| 503 | LDAP/AD 连接失败（网络、DNS、证书、多个 `PLATFORM_LDAP_URL` 均不可达） | 连接错误说明；**不会**被吞成 401 |
+| 422 | 缺少 `username` / `password` 或类型错误 | 校验错误数组 |
+
+> 401 与 503 的区分是排查关键：401 是凭据问题，503 是平台连不上目录服务。不要因为看到
+> 登录失败就反复重试密码，先看返回码。
+
+---
+
+### 4.4 POST /auth/logout （v0.9 新增）
+
+**用途**：使**当前请求所用**的会话令牌立即失效。请求体与查询参数均为空。
+
+| 项 | 说明 |
+| --- | --- |
+| 请求头 | `Authorization: Bearer <会话令牌>` |
+| 响应 204 | 无响应体 |
+| 幂等性 | 对已失效/已过期的令牌再次调用同样返回 204，不报错 |
+| 对静态令牌 | `token` 模式下使用 `PLATFORM_API_TOKEN` 调用时无会话可撤销，仍返回 204；静态令牌不会因此失效 |
+
+**常见错误**
+
+| 状态码 | 场景 |
+| --- | --- |
+| 401 | 鉴权开启但未带 Token 或令牌无法解析 |
+
+登出后，用同一令牌继续请求其他端点会得到 401 `Invalid bearer token`。
+
+---
+
+### 4.5 GET /auth/me （v0.9 新增）
+
+**用途**：返回当前身份与**生效配额**，供前端渲染侧边栏、登录态和剩余额度提示。
+
+**请求参数**：无。
+
+**响应 200**：
+
+```json
+{
+  "username": "alice",
+  "role": "user",
+  "source": "ldap",
+  "quotas": {"max_gpus": 4, "max_active_jobs": 2, "gpu_in_use": 1, "active_jobs": 1}
+}
+```
+
+| 字段 | 类型 | 可空 | 说明 |
+| --- | --- | --- | --- |
+| `username` | string | 否 | `off` → `anonymous`；`token` → `token`；`ldap` → LDAP `uid` |
+| `role` | string | 否 | `admin` / `user`；`off` 与 `token` 模式恒为 `admin` |
+| `source` | string | 否 | `off` / `token` / `ldap`，与 `role` 一起决定可见范围 |
+| `quotas` | object | 否 | 生效配额与当前用量（见下表） |
+| `quotas.max_gpus` | integer \| null | **是** | GPU 上限；`null` 表示不限 |
+| `quotas.max_active_jobs` | integer \| null | **是** | 非终态任务数上限；`null` 表示不限 |
+| `quotas.gpu_in_use` | integer | 否 | 该用户非终态任务（`QUEUED` + `RUNNING`）申请的 GPU 之和 |
+| `quotas.active_jobs` | integer | 否 | 该用户非终态任务数量 |
+
+> **待确认**：契约仅规定 `quotas` 为对象，其内部键名以 backend 实现为准；上表按「上限 +
+> 当前用量」组合整理。若实现只返回 `max_gpus` / `max_active_jobs`，用量请以
+> `GET /users` 的 `gpu_in_use` / `active_jobs` 为准。
+
+配额默认值来自 `PLATFORM_DEFAULT_MAX_GPUS` / `PLATFORM_DEFAULT_MAX_ACTIVE_JOBS`（留空 = 不限），
+单用户覆盖见 [§4.7](#47-put-usersusernamequota-v09-新增)。
+
+**常见错误**
+
+| 状态码 | 场景 |
+| --- | --- |
+| 401 | 鉴权开启且令牌缺失/无效/已过期 |
+
+---
+
+### 4.6 GET /users （v0.9 新增）
+
+**用途**：列出所有用户及其角色、最近活跃时间、当前资源占用与配额。**仅 `admin` 可调用。**
+
+**请求参数**：无（无分页；用户数为公司内使用平台的人数，量级很小）。
+
+**响应 200**：
+
+```json
+{
+  "items": [
+    {
+      "username": "alice",
+      "role": "user",
+      "source": "ldap",
+      "last_seen_at": "2026-11-09T08:12:00Z",
+      "active_jobs": 1,
+      "gpu_in_use": 1,
+      "quota": {"max_gpus": 4, "max_active_jobs": 2}
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 可空 | 说明 |
+| --- | --- | --- | --- |
+| `items` | array(object) | 否 | 用户数组 |
+| `items[].username` | string | 否 | 用户名 |
+| `items[].role` | string | 否 | `admin` / `user` |
+| `items[].source` | string | 否 | `off` / `token` / `ldap` |
+| `items[].last_seen_at` | string | **是** | 最近一次通过鉴权的时间，UTC ISO 8601；从未活跃为 `null` |
+| `items[].active_jobs` | integer | 否 | 非终态任务数（`QUEUED` + `RUNNING`） |
+| `items[].gpu_in_use` | integer | 否 | 非终态任务申请的 GPU 之和 |
+| `items[].quota` | object | 否 | 生效配额 |
+| `items[].quota.max_gpus` | integer \| null | **是** | `null` 表示不限 |
+| `items[].quota.max_active_jobs` | integer \| null | **是** | `null` 表示不限 |
+
+计数口径：K3s 中的实时任务 ∪ 历史中未取消的记录；任务取消后立即释放额度。
+
+**常见错误**
+
+| 状态码 | 场景 | `detail` |
+| --- | --- | --- |
+| 401 | 鉴权开启且令牌缺失/无效 | `Bearer token required` / `Invalid bearer token` |
+| 403 | 当前用户不是 `admin` | 权限不足说明 |
+
+---
+
+### 4.7 PUT /users/{username}/quota （v0.9 新增）
+
+**用途**：设置或清除单个用户的配额覆盖。**仅 `admin` 可调用。** 覆盖值存 SQLite 表
+`user_quotas`，优先于 `PLATFORM_DEFAULT_MAX_*` 全局默认。
+
+**路径参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `username` | string | 是 | 目标用户名（LDAP `uid`） |
+
+**请求体**
+
+| 字段 | 类型 | 必填 | 约束与说明 |
+| --- | --- | --- | --- |
+| `max_gpus` | integer \| null | 否 | 正整数，GPU 上限；`null` 表示对该用户**不限**（不回落到全局默认） |
+| `max_active_jobs` | integer \| null | 否 | 正整数，非终态任务数上限；`null` 同上 |
+
+```json
+{"max_gpus": 4, "max_active_jobs": 2}
+```
+
+**响应 200**：返回更新后的配额对象。
+
+```json
+{"username": "alice", "quota": {"max_gpus": 4, "max_active_jobs": 2}}
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `username` | string | 被修改的用户 |
+| `quota.max_gpus` | integer \| null | 新的 GPU 上限；`null` = 不限 |
+| `quota.max_active_jobs` | integer \| null | 新的任务数上限；`null` = 不限 |
+
+> **待确认**：契约只规定「仅 admin」与请求体，响应体结构以 backend 实现为准；最小保证是
+> 返回该用户更新后的 `quota`。
+
+**常见错误**
+
+| 状态码 | 场景 | `detail` |
+| --- | --- | --- |
+| 401 | 鉴权开启且令牌缺失/无效 | `Bearer token required` / `Invalid bearer token` |
+| 403 | 当前用户不是 `admin` | 权限不足说明 |
+| 404 | 用户不存在 | 用户不存在说明 |
+| 422 | `max_gpus` / `max_active_jobs` 不是正整数（如 `0`、负数、字符串） | 校验错误数组 |
+
+修改配额不会驱逐已在运行的任务，但会让该用户下一次提交受新上限约束；把上限调到低于当前
+用量时，已有任务继续运行，新的提交按「已用 + 本次请求」判断而被拒（见 [§5.2](#52-post-jobs)）。
+
+---
 ## 5. 任务端点
 
 ### 5.1 GET /jobs
 
 **用途**：列出训练任务（活跃任务 + 已取消的历史记录），按 `created_at` 倒序；支持按状态过滤、按名称搜索和分页。
+
+**可见范围（v0.9）**：`admin` 看到所有用户的任务；`user` 只看到 `owner` 为自己的任务。过滤在服务端完成，
+无法通过查询参数绕过，`total` 也按过滤后的范围计算。v0.8 之前的老任务 `owner` 为 `""`，`user` 角色看不到。
 
 **查询参数**（均可选）
 
@@ -326,6 +572,17 @@
 | `env` | object(string→string) | 否 | `{}` | 键需匹配 `^[A-Za-z_][A-Za-z0-9_]*$`，值不含 NUL；全部键值 UTF-8 合计不超过 65536 字节 |
 | `max_retries` | integer | 否 | `0` | 枚举 `0` / `1` / `2`，映射为 PyTorchJob `spec.backoffLimit`；`0` 时容器 `restartPolicy: Never`，否则 `OnFailure` |
 | `termination_grace_period_seconds` | integer | 否 | `30` | 1–600，取消后容器获得的退出时间 |
+| `labels` | object(string→string) | 否 | `{}` | v0.9 新增。键与值均须匹配 `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`，键值总长 ≤ 256 字节；写入 `vla-platform/user-label-<key>` 注解，不参与调度 |
+| `nodes` | integer | 否 | `1` | v0.9 新增。`1 <= nodes <= PLATFORM_MAX_NODES`（默认 1）；`nodes > 1` 且 `PLATFORM_MAX_NODES=1` 时 422 `multi-node training is not enabled` |
+| `gpus_per_node` | integer | 否 | — | v0.9 新增，多机预留。必须属于 `allowed_gpus`；配合 `nodes > 1` 使用 |
+
+**多机相关规则（v0.9）**
+
+- `nodes > 1` 时：`gpus = nodes * gpus_per_node`，`gpus` 可省略（服务端计算）。显式给出的 `gpus` 必须与计算结果一致。
+- `nodes = 1`（默认）时行为与 v0.8 完全一致：仍需显式传 `gpus`。
+- 首版仅支持单机，`PLATFORM_MAX_NODES` 默认 `1`，因此当前所有部署上 `nodes > 1` 都会被 422 拒绝。多机说明见 [`multi-node.md`](multi-node.md)。
+
+> 请求体为 `extra="forbid"`：`owner` 不能由客户端指定，它取自当前认证用户。
 
 > OpenAPI 中 `SubmitRequest.name` 只声明了 `minLength` / `maxLength`，上述正则由 Pydantic 校验器强制，因此 422 的 `type` 为 `value_error` 而非 `string_pattern_mismatch`。
 
@@ -352,7 +609,11 @@
   "workload_status": "Pending",
   "pod_status": null,
   "message": "Waiting for Kueue admission",
-  "checkpoint_dir": "/checkpoints/train-001"
+  "checkpoint_dir": "/checkpoints/train-001",
+  "owner": "alice",
+  "labels": {"team": "perception"},
+  "gpu_type": "nvidia.com/gpu",
+  "nodes": 1
 }
 ```
 
@@ -365,6 +626,11 @@
 | 422 | `queue` 非服务端配置队列 | `queue must be default` |
 | 422 | `gpus` 不在允许集合 | `gpus must be one of: 1` |
 | 422 | `command` / `env` 超过大小上限 | `command must not exceed 65536 bytes` |
+| 422 | GPU 配额不足（v0.9） | `GPU quota exceeded: 4 used of 4 allowed` |
+| 422 | 活跃任务数配额不足（v0.9） | `Active job quota exceeded: 2 of 2 allowed` |
+| 422 | 多机能力未开启（v0.9） | `multi-node training is not enabled` |
+| 422 | `labels` 键或值不合法、总长超 256 字节（v0.9） | 校验错误数组 |
+| 422 | `nodes` 超出 `1..PLATFORM_MAX_NODES`、`gpus_per_node` 不在允许集合（v0.9） | 校验错误数组 |
 | 422 | 字段缺失、类型错误、枚举越界、多余字段、名称非法 | 校验错误数组（见 [§1.3](#13-错误格式)） |
 | 503 / 502 | Kubernetes 不可用 / API 异常 | `Kubernetes API unavailable: ...` |
 
@@ -838,13 +1104,15 @@ Kubernetes 对象已删除的历史任务返回 `{"name": "<name>", "items": []}
 | --- | --- | --- | --- |
 | 200 | 成功 | — | GET / DELETE |
 | 201 | 已创建 | Job 对象 | POST /jobs、POST clone |
-| 401 | 未认证 | string | 鉴权开启时 Token 缺失或错误 |
-| 404 | 资源不存在 | string | 任务不存在、`/api/v1` 下未知路径 |
+| 204 | 成功且无返回体 | — | `POST /auth/logout`（v0.9） |
+| 401 | 未认证 | string | 鉴权开启时 Token 缺失或错误；登录用户名/密码错误 |
+| 403 | 无权限 | string | `user` 角色调用 `GET /users`、`PUT /users/{name}/quota`（v0.9） |
+| 404 | 资源不存在 | string | 任务不存在、`/api/v1` 下未知路径、`PUT /users/{name}/quota` 目标用户不存在 |
 | 409 | 冲突 | string | 同名任务已存在 |
-| 422 | 参数/请求体非法 | string 或 array | 队列/GPU 不允许、载荷过大、字段校验失败、名称非法 |
+| 422 | 参数/请求体非法 | string 或 array | 队列/GPU 不允许、载荷过大、字段校验失败、名称非法、配额超限、多机未开启、`labels` 非法 |
 | 500 | 未捕获异常 | string | 服务端内部错误（`internal server error`） |
 | 502 | 上游异常 | string | Kubernetes API 返回非 401/403/5xx 的错误 |
-| 503 | 依赖不可用 | string | Kubernetes 配置/连接失败、LocalQueue/ClusterQueue 缺失 |
+| 503 | 依赖不可用 | string | Kubernetes 配置/连接失败、LocalQueue/ClusterQueue 缺失、LDAP 连接失败（v0.9） |
 
 ---
 
@@ -860,6 +1128,29 @@ export BASE=http://127.0.0.1:30080/api/v1
 ```bash
 curl -fsS "$BASE/health"
 # {"status":"ok","auth_required":false}
+```
+
+**1.1）登录并查看当前身份（v0.9，`ldap` 模式）**
+
+```bash
+# 用户名 + 密码换会话令牌；off/token 模式下跳过这一步
+TOKEN=$(curl -fsS -X POST "$BASE/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d '{"username": "alice", "password": "***"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
+
+curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE/auth/me"
+# {"username":"alice","role":"user","source":"ldap","quotas":{...}}
+
+# 管理员：查看用户与配额、调整配额
+curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE/users"
+curl -fsS -X PUT "$BASE/users/alice/quota" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"max_gpus": 4, "max_active_jobs": 2}'
+
+# 用完登出，令牌立即失效
+curl -fsS -o /dev/null -w '%{http_code}\n' -X POST \
+  -H "Authorization: Bearer $TOKEN" "$BASE/auth/logout"
+# 204
 ```
 
 **2）查看平台默认值**
@@ -952,7 +1243,7 @@ print(json.dumps(app.openapi(), ensure_ascii=False, indent=2))
 " > /tmp/openapi.json
 ```
 
-生成成功：9 个路径、11 个操作，`components.schemas` 含 `SubmitRequest`、`CloneRequest`、`JobStatus`、`HTTPValidationError`、`ValidationError`。
+生成成功（v0.8 基线）：9 个路径、11 个操作，`components.schemas` 含 `SubmitRequest`、`CloneRequest`、`JobStatus`、`HTTPValidationError`、`ValidationError`。
 
 分页功能部署到 30080 后（2026-11-09 17:05 CST）重新生成并对比：线上 `/openapi.json` 的 `paths`（含 `GET /jobs` 的 `limit` / `offset` / `status` / `q` 四个查询参数）、`components.schemas` 与本地生成结果**完全一致**，说明部署版本与工作区源码同步，本文描述即为线上行为。
 
@@ -984,6 +1275,33 @@ print(json.dumps(app.openapi(), ensure_ascii=False, indent=2))
 | `DELETE /jobs/{name}` | ❌ 未执行 | 会影响他人任务；返回结构取自真实取消历史 |
 | `POST /jobs/{name}/clone` | ❌ 未执行 | 会产生新任务 |
 
+### 10.2.1 v0.9 新增部分的来源
+
+`/auth/login`、`/auth/logout`、`/auth/me`、`/users`、`PUT /users/{username}/quota`、任务对象的
+`owner` / `labels` / `gpu_type` / `nodes`、`GET /config` 的 `max_nodes`，均依据
+`CONTRACTS.md` 的 v0.9 段编写，**尚未实测**：编写时 backend 分区的新代码未合并，
+线上仍是 v0.8。
+
+编写时已核对、且以源码为准的部分：
+
+| 项 | 依据 |
+| --- | --- |
+| `/health` 的 `auth_required` 字段与取值类型 | `backend/app/api/routes.py::health` |
+| 401 两种 `detail` 文案与 `WWW-Authenticate: Bearer` 头 | `backend/app/auth.py::require_token`（v0.8 现状，v0.9 要求保持形状不变） |
+| 老任务无 `owner` 时回填空串、不做迁移 | 契约 1.6；`backend/app/history.py` 的 `ALTER TABLE` 幂等迁移方式 |
+| 422 配额文案 `GPU quota exceeded: N used of M allowed` | 契约 1.5（固定格式） |
+| 后端与 LDAP 不可达的 503 语义 | 契约 2 第 3 条（连接失败不得吞成 401） |
+
+显式标注为**待确认**的点：
+
+- `GET /auth/me` 的 `quotas` 内部键名（契约只规定“对象”）；
+- `PUT /users/{username}/quota` 的完整响应体（契约只规定“仅 admin”与请求体）；
+- `user` 角色访问他人任务详情时的状态码（404 还是 403）；
+- `GET /users` 与 `PUT /users/{name}/quota` 在非 admin 时的确切 403 `detail` 文案。
+
+新端点上线后，建议用 §10.1 的方法重新生成 `openapi.json` 补齐上表，并把这些项从“待确认”
+移入“实测范围”。
+
 ### 10.3 未实测、依据源码的结论（待确认）
 
 | 项 | 依据 |
@@ -992,10 +1310,14 @@ print(json.dumps(app.openapi(), ensure_ascii=False, indent=2))
 | 409 同名冲突文案 `job <name> already exists` | `backend/app/services/platform.py::submit` |
 | 503 `Kueue LocalQueue/ClusterQueue ... not found` | `platform.py::queues`；当前环境队列正常 |
 | 502 语义（K8s 非 401/403/5xx 错误） | `backend/app/services/kubernetes.py::_call` |
+| v0.9 会话令牌的 204 登出、401 `Invalid username or password`、503 连接失败 | `CONTRACTS.md` 1.3；新代码未合并，无法实测 |
 
 ### 10.4 已知文档边界
 
 - `GET /jobs` 默认返回全部任务（不传 `limit` 即不分页），任务量大时建议显式传 `limit`/`offset`；`offset` 只在同时传 `limit` 时生效。
 - 单队列限制：`queue` 必须等于服务端 `PLATFORM_QUEUE`，多队列部署需先改服务端。
 - `GET /queues` 的 `pending` / `admitted` 回退值基于命名空间全部 Workload，多队列时含义会偏移（**待确认**）。
+- 用户与配额：`user` 角色看不到别人提交的任务；v0.8 之前的老任务 `owner` 为 `""`，只有 `admin` 能看到。
+- 多机：`nodes > 1` 受服务端 `PLATFORM_MAX_NODES` 控制，默认 `1` 时一律 422；任务对象的 `nodes` 在 v0.9 恒为 `1`。
+- `GET /users` 无分页参数，用户量极大时需先在服务端加分页。
 - 日志接口仅支持 tail，不支持 `follow`、时间范围、指定容器。

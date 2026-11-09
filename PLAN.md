@@ -55,8 +55,13 @@
 ### 3.3 暂不包含
 
 - Notebook、Web SSH、网页文件上传。
-- 多用户权限、SSO/LDAP、按用户配额。
-- 多机训练、控制平面高可用。
+- ~~多用户权限、SSO/LDAP、按用户配额。~~ v0.9.0 起纳入范围（阶段 F，进行中）：三种鉴权模式（`off` / `token` / `ldap`）、
+  `admin` / `user` 角色、按用户 GPU 与活跃任务数配额、`/users` 管理页。见 `docs/auth.md`。
+- ~~多机训练~~ v0.9.0 起纳入范围（阶段 F，进行中）：先落接口与校验（`nodes` / `gpus_per_node`、`PLATFORM_MAX_NODES`），
+  调度落地见 `deploy/kueue/multi-node/`，说明见 `docs/multi-node.md`；默认仍关闭。
+- ~~控制平面高可用~~ v0.9.0 只覆盖 Web 层（阶段 F，进行中）：PDB、拓扑分布约束、明确的 `Recreate` 停服窗口与
+  备份恢复口径（`docs/high-availability.md`）。SQLite 单写者未解决，**Web 多副本与 K3s 控制平面
+  多 Server 仍不在范围内**。
 - 自动调参、模型注册、完整 MLOps。
 - 复杂抢占、弹性训练和自动故障恢复。
 
@@ -194,6 +199,29 @@ vla-train-platform/
 5. 训练重启后能从 checkpoint 恢复。
 6. 自有 VLA 代码完成一次小规模 8 卡训练。
 
+### 阶段 F：生产化（v0.9）—— 进行中
+
+目标：在不改变既有字段语义的前提下，补齐多用户、配额、多机接口与 Web 可用性边界。
+接口契约冻结在 `CONTRACTS.md`。
+
+| # | 交付项 | 负责分区 | 状态 |
+|---|---|---|---|
+| 1 | 鉴权模式 `off` / `token` / `ldap`，LDAP/AD 登录与平台会话令牌 | backend | 进行中 |
+| 2 | 角色（`admin` / `user`）与任务可见范围、`owner` 字段 | backend + frontend | 进行中 |
+| 3 | 按用户配额（`max_gpus` / `max_active_jobs`）与 `/users` 管理页 | backend + frontend | 进行中 |
+| 4 | 多机字段 `nodes` / `gpus_per_node`、`labels`、Kueue topology profile、多节点 smoke | backend + multinode | 进行中 |
+| 5 | Web 高可用边界：PDB、拓扑分布、`Recreate` 窗口、备份恢复口径 | multinode | 进行中 |
+| 6 | 文档：`docs/auth.md`、`docs/multi-node.md`、`docs/high-availability.md`、`docs/api.md` 补齐 | deploy-docs | 进行中 |
+
+验收口径（合并后由主 Agent 在 4090 上执行并记录到 `docs/acceptance-4090.md`）：
+
+1. 三种模式都能启动，`/health` 的 `auth_required` 与模式一致；老令牌行为不变。
+2. LDAP 登录成功签发会话令牌，Web 重启后仍有效；登出后立即 401；LDAP 不可达返回 503 而非 401。
+3. `user` 角色只看到自己的任务；跨用户访问不越权；非 admin 调用用户管理接口被拒。
+4. 配额超限提交返回 422 与固定文案，取消任务后额度立即释放；admin 同样受限。
+5. `PLATFORM_MAX_NODES=1` 时 `nodes > 1` 返回 422 `multi-node training is not enabled`。
+6. Web 升级/重建期间运行中的训练不中断，历史记录完整。
+
 ## 7. API 初版契约
 
 - POST /api/v1/jobs：提交任务。
@@ -204,7 +232,14 @@ vla-train-platform/
 - POST /api/v1/jobs/{name}/clone：按原参数重新提交。
 - GET /api/v1/cluster/summary：GPU 与任务统计。
 - GET /api/v1/queues：Kueue 队列和工作负载。
-- GET /api/v1/config：允许的 GPU 数、默认镜像、路径和优先级。
+- GET /api/v1/config：允许的 GPU 数、默认镜像、路径、优先级和多机上限 `max_nodes`。
+
+v0.9 新增（见 `CONTRACTS.md` 的 v0.9 段）：
+
+- POST /api/v1/auth/login、POST /api/v1/auth/logout、GET /api/v1/auth/me：LDAP 登录与身份查询。
+- GET /api/v1/users、PUT /api/v1/users/{username}/quota：用户列表与按用户配额（仅 admin）。
+- 任务对象新增 `owner`、`labels`、`gpu_type`、`nodes`；`POST /jobs` 新增 `labels`、`nodes`、
+  `gpus_per_node`。
 
 所有变更操作要求访问令牌；日志接口限制输出大小，避免拖垮网页。
 

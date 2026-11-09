@@ -583,6 +583,14 @@ class PlatformService:
             "logs": self.kubernetes.read_pod_log(pod_name, tail_lines),
         }
 
+    def job_checkpoints(self, name: str, spec_owner: str | None = None) -> dict[str, Any]:
+        """列出某个任务写出的 checkpoint 文件。"""
+        del spec_owner  # 归属校验由路由层统一做
+        from .checkpoints import list_checkpoints
+
+        result = list_checkpoints(self.settings.checkpoint_host_path, name)
+        return {"name": name, **result}
+
     def job_timeline(self, name: str) -> dict[str, Any]:
         """作业阶段时间轴：已提交 → 已入队 → 已准入 → 拉镜像 → 启动 → 训练 → 结束。"""
         from .timeline import build_timeline

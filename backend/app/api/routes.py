@@ -282,6 +282,21 @@ def job_logs(
     return service.logs(name, tail_lines or settings.log_tail_default)
 
 
+@router.get("/jobs/{name}/checkpoints")
+def job_checkpoints(
+    name: JobName,
+    user: AuthContext = Depends(require_user),
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    """训练产出的 checkpoint 文件列表。
+
+    任务可能已从集群清理但产物还在，因此这里只校验任务可见性（历史记录），
+    不要求 K8s 对象仍存在。
+    """
+    _ensure_visible(user, service.get_job(name))
+    return service.job_checkpoints(name)
+
+
 @router.get("/jobs/{name}/timeline")
 def job_timeline(
     name: JobName,

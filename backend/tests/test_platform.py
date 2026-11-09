@@ -356,12 +356,15 @@ def test_cluster_summary_counts_only_live_pods(service, kube):
     ]
     service.submit(make_spec())
     add_pod(kube, "exp001", phase="Running", node_name="node1")
+    # 本用例要验证「Pod 结束后不再计入」，需要绕过 2 秒的摘要缓存
+    service._cluster_cache = None
     summary = service.cluster_summary()
     assert summary["gpu_total"] == 1
     assert summary["gpu_allocated"] == 1
     assert summary["nodes"][0]["ready"] is True
 
     kube.pods[0]["status"]["phase"] = "Succeeded"
+    service._cluster_cache = None
     assert service.cluster_summary()["gpu_allocated"] == 0
 
 
@@ -641,3 +644,51 @@ def test_list_jobs_q_is_case_insensitive_and_matches_cancelled_history(service, 
     assert job_names(service.list_jobs(q="CANCELLED")) == ["exp-cancelled-run"]
     assert job_names(service.list_jobs(q="LIVE")) == ["exp-live-run"]
     assert set(job_names(service.list_jobs(q="EXP-"))) == {"exp-cancelled-run", "exp-live-run"}
+
+def test_cluster_summary_is_cached_within_ttl(service, kube):
+    """2 秒内重复调用不应重复打 K8s API——总览页轮询与预检都会频繁读它。"""
+    kube.nodes = [
+        {
+            "metadata": {"name": "node1"},
+            "status": {"allocatable": {"nvidia.com/gpu": "1"}, "conditions": [{"type": "Ready", "status": True}]},
+        }
+    ]
+    calls = {"n": 0}
+    original = kube.list_nodes
+
+    def counting():
+        calls["n"] += 1
+        return original()
+
+    kube.list_nodes = counting
+
+    first = service.cluster_summary()
+    second = service.cluster_summary()
+
+    assert calls["n"] == 1
+    assert first == second
+    # 返回的是副本，调用方修改不能污染缓存
+    second["gpu_total"] = 999
+    assert service.cluster_summary()["gpu_total"] == 1
+
+
+def test_cluster_summary_ttl_zero_disables_cache(service, kube, settings):
+    """TTL=0 时必须每次都重新读（便于排查问题）。"""
+    cached_service = type(service)(
+        type(settings)(**{**settings.__dict__, "cluster_summary_ttl": 0.0}),
+        service.history,
+        kube,
+    )
+    calls = {"n": 0}
+    original = kube.list_nodes
+
+    def counting():
+        calls["n"] += 1
+        return original()
+
+    kube.list_nodes = counting
+    cached_service.cluster_summary()
+    cached_service.cluster_summary()
+
+    assert calls["n"] == 2
+

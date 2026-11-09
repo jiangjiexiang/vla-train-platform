@@ -49,6 +49,8 @@ class Settings:
     # concurrent dashboard polls queue up behind it. A short cache keeps p95
     # flat without making the numbers visibly stale.
     gpu_metrics_ttl: float = 2.0
+    # 集群总览缓存。总览页轮询与提交前预检都会读它，加短 TTL 挡掉重复调用。
+    cluster_summary_ttl: float = 2.0
     static_dir: str = str(Path(__file__).resolve().parent.parent / "static")
 
     def __post_init__(self) -> None:
@@ -119,6 +121,9 @@ class Settings:
             kubeconfig=os.environ.get("PLATFORM_KUBECONFIG") or None,
             log_tail_default=log_tail,
             gpu_metrics_url=os.environ.get("PLATFORM_GPU_METRICS_URL", "http://vla-gpu-metrics:8080/"),
+            cluster_summary_ttl=_parse_nonnegative_float(
+                os.environ.get("PLATFORM_CLUSTER_SUMMARY_TTL", "2.0"), "PLATFORM_CLUSTER_SUMMARY_TTL"
+            ),
             gpu_metrics_ttl=_parse_nonnegative_float(
                 os.environ.get("PLATFORM_GPU_METRICS_TTL", "2.0"), "PLATFORM_GPU_METRICS_TTL"
             ),

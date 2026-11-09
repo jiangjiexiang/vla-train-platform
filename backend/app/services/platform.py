@@ -65,6 +65,10 @@ class PlatformService:
         self.audit = AuditStore(settings.db_path)
         # 当前操作者，由 API 层在每个请求开始时设置（审计用）
         self._current_actor = "anonymous"
+        # 集群摘要缓存：预检与总览页都会读它，频繁点击时不该每次都打 K8s API。
+        # TTL 很短（2 秒），用户看到的数字仍然接近实时。
+        self._cluster_cache: tuple[float, dict[str, Any]] | None = None
+        self._cluster_lock = threading.Lock()
         self._metrics_cache: tuple[float, dict[str, Any]] | None = None
         self._metrics_lock = threading.Lock()
         self._submit_lock = threading.Lock()
@@ -630,6 +634,26 @@ class PlatformService:
         return {"name": name, "items": items}
 
     def cluster_summary(self) -> dict[str, Any]:
+        """集群总览（带 2 秒 TTL 缓存）。
+
+        总览页每 4 秒轮询、预检每次点击都会调一次；不打缓存的话一次提交前预检
+        就可能触发 3-4 次 K8s API 调用。缓存时间远小于页面的轮询周期，
+        用户感知不到延迟，但能把重复调用挡掉。
+        """
+        ttl = self.settings.cluster_summary_ttl
+        if ttl > 0:
+            with self._cluster_lock:
+                cached = self._cluster_cache
+                if cached is not None and (time.monotonic() - cached[0]) < ttl:
+                    # 返回副本，避免调用方修改缓存内容
+                    return copy.deepcopy(cached[1])
+        result = self._cluster_summary_uncached()
+        if ttl > 0:
+            with self._cluster_lock:
+                self._cluster_cache = (time.monotonic(), copy.deepcopy(result))
+        return result
+
+    def _cluster_summary_uncached(self) -> dict[str, Any]:
         nodes = self.kubernetes.list_nodes()
         cluster_pods = self.kubernetes.list_training_pods()
         allocated_by_node: dict[str, int] = {}

@@ -220,3 +220,52 @@ def test_audit_detail_is_json_serializable(client):
     item = client.get("/api/v1/audit").json()["items"][0]
 
     json.dumps(item["detail"])  # 不应抛异常
+
+def test_anonymous_actor_records_client_ip(client):
+    """免登录模式下所有人都是 anonymous，审计要退而记录来源 IP。
+
+    否则「谁取消了任务」这个问题永远无法回答，审计形同虚设。
+    """
+    client.post(
+        "/api/v1/jobs",
+        json={"name": "ip-1", "image": "x", "gpus": 1, "command": "true"},
+        headers={"X-Forwarded-For": "10.1.2.3, 10.0.0.1"},
+    )
+
+    item = next(i for i in client.get("/api/v1/audit").json()["items"] if i["target"] == "ip-1")
+
+    # 免登录模式下必须带来源，便于追溯；TestClient 的默认 host 是 "testclient"
+    assert item["actor"].startswith("anonymous@")
+    assert len(item["actor"]) > len("anonymous@")
+
+
+def test_actor_uses_username_when_authenticated():
+    """有真实用户名时用用户名，不加 IP 后缀。"""
+    from app.auth import AuthContext, _actor_label
+
+    class FakeClient:
+        host = "10.9.9.9"
+
+    class FakeRequest:
+        headers: dict = {}
+        client = FakeClient()
+
+    user = AuthContext(username="alice", role="user", source="ldap")
+
+    assert _actor_label(FakeRequest(), user) == "alice"
+
+
+def test_actor_falls_back_to_client_host():
+    from app.auth import AuthContext, _actor_label
+
+    class FakeClient:
+        host = "172.16.1.5"
+
+    class FakeRequest:
+        headers: dict = {}
+        client = FakeClient()
+
+    anonymous = AuthContext(username="anonymous", role="admin", source="off")
+
+    assert _actor_label(FakeRequest(), anonymous) == "anonymous@172.16.1.5"
+

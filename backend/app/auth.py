@@ -192,6 +192,22 @@ def format_time(value: datetime | None) -> str | None:
     return value.astimezone(tz=None).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _actor_label(request: Request, user: AuthContext) -> str:
+    """审计里记录的操作者标识。
+
+    免登录模式下所有人都是 anonymous，审计就失去意义。此时退而记录来源 IP，
+    让「谁在什么时候做了什么」至少能追溯到机器。开了认证则用真实用户名。
+    """
+    if user.username and user.username != "anonymous":
+        return user.username
+    # X-Forwarded-For 可能是一串，第一个是真实客户端
+    forwarded = request.headers.get("x-forwarded-for") or ""
+    client = forwarded.split(",")[0].strip()
+    if not client:
+        client = request.client.host if request.client else ""
+    return f"anonymous@{client}" if client else "anonymous"
+
+
 def set_actor(
     request: Request,
     user: AuthContext = Depends(require_user),
@@ -206,7 +222,7 @@ def set_actor(
     """
     service = getattr(request.app.state, "service", None)
     if service is not None:
-        service.current_actor = user.username
+        service.current_actor = _actor_label(request, user)
     return user
 
 
@@ -217,5 +233,5 @@ def set_admin_actor(
     """admin 专用：先校验管理员身份，再记录操作者。"""
     service = getattr(request.app.state, "service", None)
     if service is not None:
-        service.current_actor = admin.username
+        service.current_actor = _actor_label(request, admin)
     return admin

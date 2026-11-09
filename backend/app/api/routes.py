@@ -12,6 +12,7 @@ from ..auth import (
     may_access_job,
     require_admin,
     require_user,
+    set_actor,
     set_admin_actor,
 )
 from ..config import Settings
@@ -210,7 +211,7 @@ def list_images(service: PlatformService = Depends(get_service)) -> dict[str, An
 @router.post("/jobs", status_code=201)
 def submit_job(
     request_model: SubmitRequest,
-    user: AuthContext = Depends(require_user),
+    user: AuthContext = Depends(set_actor),
     service: PlatformService = Depends(get_service),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
@@ -251,7 +252,7 @@ def get_job(
 @router.delete("/jobs/{name}")
 def cancel_job(
     name: JobName,
-    user: AuthContext = Depends(require_user),
+    user: AuthContext = Depends(set_actor),
     service: PlatformService = Depends(get_service),
 ) -> dict[str, Any]:
     _ensure_visible(user, service.get_job(name))
@@ -262,7 +263,7 @@ def cancel_job(
 def clone_job(
     request_model: CloneRequest,
     name: JobName,
-    user: AuthContext = Depends(require_user),
+    user: AuthContext = Depends(set_actor),
     service: PlatformService = Depends(get_service),
 ) -> dict[str, Any]:
     _ensure_visible(user, service.get_job(name))

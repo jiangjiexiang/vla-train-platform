@@ -112,9 +112,11 @@ class PlatformService:
             # Record history only after the Kubernetes object exists, so a rejected
             # or failed create cannot leave a phantom submission behind.
             self.history.record_submission(spec, submitted_at)
+        # 审计记「谁触发的」，与任务归属 owner 是两个概念：
+        # 免登录模式下 owner 恒为 anonymous，但审计要能追溯到来源。
         self.audit.record(
             "job.submit",
-            actor=spec.owner or "anonymous",
+            actor=self._current_actor,
             target=spec.name,
             detail={"image": spec.image, "gpus": spec.gpus, "priority": spec.priority},
         )

@@ -129,7 +129,26 @@ rm -f /tmp/vla-platform-web.tar /tmp/vla-smoke.tar
 BUILD_IMAGE=0 PROFILE=4090 bash scripts/deploy-web.sh
 ```
 
+> `deploy-web.sh` 内部需要 root（`k3s ctr` / `kubectl`），会用 `sudo`。在**非交互**场景（脚本、CI、
+> 自动化 agent）直接调用会报 `sudo: a terminal is required`，需要提前把密码喂给 `sudo -S`：
+>
+> ```bash
+> echo "$SUDO_PASSWORD" | sudo -S -p '' env PROFILE=4090 BUILD_IMAGE=0 bash scripts/deploy-web.sh
+> ```
+>
+> 交互式 shell 里 `sudo bash scripts/deploy-web.sh` 正常提权即可。
+
 buildah 的存储与 K3s containerd 相互独立，所以 `buildah push ... docker-archive:` 加 `k3s ctr images import` 这一步不能省。buildah 拉取 `docker.io` 基础镜像走本机 `/etc/containers/registries.conf.d/` 中配置的 `docker.m.daocloud.io` 镜像加速；`python:3.12-slim` 仍需要能访问该加速源。镜像已预先导入时必须带 `BUILD_IMAGE=0`（或改用 `WEB_IMAGE_TAR=`/`SMOKE_IMAGE_TAR=` 指定归档），否则 `deploy-web.sh` 在 `BUILD_IMAGE=auto` 且镜像缺失时会尝试调用不存在的 `docker`。
+
+### 3.1.1 前端依赖源
+
+`frontend/.npmrc` 固定 `registry=https://registry.npmjs.org/`，`package-lock.json` 里的
+`resolved` URL 也全部指向官方源。此前 lockfile 混入过 `registry.npmmirror.com`，该镜像源故障时
+`Dockerfile` 的 `npm ci` 直接返回 E500，导致整个镜像构建失败且难以定位。
+
+**不要**在 lockfile 里手工替换成镜像源：`npm ci` 只认 lockfile 里的 `resolved`，`--registry`
+参数改不动它们。确需换源时，用 `npm config set registry <url> && npm install --package-lock-only`
+重新生成 lockfile，并提交 `.npmrc` 一起变更。
 
 ### 3.2 选择或切换 4090/A100 配置
 

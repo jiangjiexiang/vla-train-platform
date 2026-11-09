@@ -281,6 +281,17 @@ def job_logs(
     return service.logs(name, tail_lines or settings.log_tail_default)
 
 
+@router.get("/jobs/{name}/timeline")
+def job_timeline(
+    name: JobName,
+    user: AuthContext = Depends(require_user),
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    """作业阶段时间轴，用于看清任务卡在哪一步。"""
+    _ensure_visible(user, service.get_job(name))
+    return service.job_timeline(name)
+
+
 @router.get("/jobs/{name}/diagnosis")
 def job_diagnosis(
     name: JobName,

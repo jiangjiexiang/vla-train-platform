@@ -555,6 +555,22 @@ class PlatformService:
             "logs": self.kubernetes.read_pod_log(pod_name, tail_lines),
         }
 
+    def job_timeline(self, name: str) -> dict[str, Any]:
+        """作业阶段时间轴：已提交 → 已入队 → 已准入 → 拉镜像 → 启动 → 训练 → 结束。"""
+        from .timeline import build_timeline
+
+        job = self.kubernetes.get_job(name)
+        if job is None:
+            if self.history.get_cancellation(name) is None:
+                raise ServiceError(404, f"job {name} not found")
+            return {"name": name, "current_stage": "finished", "items": []}
+        pods = self.kubernetes.list_job_pods(name)
+        workload = self._matching_workload(job, self.kubernetes.list_workloads(), pods)
+        status = str(self._job_response(job, workload, pods)["status"])
+        pod = self._select_pod(pods)
+        result = build_timeline(job=job, workload=workload, pod=pod, status=status)
+        return {"name": name, "status": status, **result}
+
     def job_diagnosis(self, name: str) -> dict[str, Any]:
         """归一化失败原因。只读，不写库。"""
         from .diagnostics import diagnose

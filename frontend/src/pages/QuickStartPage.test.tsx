@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DatasetMeta, Recipe } from '../types/api';
 import { QuickStartPage, buildOverrides, describeSubmitError, isRecipeCompatible } from './QuickStartPage';
 
+let formRefOfTest: unknown = null;
+
 vi.mock('../api/client', async () => {
   const actual = await vi.importActual<typeof import('../api/client')>('../api/client');
   const api = {
@@ -198,7 +200,8 @@ describe('QuickStartPage', () => {
     expect(stepsInput).not.toBeNull();
     // 参数框以占位文案展示配方默认值（antd 的 Form 初值只落到 store，展开即可见）
     expect(stepsInput.placeholder).toBe('5');
-    console.log('STABLE value=', JSON.stringify(stepsInput.value), 'props=', JSON.stringify((stepsInput as any)[Object.keys(stepsInput).find((k) => k.startsWith('__reactProps'))!]?.value));
+    console.log('PROBE', JSON.stringify([...document.querySelectorAll('[data-testid="probe-native"] input')].map((i) => [(i as HTMLInputElement).value, i.id])), 'store', JSON.stringify((window as any).__form?.getFieldsValue(true)));
+    console.log('CHK value=', JSON.stringify(stepsInput.value), 'htmlLabel=', document.querySelector('[data-testid="param-steps"] label')?.getAttribute('for'), 'id=', stepsInput.id);
 
     fireEvent.click(screen.getByRole('button', { name: /加入训练队列/ }));
 

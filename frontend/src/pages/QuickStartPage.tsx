@@ -31,7 +31,6 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
-import type { FormInstance } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { ApiError, api, getErrorMessage, isAbortError, isUnauthorized } from '../api/client';
@@ -327,51 +326,13 @@ function QuickParamControl({ param }: { param: ParamSpec }) {
 }
 
 /**
- * Collapse 的 children 每次渲染都会重新创建，React 会把它当成新类型的子树而卸载重挂；
- * 参数 Field 会因此丢掉挂载时读到的初值并停止刷新。这里把展开内容做成稳定组件。
- */
-function ParamsCollapseContent({
-  form,
-  recipe,
-  defaults,
-}: {
-  form: FormInstance;
-  recipe: Recipe;
-  defaults: Record<string, unknown>;
-}) {
-  return <ParamsPanel form={form} recipe={recipe} defaults={defaults} />;
-}
-
-/**
  * 高级参数面板。
  *
- * 注意不要直接把 TrainParamsForm 塞进本页的 Form：它内部的 Form.Item 用相对路径
- * (namePath=[])注册，而 antd 5 的 Form.Item 不会把父级 name 前缀拼进子字段，
- * 结果参数既不进 store 也不会被校验。这里复用同一个 ParamControl / paramRules，
- * 但显式给出 [params, key] 的绝对路径。
+ * 不直接复用 TrainParamsForm：它内部的 Form.Item 用相对路径 (namePath=[]) 注册，
+ * 而 antd 5 的 Form.Item 不会把父级 name 前缀拼进子字段，参数既进不了 store 也不会被校验。
+ * 这里沿用同一套控件类型映射与校验规则，显式给出 [params, key] 的绝对路径。
  */
-function ParamsPanel({
-  form,
-  recipe,
-  defaults,
-}: {
-  form: FormInstance;
-  recipe: Recipe;
-  defaults: Record<string, unknown>;
-}) {
-  // 面板默认收起：挂载后把配方默认值写进表单。
-  // 用 setFields 逐个字段写入（setFieldValue 设置整块对象时，已挂载的 Field 拿不到初值）。
-  console.log('PANEL MOUNT', JSON.stringify(defaults), 'hasInstance', typeof (form as any).getInternalHooks, 'storeKeys', JSON.stringify(Object.keys(form.getFieldsValue(true))));
-  useEffect(() => {
-    form.setFields(
-      Object.entries(defaults).map(([key, value]) => ({
-        name: [PARAMS_FIELD, key],
-        value,
-      })),
-    );
-    setTimeout(() => console.log('LATER store', JSON.stringify(form.getFieldsValue(true))), 20);
-  }, [form, defaults]);
-
+function ParamsPanel({ recipe }: { recipe: Recipe }) {
   const params = visibleParams(recipeTemplate(recipe));
   return (
     <div data-testid="quickstart-params">
@@ -414,9 +375,6 @@ export function QuickStartPage() {
   const [submitError, setSubmitError] = useState<{ title: string; description: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
-  // 参数初值随配方变化。用 initialValues + key 重挂表单，而不是 setFieldValue：
-  // 高级参数面板默认收起，字段未挂载时 setFieldValue 不会生效。
-  const [paramDefaults, setParamDefaults] = useState<Record<string, unknown>>({});
 
   const applyDatasets = (items: DatasetMeta[]) => {
     setDatasets(items);
@@ -503,16 +461,14 @@ export function QuickStartPage() {
     [compatibleRecipes, recipeId],
   );
 
-  // 换配方 → 参数表单重置成该配方的初始值（只依赖 id，避免对象引用变化导致反复重置冲掉输入）
+  // 换配方 → 参数面板按新模板重建（见 ParamsPanel 的 key），上一次的提交错误也不再适用
   const selectedRecipeId = selectedRecipe?.id ?? null;
   useEffect(() => {
-    setParamDefaults(selectedRecipe ? recipeInitialParams(selectedRecipe) : {});
     setSubmitError(null);
-    // selectedRecipe 由 id 推导，用 id 做依赖即可
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRecipeId]);
 
   const currentStep = !selectedDataset ? 0 : !selectedRecipe ? 1 : 2;
+  (window as unknown as { __form?: unknown }).__form = form;
   const canSubmit = Boolean(selectedDataset && selectedRecipe) && !submitting;
 
   const handleSubmit = async () => {
@@ -671,7 +627,7 @@ export function QuickStartPage() {
           form={form}
           layout="vertical"
           requiredMark={false}
-          initialValues={{ name: '', priority: 'normal' as Priority, params: paramDefaults }}
+          initialValues={{ name: '', priority: 'normal' as Priority, params: {} }}
         >
           <Row gutter={16}>
             <Col xs={24} md={12}>
@@ -697,6 +653,13 @@ export function QuickStartPage() {
             </Col>
           </Row>
 
+          {selectedRecipe && (
+            <div data-testid="probe-native">
+              <Form.Item name="probe_plain" label="P1" initialValue="hello"><Input /></Form.Item>
+              <Form.Item name={['params', 'steps']} label="P2" initialValue={42}><InputNumber /></Form.Item>
+              <Form.Item name={['params', 'batch_size']} label="P3"><InputNumber /></Form.Item>
+            </div>
+          )}
           <Collapse
             ghost
             className="quickstart-advanced"
@@ -707,12 +670,7 @@ export function QuickStartPage() {
                   ? `高级参数（可选，共 ${paramCount} 项，默认使用配方推荐值）`
                   : '高级参数（该配方没有可调参数）',
                 children: selectedRecipe ? (
-                  <ParamsCollapseContent
-                    key={selectedRecipe.id}
-                    form={form}
-                    recipe={selectedRecipe}
-                    defaults={paramDefaults}
-                  />
+                  <ParamsPanel key={selectedRecipe.id} recipe={selectedRecipe} />
                 ) : (
                   <Typography.Text type="secondary">请先选择数据集和配方</Typography.Text>
                 ),

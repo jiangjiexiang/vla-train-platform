@@ -432,3 +432,22 @@ export interface JobDiagnosisResponse {
   // 任务没失败时为 null
   diagnosis: JobDiagnosis | null;
 }
+
+// ---- v1.0：作业阶段时间轴（backend/app/services/timeline.py）----
+export type TimelineStageState = 'done' | 'current' | 'pending' | 'failed';
+
+export interface TimelineItem {
+  stage: string;
+  label: string;
+  state: TimelineStageState;
+  // 取不到时间戳时为 null，前端显示成「—」而不是编造时间
+  at: string | null;
+}
+
+export interface JobTimelineResponse {
+  name: string;
+  status: JobStatus | string;
+  // 已结束的任务为 null：所有阶段都走完了，没有「当前阶段」
+  current_stage: string | null;
+  items: TimelineItem[];
+}

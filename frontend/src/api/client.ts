@@ -1,4 +1,4 @@
-import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, HealthResponse, Job, JobDiagnosisResponse, JobEventsResponse, JobListResponse, JobLogs, JobMetricsResponse, JobStatus, LoginResponse, PlatformConfig, PreflightResponse, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, Recipe, RecipeListResponse, RunRequest, SubmitJobRequest, UserListResponse, ImageListResponse, ImageParamsResponse } from '../types/api';
+import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, HealthResponse, Job, JobDiagnosisResponse, JobEventsResponse, JobListResponse, JobLogs, JobMetricsResponse, JobStatus, JobTimelineResponse, LoginResponse, PlatformConfig, PreflightResponse, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, Recipe, RecipeListResponse, RunRequest, SubmitJobRequest, UserListResponse, ImageListResponse, ImageParamsResponse } from '../types/api';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE || '/api/v1').replace(/\/+$/, '');
 // ldap 模式下的会话令牌
@@ -196,6 +196,8 @@ export const api = {
   // 失败诊断；任务没失败时 diagnosis 为 null
   getJobDiagnosis: (name: string, signal?: AbortSignal) =>
     request<JobDiagnosisResponse>(`/jobs/${encodeURIComponent(name)}/diagnosis`, { signal }),
+  getJobTimeline: (name: string, signal?: AbortSignal) =>
+    request<JobTimelineResponse>(`/jobs/${encodeURIComponent(name)}/timeline`, { signal }),
 };
 
 export function isAbortError(error: unknown): boolean {

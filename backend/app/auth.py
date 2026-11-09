@@ -9,6 +9,7 @@ v0.9 之前的 `require_token` 只区分「有令牌/没令牌」，现在改为
 from __future__ import annotations
 
 import hmac
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -18,6 +19,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import ROLE_ADMIN, ROLE_USER, Settings
 from .services.sessions import SessionStore
+from .user_tokens import TokenRegistry, parse_user_tokens
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -44,6 +46,17 @@ class AuthContext:
 def anonymous_context() -> AuthContext:
     return AuthContext(username=ANONYMOUS_USERNAME, role=ROLE_ADMIN, source="off")
 
+
+
+# 令牌表只解析一次：它来自环境变量，运行期不会变。
+_TOKEN_REGISTRY: TokenRegistry | None = None
+
+
+def token_registry() -> TokenRegistry:
+    global _TOKEN_REGISTRY
+    if _TOKEN_REGISTRY is None:
+        _TOKEN_REGISTRY = parse_user_tokens(os.environ.get("PLATFORM_USER_TOKENS", ""))
+    return _TOKEN_REGISTRY
 
 def token_context() -> AuthContext:
     return AuthContext(username=TOKEN_USERNAME, role=ROLE_ADMIN, source="token")
@@ -84,8 +97,17 @@ def resolve_context(
     if session is not None:
         return _context_for_session(session, settings, sessions, token)
 
-    if settings.auth_mode == "token" and settings.api_token:
-        if hmac.compare_digest(token.encode("utf-8"), settings.api_token.encode("utf-8")):
+    if settings.auth_mode == "token":
+        # 多用户令牌优先：每个人有独立令牌与角色，审计才能追到具体的人。
+        registry = token_registry()
+        if registry:
+            matched = registry.lookup(token)
+            if matched is not None:
+                return AuthContext(username=matched.username, role=matched.role, source="token")
+        # 回退到单一静态令牌（等价 admin），保证老部署不受影响
+        if settings.api_token and hmac.compare_digest(
+            token.encode("utf-8"), settings.api_token.encode("utf-8")
+        ):
             return token_context()
 
     raise _unauthorized("Invalid bearer token")

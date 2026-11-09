@@ -54,6 +54,10 @@ class Settings:
     # 任务结束后多久回收 K8s 对象（秒）。产物在 /checkpoints 下独立保存，
     # 删对象不影响结果。0 表示不回收（保留全部历史对象）。
     job_ttl_seconds: int = 3600
+    # 多用户令牌表（token 模式）："用户名:角色:令牌,..."。
+    # 为空时退回单一 PLATFORM_API_TOKEN（等价于一个 admin），
+    # 保证老部署升级后行为不变。
+    user_tokens: str = ""
     static_dir: str = str(Path(__file__).resolve().parent.parent / "static")
 
     def __post_init__(self) -> None:
@@ -124,6 +128,7 @@ class Settings:
             kubeconfig=os.environ.get("PLATFORM_KUBECONFIG") or None,
             log_tail_default=log_tail,
             gpu_metrics_url=os.environ.get("PLATFORM_GPU_METRICS_URL", "http://vla-gpu-metrics:8080/"),
+            user_tokens=os.environ.get("PLATFORM_USER_TOKENS", ""),
             job_ttl_seconds=_parse_nonnegative_int(
                 os.environ.get("PLATFORM_JOB_TTL_SECONDS", "3600"), "PLATFORM_JOB_TTL_SECONDS"
             ),

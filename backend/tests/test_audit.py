@@ -313,8 +313,14 @@ def test_run_create_records_actor(client, tmp_path):
     assert response.status_code == 201, response.text
 
     target = response.json()["name"]
-    item = next(i for i in client.get("/api/v1/audit").json()["items"] if i["target"] == target)
+    entries = [i for i in client.get("/api/v1/audit").json()["items"] if i["target"] == target]
 
-    assert item["actor"].startswith("anonymous@"), item["actor"]
-    assert "anonymous@" in item["actor"]
+    # 一次一键训练会写两条审计：run.create 和它内部调用的 job.submit。
+    # 必须分别断言——只取第一条（job.submit）会让 run.create 的回归漏网，
+    # 这正是之前出现过的情况：路由改对了，但 service 内部仍用 owner 记 actor。
+    by_action = {entry["action"]: entry for entry in entries}
+    assert "run.create" in by_action, by_action.keys()
+    assert "job.submit" in by_action, by_action.keys()
+    for action in ("run.create", "job.submit"):
+        assert by_action[action]["actor"].startswith("anonymous@"), (action, by_action[action]["actor"])
 

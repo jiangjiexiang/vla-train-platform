@@ -228,3 +228,50 @@ export interface ImageOption {
 export interface ImageListResponse {
   items: ImageOption[];
 }
+
+// ---- v0.9.1：训练参数模板（见 .agents/PARAMS-TEMPLATE-CONTRACT.md 第 1、2 节）----
+
+export type ParamType = 'int' | 'float' | 'str' | 'bool' | 'enum' | 'path';
+
+export interface ParamSpec {
+  key: string;
+  // 命令行 flag，形如 --steps。内置模板里是 extra_args 那种「透传」参数时可能为 null
+  flag: string | null;
+  label: string;
+  type: ParamType;
+  default?: unknown;
+  min?: number;
+  max?: number;
+  required?: boolean;
+  help?: string;
+  placeholder?: string;
+  // enum 的候选值
+  options?: string[];
+  // 仅 bool 可用：为字符串时拼 `flag + " " + value`，否则只拼 flag（true）/跳过（false）
+  true_value?: string | null;
+  false_value?: string | null;
+  // 仅内置模板的兼容写法：kind === 'extra' 表示该参数的值原样追加到命令末尾
+  kind?: string;
+}
+
+export interface ExtraArgsSpec {
+  label?: string;
+  help?: string;
+  enabled?: boolean;
+  default?: string;
+}
+
+export interface ParamsTemplate {
+  schema_version: number;
+  entrypoint?: string | null;
+  params: ParamSpec[];
+  extra_args?: ExtraArgsSpec;
+}
+
+export interface ImageParamsResponse {
+  image: string;
+  // file = 镜像登记的模板；builtin = 平台通用模板；error = 读取失败后回退到 builtin
+  source: 'file' | 'builtin' | 'error';
+  warning?: string;
+  template: ParamsTemplate;
+}

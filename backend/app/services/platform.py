@@ -485,6 +485,15 @@ class PlatformService:
             "logs": self.kubernetes.read_pod_log(pod_name, tail_lines),
         }
 
+    def job_metrics(self, name: str, limit: int = 500) -> dict[str, Any]:
+        """训练指标（loss 曲线）。任务不存在返回 404；文件不存在返回空列表。"""
+        job = self.kubernetes.get_job(name)
+        if job is None and self.history.get_cancellation(name) is None:
+            raise ServiceError(404, f"job {name} not found")
+        from .metrics import read_metrics  # 局部导入，保持模块加载轻量
+
+        return read_metrics(self.settings.checkpoint_host_path, name, limit=limit)
+
     def events(self, name: str) -> dict[str, Any]:
         job = self.kubernetes.get_job(name)
         if job is None:

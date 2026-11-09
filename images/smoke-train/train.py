@@ -317,6 +317,23 @@ def nccl_diagnostics(rendezvous, backend, mode):
     )
 
 
+def append_metrics(record):
+    """把一步指标追加到 metrics.jsonl，供平台在网页上画 loss 曲线。
+
+    平台约定：训练脚本把每步指标写到 $CHECKPOINT_DIR/metrics.jsonl，一行一个 JSON。
+    写入用追加模式并立即 flush，这样任务运行中网页就能看到曲线。
+    任何写失败都不应中断训练——指标只是观测手段。
+    """
+    try:
+        path = checkpoint_directory() / "metrics.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+            handle.flush()
+    except OSError as exc:
+        log(f"WARN: cannot append metrics: {exc}")
+
+
 def save_checkpoint(path, model, optimizer, step, world_size, backend):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + f".tmp-{os.getpid()}")
@@ -440,7 +457,16 @@ def main():
                         f"expected {expected_participation}, got {actual}"
                     )
             if rank == 0:
-                log(f"step={step}/{args.steps} loss={loss.item():.6f} world_size={world_size}")
+                current_loss = float(loss.item())
+                log(f"step={step}/{args.steps} loss={current_loss:.6f} world_size={world_size}")
+                append_metrics(
+                    {
+                        "step": step,
+                        "loss": current_loss,
+                        "lr": float(optimizer.param_groups[0]["lr"]),
+                        "world_size": world_size,
+                    }
+                )
             if args.sleep:
                 time.sleep(args.sleep)
 

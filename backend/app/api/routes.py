@@ -275,6 +275,19 @@ def job_logs(
     return service.logs(name, tail_lines or settings.log_tail_default)
 
 
+@router.get("/jobs/{name}/metrics")
+def job_metrics(
+    name: JobName,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 500,
+    user: AuthContext = Depends(require_user),
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    """训练指标（loss 曲线）。数据来自 /checkpoints/<job>/metrics.jsonl。"""
+    # 与 events/logs 一致：普通用户不能看别人任务的训练曲线
+    _ensure_visible(user, service.get_job(name))
+    return service.job_metrics(name, limit=limit)
+
+
 @router.get("/jobs/{name}/events")
 def job_events(
     name: JobName,

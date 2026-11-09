@@ -2,6 +2,26 @@
 
 本项目遵循语义化版本。每次大版本更新提交一次 commit 并打 tag，新条目追加到文件顶部。
 
+## [0.9.1] - 2026-11-09
+
+### 新增
+
+- 训练参数模板：镜像可登记 JSON 声明自己的参数（name/flag/type/default/enum/min-max），
+  提交页据此动态渲染表单，自动拼装命令行；未登记时回退内置通用模板。
+- 三个接口：GET/PUT/DELETE /api/v1/images/{image}/params。
+- 新增 examples/params/ 两个真实模板（lerobot-smolvla、openpi-pi05）。
+
+### 修复
+
+- package-lock.json 192 条依赖地址从故障的 npmmirror 改为 npmjs，新增 frontend/.npmrc；
+  此前该源返回 500 会导致镜像构建失败。
+- 提交页镜像输入改为可选下拉（AutoComplete），来源为默认镜像 + 历史任务用过的镜像。
+
+### 测试
+
+- 后端 286 -> 341，前端 89 -> 112。
+- 新增前后端命令行拼装一致性测试（16 个组合逐字节比对）。
+
 ## [0.9.0] - 2026-11-09
 
 生产化版本：多用户鉴权、按用户配额、多机训练接口与 Web 可用性边界。接口契约冻结在

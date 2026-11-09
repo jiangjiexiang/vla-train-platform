@@ -25,6 +25,9 @@ spec:
       serviceAccountName: vla-web
       automountServiceAccountToken: true
       securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -62,6 +65,8 @@ spec:
           volumeMounts:
             - name: history
               mountPath: /data/history
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 100m
@@ -86,10 +91,14 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 6
           securityContext:
+            runAsNonRoot: true
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
       volumes:
         - name: history
           persistentVolumeClaim:
             claimName: vla-web-history
+        - name: tmp
+          emptyDir: {}

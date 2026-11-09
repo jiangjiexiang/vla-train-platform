@@ -14,7 +14,6 @@ from .services.errors import ServiceError
 from .services.kubernetes import KubernetesClient
 from .services.platform import PlatformService
 
-
 logger = logging.getLogger("vla-platform")
 
 

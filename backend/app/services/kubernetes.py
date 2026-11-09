@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -8,7 +9,6 @@ from kubernetes.config.config_exception import ConfigException
 
 from ..config import Settings
 from .errors import ServiceError
-
 
 T = TypeVar("T")
 JOB_GROUP = "kubeflow.org"

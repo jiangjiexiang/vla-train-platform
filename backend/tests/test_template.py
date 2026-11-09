@@ -67,6 +67,8 @@ def test_gpu_request_equals_limit(settings):
 
 
 def test_restart_policy_follows_max_retries(settings):
-    master = lambda body: body["spec"]["pytorchReplicaSpecs"]["Master"]
+    def master(body):
+        return body["spec"]["pytorchReplicaSpecs"]["Master"]
+
     assert master(render(make_spec(max_retries=0), settings))["restartPolicy"] == "Never"
     assert master(render(make_spec(max_retries=2), settings))["restartPolicy"] == "OnFailure"

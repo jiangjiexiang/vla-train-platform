@@ -1,0 +1,22 @@
+# 代码规范检查配置（仅 ruff，不引入 mypy/black/isort）。
+# 用法：scripts/lint.sh，CI 在 pytest 前执行 ruff check backend。
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+extend-exclude = [
+    ".venv",
+    "node_modules",
+    "artifacts",
+    "backend/tests/fixtures",
+]
+
+[tool.ruff.lint]
+# 保守规则集：pycodestyle 错误 + pyflakes + import 排序 + bugbear + pyupgrade。
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI 的依赖注入要求把 Depends(...) 写在参数默认值里，这是框架惯例而非 bug；
+# 只豁免 Depends 本身，B008 对其它函数调用仍然生效。
+extend-immutable-calls = ["fastapi.Depends"]

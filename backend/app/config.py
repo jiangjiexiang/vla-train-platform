@@ -28,7 +28,7 @@ class Settings:
     static_dir: str = str(Path(__file__).resolve().parent.parent / "static")
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         token = os.environ.get("PLATFORM_API_TOKEN", "").strip()
         auth_required = _parse_bool(os.environ.get("PLATFORM_AUTH_REQUIRED", "true"), "PLATFORM_AUTH_REQUIRED")
         if auth_required and not token:

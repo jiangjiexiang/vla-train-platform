@@ -420,6 +420,14 @@ scripts/test.sh frontend     # 只跑前端，其余参数透传给 vitest
 首次运行会自动创建后端 `.venv`；前端缺少 `node_modules` 时会先 `npm ci`，
 Node 版本低于 18 时自动改用 `/opt/node20/bin`（可用 `NODE_BIN_DIR` 覆盖）。
 
+代码规范检查用 `ruff`（规则配置在仓库根 `pyproject.toml`），CI 会在 pytest 之前执行
+`ruff check backend`，本地可用同样入口尽早发现问题：
+
+```bash
+scripts/lint.sh          # 检查 backend
+scripts/lint.sh --fix    # 自动修复可修复项
+```
+
 `scripts/release.sh` 发版前会跑完整测试，未通过直接中止。集群侧端到端验收仍由
 `scripts/verify-4090.sh` 负责，两者互补：单测保证逻辑正确，验收保证真实集群跑得通。
 
@@ -489,7 +497,7 @@ scripts/release.sh 0.2.0 --dry-run
 仓库提供两套等价的 CI 配置，只跑不需要集群的单元测试与前端构建：
 
 - **GitHub Actions**：`.github/workflows/ci.yml`，在 `push` 和 `pull_request` 时触发；仅修改 `docs/**` 或根目录 Markdown 时跳过。两个并行 job：
-  - 后端：Python 3.12，`pip install -r backend/requirements-dev.txt`，再跑 `python -m pytest backend/tests`。
+  - 后端：Python 3.12，`pip install -r backend/requirements-dev.txt`，先跑 `ruff check backend`，再跑 `python -m pytest backend/tests`。
   - 前端：Node 20，在 `frontend/` 下执行 `npm ci`、`npm run test`（vitest）、`npm run build`（`tsc --noEmit && vite build`）。
 - **GitLab CI**：`.gitlab-ci.yml`，同样分 `backend` 与 `frontend` 两个 job，分别使用 `python:3.12-slim` 和 `node:20` 镜像，执行与上面相同的命令。
 

@@ -7,7 +7,6 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import Settings
 
-
 bearer = HTTPBearer(auto_error=False)
 
 

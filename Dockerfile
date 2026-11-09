@@ -37,9 +37,13 @@ COPY backend/app /app/app
 COPY --from=frontend /build/dist /app/static
 
 # 历史库目录；compose 或 -v 挂载后持久化。
-# 注意：目前以 root 运行。改成非 root 需要同时保证 /data/history 的属主可写
-# （hostPath 形式的 PVC 不会自动 chown），否则 SQLite 会报 readonly database。
-RUN mkdir -p /data/history
+# 以非 root 运行：hostPath 形式的 PVC 不会被自动 chown，部署前必须把
+# /data/vla-platform/history 的属主改成 10001:10001（见 docs/operations.md）。
+RUN mkdir -p /data/history \
+    && useradd --create-home --uid 10001 --user-group vla \
+    && chown -R vla:vla /data
+
+USER vla
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

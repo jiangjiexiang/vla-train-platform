@@ -137,9 +137,8 @@ def api_client(settings, service, monkeypatch, tmp_path):
     monkeypatch.setenv("PLATFORM_API_TOKEN", "test-token")
     monkeypatch.setenv("PLATFORM_DB_PATH", str(tmp_path / "import-side-effect.db"))
 
-    from fastapi.testclient import TestClient
-
     from app.main import create_app
+    from fastapi.testclient import TestClient
 
     app = create_app(settings)
     app.state.service = service

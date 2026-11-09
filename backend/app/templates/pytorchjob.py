@@ -5,7 +5,6 @@ import json
 from ..config import Settings
 from ..models import SubmitSpec
 
-
 APP_LABELS = {
     "app.kubernetes.io/name": "vla-train-platform",
     "app.kubernetes.io/managed-by": "vla-train-platform",

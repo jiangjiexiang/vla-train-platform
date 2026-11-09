@@ -5,7 +5,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 JOB_NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 # The whole spec is stored in a Kubernetes annotation, and object annotations are
 # capped at 256 KiB, so keep the two unbounded fields well under that.
@@ -83,7 +82,7 @@ class CloneRequest(BaseModel):
         return value
 
 
-def check_payload_size(spec: "SubmitSpec") -> None:
+def check_payload_size(spec: SubmitSpec) -> None:
     """Reject specs too large to store in a Kubernetes annotation.
 
     This runs on submit only, never when reading an object or history back, so a

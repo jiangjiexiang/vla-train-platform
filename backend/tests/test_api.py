@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import pytest
-
 from app.models import SubmitSpec
-
 
 DEFAULT_IMAGE = "vla-smoke:latest"
 DEFAULT_COMMAND = "python /app/train.py"

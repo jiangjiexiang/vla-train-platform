@@ -4,7 +4,6 @@ import json
 from unittest.mock import patch
 
 import pytest
-
 from app.config import Settings
 from app.history import HistoryStore
 from app.models import SubmitSpec
@@ -571,7 +570,7 @@ def test_list_jobs_without_filters_keeps_legacy_response_shape(service, kube):
 
 
 def test_list_jobs_limit_offset_slice_after_created_at_sort(service, kube):
-    for index, name in enumerate((f"exp{item:03d}" for item in range(5))):
+    for index, name in enumerate(f"exp{item:03d}" for item in range(5)):
         submit_with_created_at(service, kube, name, f"2026-01-01T00:0{index}:00Z")
 
     result = service.list_jobs(limit=2, offset=1)
@@ -583,7 +582,7 @@ def test_list_jobs_limit_offset_slice_after_created_at_sort(service, kube):
 
 
 def test_list_jobs_offset_without_limit_returns_everything(service, kube):
-    for index, name in enumerate((f"exp{item:03d}" for item in range(4))):
+    for index, name in enumerate(f"exp{item:03d}" for item in range(4)):
         submit_with_created_at(service, kube, name, f"2026-01-01T00:0{index}:00Z")
 
     result = service.list_jobs(offset=2)

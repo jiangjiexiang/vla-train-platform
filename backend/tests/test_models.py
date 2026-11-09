@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from app.models import (
     MAX_COMMAND_BYTES,
     MAX_ENV_BYTES,
@@ -10,6 +8,7 @@ from app.models import (
     SubmitSpec,
     check_payload_size,
 )
+from pydantic import ValidationError
 
 
 def make_spec(**overrides):

@@ -118,6 +118,44 @@ assert torchvision.__version__.startswith('0.21'), 'torchvision 被改写'; \
 assert importlib.util.find_spec('torchcodec') is None, 'torchcodec guard 未生效'; \
 print('版本检查通过:', torch.__version__, torchvision.__version__, transformers.__version__)"
 
+# ---------- 第五步：预置 SmolVLA 权重（HF 缓存布局）----------
+#
+# 为什么要预置：训练命令固定用 --policy.path=lerobot/smolvla_base，它会从 Hub 拉
+# 两个仓库——lerobot/smolvla_base（约 865 MiB）和它 config 里引用的
+# HuggingFaceTB/SmolVLM2-500M-Video-Instruct（整仓 7.37 GiB，实际只需 1.9 GiB）。
+# 每个新任务都重下 2.8 GiB，启动时间全耗在这上面。
+#
+# 两个关键约束：
+# 1. 必须是 HF 缓存布局，不能拷成裸目录。裸目录下 HF_HUB_OFFLINE=1 会报
+#    FileNotFoundError: Could not find 'policy_preprocessor.json' ... —— 因为
+#    from_pretrained 走的是 HF_HOME/hub/models--org--name/snapshots/<rev> 这套结构。
+# 2. SmolVLM2 必须用 allow_patterns 过滤。整仓 7.37 GiB 里绝大部分是 onnx/ 下的
+#    各种量化导出（int8/q4/fp16...），PyTorch 推理一个都用不到。只保留
+#    *.json / *.safetensors / *.txt 后是 1.9 GiB。这份过滤清单已覆盖
+#    tokenizer.json、merges.txt、vocab.json，缺了它们 tokenizer 会报错。
+#
+# 不在镜像里设 HF_HUB_OFFLINE=1：用户自己的自定义策略或数据集仍要能联网拉取。
+ENV HF_HOME=/opt/hf
+RUN set -eux; \
+    python -c "\
+from huggingface_hub import snapshot_download as sd; \
+sd('lerobot/smolvla_base'); \
+sd('HuggingFaceTB/SmolVLM2-500M-Video-Instruct', \
+   allow_patterns=['*.json', '*.safetensors', '*.txt']); \
+print('weights downloaded')"; \
+    du -sh /opt/hf
+
+# 构建期验证：强制离线加载，确保缓存布局正确且权重完整。
+# 训练时能不能命中缓存，靠的是这一步，而不是等任务跑到一半才报错。
+RUN set -eux; \
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -c "\
+from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy; \
+p = SmolVLAPolicy.from_pretrained('lerobot/smolvla_base'); \
+n = sum(x.numel() for x in p.parameters()); \
+print('参数总数:', n); \
+assert abs(n - 450_000_000) < 10_000_000, f'权重不对: {n}'; \
+print('离线加载成功')"
+
 WORKDIR /app
 COPY train_vla.py /app/train_vla.py
 COPY entrypoint.sh /app/entrypoint.sh

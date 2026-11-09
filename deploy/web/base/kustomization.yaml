@@ -3,3 +3,18 @@ kind: Kustomization
 resources:
   - deployment.yaml
   - service.yaml
+  # base 级 PDB。文件里写的是 maxUnavailable: 0（官方推荐的「不阻塞节点
+  # 排空」的写法），但单副本时它仍表示「最多中断 0 个」，单机 K3s 上
+  # kubectl drain 会被卡住。因此单机 profile 在这里改成 maxUnavailable: 1
+  #（允许 1 个不可用），让「排空」语义正确。HA overlay 自带 pdb.yaml 并
+  # 以 minAvailable: 1 覆盖同名对象，不受此处影响。
+  - pdb.yaml
+
+patches:
+  - target:
+      kind: PodDisruptionBudget
+      name: vla-web
+    patch: |-
+      - op: replace
+        path: /spec/maxUnavailable
+        value: 1

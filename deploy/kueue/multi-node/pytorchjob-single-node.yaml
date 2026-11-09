@@ -1,0 +1,80 @@
+# 单节点「多机语义」调试变体（只在这台单卡机器上做静态/实验验证用）
+#
+# 背景：本仓库实际环境只有 1 台机器、1 张 RTX 4090，无法真正跑 2 节点训练。
+# 这个变体把 pytorchjob-template.yaml 的 2 副本改成 1 副本、并把反亲和去掉，
+# 用于：
+#   - 验证 YAML 在真实 API server 上通过 schema 校验；
+#   - 观察 Kueue 生成的 Workload 是否带 topologyRequest（TAS 是否生效）；
+#   - 在单机上空跑一次 train.py 的 rendezvous 逻辑（WORLD_SIZE=1 会退化为
+#     普通 DDP，不会进入 multi-node 分支）。
+#
+# ⚠️ 它**不构成多机验证**：world_size=1 时 train.py 的 LAUNCH_MODE 是
+#    single，DDP_VERIFIED 里的 nodes=1。真正的多机验证必须在 ≥2 台
+#    GPU 节点的集群上做，见 README.md 的「如何验证」。
+#
+# 用法：
+#   kubectl apply --dry-run=client -f deploy/kueue/multi-node/pytorchjob-single-node.yaml
+#   # 真正提交前确认队列已存在：
+#   kubectl -n vla-training get localqueue multinode
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: multinode-semantics-debug
+  namespace: vla-training
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/component: multinode-semantics-debug
+    kueue.x-k8s.io/queue-name: multinode
+spec:
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: Never
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/component: multinode-semantics-debug
+        spec:
+          runtimeClassName: nvidia
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: pytorch
+              image: vla-smoke:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - /app/train.py
+                - --distributed
+                - --steps
+                - "2"
+                - --sleep
+                - "0"
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+                - name: JOB_NAME
+                  value: multinode-semantics-debug
+                - name: CHECKPOINT_DIR
+                  value: /checkpoints/multinode-semantics-debug
+                - name: MASTER_ADDR
+                  value: multinode-semantics-debug-master-0.multinode-semantics-debug-master.vla-training.svc
+                - name: MASTER_PORT
+                  value: "23456"
+                - name: NCCL_SOCKET_IFNAME
+                  value: eth0
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+              volumeMounts:
+                - name: checkpoints
+                  mountPath: /checkpoints
+          volumes:
+            - name: checkpoints
+              hostPath:
+                path: /data/vla-platform/checkpoints
+                type: Directory

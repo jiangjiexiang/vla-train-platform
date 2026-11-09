@@ -10,6 +10,10 @@ metadata:
 spec:
   replicas: 1
   strategy:
+    # Recreate：历史库是 hostPath 上的 SQLite（PV/PVC vla-web-history，
+    # ReadWriteOnce），同一节点上同时跑两个 Pod 会争抢同一个 database 文件。
+    # 单机语义下 Recreate 意味着升级有数秒不可用；需要高可用请叠加
+    # deploy/web/overlays/ha（2 副本 + RollingUpdate + PDB + 反亲和）。
     type: Recreate
   selector:
     matchLabels:
@@ -24,6 +28,22 @@ spec:
     spec:
       serviceAccountName: vla-web
       automountServiceAccountToken: true
+      # 拓扑分布：把 Web 副本尽量分散到不同节点。
+      #   - DoNotSchedule 只在「有多个候选节点」时才产生硬约束；单机集群里
+      #     候选域只有 1 个，第二个副本仍可调度到该节点（不会 Pending），
+      #     所以 base 的 replicas=1 与单机部署行为完全不变。
+      #   - minDomains: 2 告诉调度器「期望至少 2 个域」，集群只有 1 个节点时
+      #     该约束被放宽而不是拒绝调度（详见 Kubernetes 文档
+      #     PodTopologySpread / minDomains）。
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          minDomains: 2
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: vla-train-platform
+              app.kubernetes.io/component: web
       securityContext:
         runAsUser: 10001
         runAsGroup: 10001

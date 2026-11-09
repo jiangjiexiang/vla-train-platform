@@ -1,0 +1,92 @@
+# 多机（Multi-Node）Kueue 队列与拓扑
+#
+# 本文件只被 deploy/kueue/multi-node/ 引用，与 4090/a100 单机 profile 完全解耦：
+#   单机 profile 的 ResourceFlavor 名字是 `gpu`，本文件用 `gpu-multinode`，
+#   因此两套队列可以共存于同一个集群而不会互相覆盖。
+#
+# 前置条件（缺一不可）：
+#   1. Kueue 控制器已启用 TopologyAwareScheduling feature gate
+#      （见 kueue-values-multi-node.yaml），否则 Topology 资源会被忽略，
+#      多机 PodSet 只按普通 flavor 计数，无法保证落到 N 个不同节点；
+#   2. 节点已打上 `vla-platform.io/node-pool=multinode` 标签
+#      （scripts/deploy-multi-node-ha.sh --label-node 可完成，需 sudo）；
+#   3. Training Operator 已安装（PyTorchJob CRD 存在）。
+---
+# 拓扑层级：从上到下由粗到细。最低层必须是 kubernetes.io/hostname。
+# 单机环境只有 hostname 有意义；多机集群若有机架/交换机标签，
+# 可以在 hostname 之上插入 rack 层，Kueue 会优先把同一 job 的 Pod 放在同一机架。
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Topology
+metadata:
+  name: vla-multinode
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+    app.kubernetes.io/component: kueue-multinode
+spec:
+  levels:
+    - nodeLabel: kubernetes.io/hostname
+    # 有标签后再启用，例如：
+    # - nodeLabel: topology.kubernetes.io/zone
+    # - nodeLabel: kubernetes.io/hostname
+---
+# 多机专用 ResourceFlavor。
+#   nodeLabels  : 限定 flavor 只覆盖打了 multinode 标签的节点（防误调度到单卡 4090 机器）
+#   topologyName: 启用 TAS，让 Kueue 按 Topology 的层级挑选 N 个不同节点
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: gpu-multinode
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+    app.kubernetes.io/component: kueue-multinode
+spec:
+  nodeLabels:
+    vla-platform.io/node-pool: multinode
+  topologyName: vla-multinode
+---
+# 多机队列。
+#
+# 配额语义：nominalQuota 单位仍然是「卡数」，不是「节点数」。
+# 本 profile 假设每节点 1 卡（契约第 4 节：每节点 1 卡、一个任务跨 N 节点）：
+#   - 2 台各 1 卡的主机 → nominalQuota: 2，最多放行 1 个 2 节点任务，或 2 个单节点任务；
+#   - 8 节点各 1 卡      → nominalQuota: 8，可放行 8 节点任务或若干小任务。
+# 每节点 8 卡时，把 nominalQuota 改成 节点数 × 8，并在任务里把
+# gpus_per_node 设为 8（PodSet 模板的 nvidia.com/gpu 限制）。
+#
+# fairSharing.weight 让多机队列和多机之外的队列争抢时可以调权重；单机 profile
+# 没有 cohort，互不影响。
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: vla-multinode
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+    app.kubernetes.io/component: kueue-multinode
+spec:
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: vla-training
+  resourceGroups:
+    - coveredResources: ["nvidia.com/gpu"]
+      flavors:
+        - name: gpu-multinode
+          resources:
+            - name: nvidia.com/gpu
+              nominalQuota: 2
+---
+# 多机任务的 LocalQueue。
+# 单机任务继续用 default（→ vla-cluster-queue），两者互不干扰。
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: multinode
+  namespace: vla-training
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+    app.kubernetes.io/component: kueue-multinode
+spec:
+  clusterQueue: vla-multinode

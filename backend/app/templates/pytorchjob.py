@@ -81,6 +81,10 @@ def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) 
                                         "limits": {"nvidia.com/gpu": str(spec.gpus)},
                                     },
                                     "volumeMounts": [
+                                        # 容器默认 /dev/shm 只有 64MB。DataLoader 用共享内存
+                                        # 传 batch，num_workers 一多就 Bus error——
+                                        # 实测 batch=8/workers=4 必定崩溃。
+                                        {"name": "dshm", "mountPath": "/dev/shm"},
                                         {
                                             "name": "datasets",
                                             "mountPath": "/datasets",
@@ -95,6 +99,10 @@ def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) 
                                 }
                             ],
                             "volumes": [
+                                {
+                                    "name": "dshm",
+                                    "emptyDir": {"medium": "Memory", "sizeLimit": settings.shm_size},
+                                },
                                 {
                                     "name": "datasets",
                                     "hostPath": {

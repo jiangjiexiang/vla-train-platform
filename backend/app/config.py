@@ -58,6 +58,11 @@ class Settings:
     # 为空时退回单一 PLATFORM_API_TOKEN（等价于一个 admin），
     # 保证老部署升级后行为不变。
     user_tokens: str = ""
+    # 训练容器的 /dev/shm 大小。PyTorch DataLoader 通过共享内存传 batch，
+    # 容器默认只有 64MB，num_workers 稍大就会
+    # "DataLoader worker is killed by signal: Bus error"。
+    # 这是容器训练最经典的坑，平台必须默认给够。
+    shm_size: str = "4Gi"
     static_dir: str = str(Path(__file__).resolve().parent.parent / "static")
 
     def __post_init__(self) -> None:
@@ -129,6 +134,7 @@ class Settings:
             log_tail_default=log_tail,
             gpu_metrics_url=os.environ.get("PLATFORM_GPU_METRICS_URL", "http://vla-gpu-metrics:8080/"),
             user_tokens=os.environ.get("PLATFORM_USER_TOKENS", ""),
+            shm_size=os.environ.get("PLATFORM_SHM_SIZE", "4Gi"),
             job_ttl_seconds=_parse_nonnegative_int(
                 os.environ.get("PLATFORM_JOB_TTL_SECONDS", "3600"), "PLATFORM_JOB_TTL_SECONDS"
             ),

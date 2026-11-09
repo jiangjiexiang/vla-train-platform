@@ -78,14 +78,6 @@ body {
   padding: 28px;
 }
 
-.app-footer {
-  padding: 20px 28px 28px;
-  text-align: center;
-  background: transparent;
-  color: #667085;
-  font-size: 12px;
-}
-
 .page-heading {
   display: flex;
   align-items: flex-start;

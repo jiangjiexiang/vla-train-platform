@@ -25,6 +25,7 @@ from ..params_templates import (
 )
 from ..recipes.loader import Recipe, RecipeStore
 from ..templates.pytorchjob import render_pytorch_job
+from .audit import AuditStore
 from .errors import ServiceError
 from .kubernetes import KubernetesClient
 from .queue_est import estimate_durations, queue_info
@@ -36,6 +37,14 @@ if TYPE_CHECKING:  # 仅类型标注使用，运行时延迟导入以避免循�
     from .runs import RunRequest
 
 class PlatformService:
+    @property
+    def current_actor(self) -> str:
+        return self._current_actor
+
+    @current_actor.setter
+    def current_actor(self, value: str) -> None:
+        self._current_actor = value or "anonymous"
+
     def __init__(
         self,
         settings: Settings,
@@ -51,6 +60,10 @@ class PlatformService:
         # 只有 ldap 模式签发会话令牌；其它模式下拒绝一切会话令牌（契约 1.3）。
         self.sessions = sessions or SessionStore(settings.db_path, enabled=settings.auth_mode == "ldap")
         self.quotas = quotas or QuotaStore(settings.db_path)
+        # 审计日志：只记变更类操作，写失败绝不阻塞业务
+        self.audit = AuditStore(settings.db_path)
+        # 当前操作者，由 API 层在每个请求开始时设置（审计用）
+        self._current_actor = "anonymous"
         self._metrics_cache: tuple[float, dict[str, Any]] | None = None
         self._metrics_lock = threading.Lock()
         self._submit_lock = threading.Lock()
@@ -94,6 +107,12 @@ class PlatformService:
             # Record history only after the Kubernetes object exists, so a rejected
             # or failed create cannot leave a phantom submission behind.
             self.history.record_submission(spec, submitted_at)
+        self.audit.record(
+            "job.submit",
+            actor=spec.owner or "anonymous",
+            target=spec.name,
+            detail={"image": spec.image, "gpus": spec.gpus, "priority": spec.priority},
+        )
         return self._job_response(job, None, [])
 
     # --- 配额 --------------------------------------------------------------
@@ -134,6 +153,12 @@ class PlatformService:
         """写入单用户配额并返回最新上限 + 实时用量（前端行内编辑直接回填）。"""
         self.quotas.set_override(username, max_gpus, max_active_jobs)
         usage = self.usage_for(username)
+        self.audit.record(
+            "user.quota.update",
+            actor=self._current_actor,
+            target=username,
+            detail={"max_gpus": max_gpus, "max_active_jobs": max_active_jobs},
+        )
         return {"username": username, "quota": self.quota_for(username).render(usage)}
 
     def list_users(self) -> dict[str, Any]:
@@ -294,6 +319,12 @@ class PlatformService:
             existing_names=existing,
         )
         spec = SubmitSpec.model_validate(payload)
+        self.audit.record(
+            "run.create",
+            actor=owner,
+            target=spec.name,
+            detail={"recipe": recipe.id, "dataset": request.dataset_id, "overrides": request.overrides},
+        )
         return self.submit(spec, owner=owner)
 
     # ------------------------------------------------------------------
@@ -376,12 +407,19 @@ class PlatformService:
         if len(serialized.encode("utf-8")) > MAX_TEMPLATE_BYTES:
             raise ServiceError(422, f"template must not exceed {MAX_TEMPLATE_BYTES} bytes")
         self.history.put_image_params(image, serialized, utc_now())
+        self.audit.record(
+            "image.params.put",
+            actor=self._current_actor,
+            target=image,
+            detail={"params": [param.key for param in template.params]},
+        )
         return {"image": image, "source": "file", "template": json.loads(serialized)}
 
     def delete_params_template(self, image: str) -> None:
         if not validate_image_name(image):
             raise ServiceError(404, f"image {image} not found")
         self.history.delete_image_params(image)
+        self.audit.record("image.params.delete", actor=self._current_actor, target=image)
 
     def list_images(self) -> list[dict[str, Any]]:
         """Image suggestions for the submit form.
@@ -453,6 +491,12 @@ class PlatformService:
                 return self._cancelled_response(existing)
             raise
         cancellation = self.history.mark_cancelled(spec, created_at, status=preserved)
+        self.audit.record(
+            "job.cancel",
+            actor=self._current_actor,
+            target=name,
+            detail={"previous_status": current, "recorded_as": preserved},
+        )
         return self._cancelled_response(cancellation)
 
     def clone(self, name: str, new_name: str, owner: str | None = None) -> dict[str, Any]:

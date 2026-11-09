@@ -12,6 +12,7 @@ from ..auth import (
     may_access_job,
     require_admin,
     require_user,
+    set_admin_actor,
 )
 from ..config import Settings
 from ..models import CloneRequest, LoginRequest, QuotaUpdate, SubmitRequest
@@ -162,7 +163,7 @@ def list_users(
 def put_quota(
     username: Username,
     request_model: QuotaUpdate,
-    _admin: AuthContext = Depends(require_admin),
+    _admin: AuthContext = Depends(set_admin_actor),
     service: PlatformService = Depends(get_service),
 ) -> dict[str, Any]:
     return service.set_quota(username, request_model.max_gpus, request_model.max_active_jobs)
@@ -177,18 +178,23 @@ def get_image_params(image: str, service: PlatformService = Depends(get_service)
     return service.get_params_template(image)
 
 
-@router.put("/images/{image:path}/params", dependencies=[Depends(require_admin)])
+@router.put("/images/{image:path}/params")
 def put_image_params(
     image: str,
     payload: dict[str, Any],
+    _admin: AuthContext = Depends(set_admin_actor),
     service: PlatformService = Depends(get_service),
 ) -> dict[str, Any]:
     """登记/更新镜像的参数模板（仅 admin）。"""
     return service.put_params_template(image, payload)
 
 
-@router.delete("/images/{image:path}/params", status_code=204, dependencies=[Depends(require_admin)])
-def delete_image_params(image: str, service: PlatformService = Depends(get_service)) -> Response:
+@router.delete("/images/{image:path}/params", status_code=204)
+def delete_image_params(
+    image: str,
+    _admin: AuthContext = Depends(set_admin_actor),
+    service: PlatformService = Depends(get_service),
+) -> Response:
     """删除登记，之后回退内置模板（仅 admin）。"""
     service.delete_params_template(image)
     # 204 不能带响应体，FastAPI 要求显式返回 Response 而不是 None
@@ -311,6 +317,22 @@ def job_events(
 ) -> dict[str, Any]:
     _ensure_visible(user, service.get_job(name))
     return service.events(name)
+
+
+@router.get("/audit")
+def list_audit(
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    action: Annotated[str | None, Query(max_length=64)] = None,
+    actor: Annotated[str | None, Query(max_length=64)] = None,
+    target: Annotated[str | None, Query(max_length=100)] = None,
+    _admin: AuthContext = Depends(require_admin),
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    """审计日志（仅 admin）：谁在什么时候对什么做了什么。"""
+    result = service.audit.list(limit=limit, offset=offset, action=action, actor=actor, target=target)
+    result["actions"] = service.audit.actions()
+    return result
 
 
 @router.get("/cluster/summary", dependencies=[Depends(require_user)])

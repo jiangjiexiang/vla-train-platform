@@ -476,3 +476,31 @@ def test_require_admin_helper_shape():
 
         require_admin(AuthContext(username="u", role="user", source="ldap"))
     assert captured.value.status_code == 403
+
+def test_audit_endpoint_requires_admin(app_client, tmp_path):
+    """审计日志可能含其他用户的操，普通用户不能看。
+
+    这条同时锁住一个已修复的回归：为了让审计记录操作者而引入的 set_actor
+    依赖只做身份解析、不做 admin 校验，误用到 admin 路由上会直接放开权限。
+    """
+    settings = auth_settings(tmp_path, auth_mode="ldap", auth_required=True, ldap_url="ldap://x", ldap_base_dn="dc=c")
+    client, service = app_client(settings)
+    with client:
+        user_headers = make_session(service, "bob", role="user")
+        admin_headers = make_session(service, "alice", role="admin")
+
+        assert client.get("/api/v1/audit", headers=user_headers).status_code == 403
+        assert client.get("/api/v1/audit", headers=admin_headers).status_code == 200
+
+
+def test_quota_update_still_requires_admin(app_client, tmp_path):
+    """接入审计后 admin 路由不能放开权限（回归测试）。"""
+    settings = auth_settings(tmp_path, auth_mode="ldap", auth_required=True, ldap_url="ldap://x", ldap_base_dn="dc=c")
+    client, service = app_client(settings)
+    with client:
+        user_headers = make_session(service, "bob", role="user")
+
+        response = client.put("/api/v1/users/bob/quota", json={"max_gpus": 8}, headers=user_headers)
+
+        assert response.status_code == 403
+

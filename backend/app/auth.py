@@ -190,3 +190,32 @@ def format_time(value: datetime | None) -> str | None:
     if value is None:
         return None
     return value.astimezone(tz=None).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def set_actor(
+    request: Request,
+    user: AuthContext = Depends(require_user),
+) -> AuthContext:
+    """把当前用户写进 PlatformService，供审计日志记「谁做的」。
+
+    做成依赖而不是在每个路由里手动赋值：漏一个路由就会少一条审计，
+    而审计的价值恰恰在于完整。
+
+    注意：本依赖只做**身份解析**，不校验 admin。需要 admin 的路由必须用
+    ``set_admin_actor``，否则会把管理员权限放开——这是曾经踩过的坑。
+    """
+    service = getattr(request.app.state, "service", None)
+    if service is not None:
+        service.current_actor = user.username
+    return user
+
+
+def set_admin_actor(
+    request: Request,
+    admin: AuthContext = Depends(require_admin),
+) -> AuthContext:
+    """admin 专用：先校验管理员身份，再记录操作者。"""
+    service = getattr(request.app.state, "service", None)
+    if service is not None:
+        service.current_actor = admin.username
+    return admin

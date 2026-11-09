@@ -548,6 +548,7 @@ export function QuickStartPage() {
           form={form}
           layout="vertical"
           requiredMark={false}
+          onValuesChange={(_, all) => { const w = window as unknown as { __dbg?: unknown[] }; w.__dbg = [...(w.__dbg ?? []), all]; }}
           initialValues={{ name: '', priority: 'normal' as Priority, params: paramDefaults }}
         >
           <Row gutter={16}>

@@ -351,9 +351,10 @@ class PlatformService:
             existing_names=existing,
         )
         spec = SubmitSpec.model_validate(payload)
+        # 与 job.submit 一致：审计记操作者（current_actor），不是任务归属 owner
         self.audit.record(
             "run.create",
-            actor=owner,
+            actor=self._current_actor,
             target=spec.name,
             detail={"recipe": recipe.id, "dataset": request.dataset_id, "overrides": request.overrides},
         )

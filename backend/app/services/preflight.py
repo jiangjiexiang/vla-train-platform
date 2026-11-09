@@ -35,6 +35,42 @@ class Check:
         }
 
 
+def check_image(image: str, known_images: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """检查镜像是不是真的在节点上。
+
+    这里有个坑值得说明：Web 进程**查不到节点上的镜像列表**（容器运行时不在
+    Web pod 里，Kubernetes API 也不暴露），所以只能根据「历史上有没有任务用过它」
+    来推断。这个推断不完美，但比什么都不做强：
+
+    实测过一个真实事故——一个用了已删除镜像的任务被 Kueue 准入、占住唯一的
+    GPU 配额，然后 ImagePullBackOff 一直重试，后面所有任务永久排队。
+    用户在队列里干等，却不知道是被一个僵尸任务挡住了。
+
+    返回 None 表示「没意见」，否则返回一条告警/错误。
+    """
+    image = (image or "").strip()
+    if not image:
+        return None
+
+    known = {item.get("image") for item in known_images}
+    if image in known:
+        return None
+
+    # 短名（没有 registry 前缀）最容易去远端拉取然后 403。
+    # 但历史里没出现过的镜像也可能是刚构建好还没来得及跑的，
+    # 所以这里只报 warn 不报 error——挡住正常使用比漏报更糟。
+    hint = ""
+    if "/" not in image.split(":")[0]:
+        hint = "；短名镜像会去远端仓库拉取，若不在白名单会 403，建议写成 docker.io/library/<名字>:<标签>"
+
+    return {
+        "level": "warn",
+        "code": "image_unknown",
+        "message": f"镜像 {image} 没有在平台历史里出现过，提交后可能因拉取失败而卡住",
+        "suggestion": hint or "确认该镜像已导入节点",
+    }
+
+
 def preflight(
     *,
     dataset: dict[str, Any],
@@ -42,7 +78,9 @@ def preflight(
     gpu_total: int,
     gpu_allocated: int,
     requested_gpus: int,
-) -> dict[str, Any]:
+    incoming_image: str | None = None,
+    known_images: list[dict[str, Any]] | None = None,
+) -> list[Check]:
     """提交前检查。返回 ``{"ok": bool, "checks": [...]}``。
 
     ``ok`` 为 False 时调用方应拒绝提交（通常是 422）。
@@ -52,6 +90,23 @@ def preflight(
     checks.extend(_check_dataset(dataset))
     checks.extend(_check_compatibility(dataset, recipe))
     checks.extend(_check_resources(gpu_total, gpu_allocated, requested_gpus, recipe))
+
+    # 镜像可用性。Web 进程查不到节点上的镜像（容器运行时不在这个 pod 里，
+    # K8s API 也不暴露），只能按「历史上有没有任务用过」推断。
+    # 不完美，但实测能防住一个很痛的事故：用了已删除镜像的任务被 Kueue 准入、
+    # 占住唯一 GPU 配额，然后 ImagePullBackOff 一直重试，
+    # 后面所有任务永久排队，而用户只看到「排队中」。
+    if incoming_image:
+        image_check = check_image(incoming_image, known_images or [])
+        if image_check is not None:
+            checks.append(
+                Check(
+                    "warning",
+                    image_check["code"],
+                    image_check["message"],
+                    image_check["suggestion"],
+                )
+            )
 
     errors = [check for check in checks if check.level == "error"]
     return {

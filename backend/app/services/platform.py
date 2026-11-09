@@ -442,6 +442,10 @@ class PlatformService:
         return run_preflight(
             dataset=dataset,
             recipe=recipe.as_dict(),
+            # 镜像可用性：Web 查不到节点镜像，只能靠历史推断，
+            # 但能提前提醒「这个镜像平台没用过，可能拉不到」
+            incoming_image=str(recipe.as_dict().get("image") or self.settings.default_image),
+            known_images=self.list_images(),
             gpu_total=int(summary.get("gpu_total") or 0),
             gpu_allocated=int(summary.get("gpu_allocated") or 0),
             requested_gpus=recipe.gpu_count,

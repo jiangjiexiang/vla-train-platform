@@ -209,6 +209,28 @@ class PlatformService:
         ]
         return {"items": items}
 
+    def failure_summary(self, *, limit: int = 20) -> dict[str, Any]:
+        """失败原因分布。运维用来判断「是不是平台自己在制造失败」。
+
+        只分析最近 limit 个失败任务——更早的历史没有排查价值，
+        全量分析还会把接口拖慢。
+        """
+        from .failure_stats import summarize_failures
+
+        jobs = self._list_jobs(self.kubernetes.list_namespace_pods(), limit=None)["items"]
+        failed = [job for job in jobs if job.get("status") == "FAILED"][:limit]
+
+        diagnoses: dict[str, Any] = {}
+        for job in failed:
+            name = str(job.get("name") or "")
+            try:
+                result = self.job_diagnosis(name)
+            except Exception:  # noqa: BLE001 - 单个任务诊断失败不该影响整体统计
+                result = None
+            diagnoses[name] = (result or {}).get("diagnosis")
+
+        return summarize_failures(failed, diagnoses)
+
     def plan_cleanup(
         self,
         *,

@@ -380,6 +380,21 @@ def run_cleanup(
     )
 
 
+@router.get("/jobs/failures/summary", dependencies=[Depends(require_admin)])
+def failure_summary(
+    service: PlatformService = Depends(get_service),
+    limit: int = Query(default=20, ge=1, le=200),
+) -> dict[str, Any]:
+    """失败原因分布：按诊断码聚合最近失败的任务。
+
+    比看单个任务的诊断更有用的是知道「最近都在挂什么」——
+    十次失败里七次同一个原因，通常说明是平台配置问题而不是用户误用。
+
+    仅管理员可见：聚合结果会暴露他人的失败情况。
+    """
+    return service.failure_summary(limit=limit)
+
+
 @router.get("/audit")
 def list_audit(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,

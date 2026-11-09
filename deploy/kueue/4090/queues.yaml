@@ -1,0 +1,38 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: gpu
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+spec: {}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: vla-cluster-queue
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+spec:
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: vla-training
+  resourceGroups:
+    - coveredResources: ["nvidia.com/gpu"]
+      flavors:
+        - name: gpu
+          resources:
+            - name: nvidia.com/gpu
+              nominalQuota: 1
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: default
+  namespace: vla-training
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+spec:
+  clusterQueue: vla-cluster-queue

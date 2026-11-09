@@ -1,0 +1,109 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vla-gpu-metrics
+  namespace: vla-platform
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+    app.kubernetes.io/component: gpu-metrics
+data:
+  gpu-metrics.sh: |
+    #!/bin/sh
+    samples=$(nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits 2>/dev/null)
+    if [ $? -ne 0 ]; then
+      body='{"error":"nvidia-smi failed"}'
+      status='503 Service Unavailable'
+    else
+      body=$(printf '%s\n' "$samples" | awk -F ', *' '
+        BEGIN { printf "[" }
+        {
+          printf "%s{\"index\":%s,\"name\":\"%s\",\"utilization_percent\":%s,\"memory_used_mib\":%s,\"memory_total_mib\":%s,\"temperature_celsius\":%s}", separator, $1, $2, $3, $4, $5, $6
+          separator=","
+        }
+        END { print "]" }
+      ')
+      status='200 OK'
+    fi
+    printf 'HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "$status" "${#body}" "$body"
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vla-gpu-metrics
+  namespace: vla-platform
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+    app.kubernetes.io/component: gpu-metrics
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: gpu-metrics
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vla-train-platform
+        app.kubernetes.io/managed-by: vla-train-platform
+        app.kubernetes.io/component: gpu-metrics
+    spec:
+      runtimeClassName: nvidia
+      automountServiceAccountToken: false
+      containers:
+        - name: metrics
+          image: nvcr.io/nvidia/k8s-device-plugin:v0.20.1
+          imagePullPolicy: IfNotPresent
+          command: ["nc", "-ll", "-p", "8080", "-e", "/usr/local/bin/gpu-metrics.sh"]
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+          ports:
+            - name: metrics
+              containerPort: 8080
+          volumeMounts:
+            - name: metrics-script
+              mountPath: /usr/local/bin/gpu-metrics.sh
+              subPath: gpu-metrics.sh
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: metrics-script
+          configMap:
+            name: vla-gpu-metrics
+            defaultMode: 0555
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vla-gpu-metrics
+  namespace: vla-platform
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+    app.kubernetes.io/component: gpu-metrics
+spec:
+  selector:
+    app.kubernetes.io/component: gpu-metrics
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics

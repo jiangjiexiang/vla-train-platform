@@ -1,0 +1,382 @@
+# VLA GPU 训练排队平台
+
+面向单机 NVIDIA GPU 的内网训练排队平台。用户通过网页或 CLI 提交 PyTorchJob，由 Kueue 按 GPU 配额排队，Kubeflow Training Operator 执行训练；K3s 中的实时状态是事实来源，SQLite 只保存提交和取消历史。
+
+首版支持两种互斥的单机配置：
+
+- RTX 4090：1 张 GPU，任务只能申请 1 卡。
+- 8×A100：8 张 GPU，任务可申请 1、2、4 或 8 卡；8 卡 smoke 使用 `torchrun`。
+
+> Smoke 镜像只验证 CUDA、PyTorch、排队、日志和 checkpoint 链路，不是真实 VLA 模型训练。真实 GPU 验收必须在目标机器上执行，不能以构建成功或 dry-run 代替。
+
+## 1. 架构与边界
+
+```text
+浏览器 / cli/vla-train
+        │ HTTP（Authorization: Bearer <token>）
+        ▼
+vla-platform：FastAPI + React 单容器，SQLite 历史
+        │ Kubernetes API
+        ▼
+vla-training：Kueue → PyTorchJob → 单 Master Pod
+        │
+        ▼
+NVIDIA Device Plugin → 单机 1×4090 或 8×A100
+```
+
+固定资源与路径：
+
+| 项目 | 值 |
+|---|---|
+| Web Namespace | `vla-platform` |
+| 训练 Namespace | `vla-training` |
+| LocalQueue / ClusterQueue / ResourceFlavor | `default` / `vla-cluster-queue` / `gpu` |
+| 优先级 | `low`、`normal`、`high` |
+| Web NodePort | `30080` |
+| 数据集 | 宿主机 `/data/vla-platform/datasets` → 容器 `/datasets`（只读） |
+| Checkpoint | 宿主机 `/data/vla-platform/checkpoints` → 容器 `/checkpoints`（可写） |
+| 单任务 checkpoint | 容器 `/checkpoints/<job-name>` |
+| Web 历史库 | 容器内 `/data/history/platform.db`，由数据卷持久化 |
+
+任务名只能包含小写字母、数字和连字符，最长 50 字符，且不能以连字符开头或结尾。首版不开放任意宿主机路径、特权容器、宿主机 Docker Socket、Notebook、Web SSH、多机训练或按用户配额。
+
+## 2. 前置条件
+
+在目标 GPU 机器上准备：
+
+- 支持的操作系统、容器镜像构建工具（Docker，或本机无 Docker 时用 buildah，见 3.1）、以及与驱动匹配的 NVIDIA GPU 驱动；宿主机 `nvidia-smi` 应正常。
+- 4090 机器实际安装 1 张可用 GPU，或 A100 机器实际安装 8 张可用 GPU。
+- 可访问安装所需软件包和镜像的网络；磁盘空间足以保存镜像、数据集和 checkpoint。
+- 当前用户可构建镜像并导入 K3s containerd（Docker 或 buildah），且能通过 `kubectl` 管理目标 K3s。安装脚本需要提权时按脚本提示执行。
+- 数据集已放入 `/data/vla-platform/datasets`，checkpoint 父目录为 `/data/vla-platform/checkpoints`。
+
+平台安装脚本用于专用目标机器，不会替代运维人员判断现有 Docker/Kubernetes 环境是否适合改动。不要在未确认影响的生产集群上直接安装或卸载。
+
+## 3. 部署顺序
+
+在仓库根目录执行。4090 使用 `PROFILE=4090`；A100 机器从第一步起就统一改成 `PROFILE=a100`：
+
+```bash
+cd /path/to/vla-train-platform
+PROFILE=4090 bash scripts/preflight.sh
+PROFILE=4090 bash scripts/install-k3s-gpu.sh
+PROFILE=4090 bash scripts/install-stack.sh
+```
+
+这些脚本分别负责前置检查、K3s/NVIDIA 容器运行环境以及 Training Operator/Kueue 等基础组件。`install-stack.sh` 同时应用所选 Kueue 配额；已有 Device Plugin 或 Kueue 控制器会被复用，不重复安装或替换其 Deployment。训练 Pod 显式使用 `runtimeClassName: nvidia`，无需修改集群全局默认 Runtime。平台使用 Kueue `v1beta2` API，默认组件版本为 K3s v1.36.6、Kueue v0.20.5。Kueue 必须启用 `kubeflow.org/pytorchjob` 集成，chart 默认值与官方 release `manifests.yaml` 只启用 `pod`，会让排队粒度退化为 Pod 级；启用方式见 `deploy/kueue/base/kueue-values.yaml`，判断方法见第 10 节。组件安装后，构建并导入 Web 与 smoke 镜像，再部署 Web；不要在镜像尚未导入时提交任务。
+
+### 3.1 构建并导入镜像
+
+Web 默认标签为 `vla-platform:local`，与 `deploy/web/base/deployment.yaml` 一致。手动构建和导入：
+
+```bash
+cd /path/to/vla-train-platform
+WEB_IMAGE=vla-platform:local
+
+docker build -f backend/Dockerfile -t "$WEB_IMAGE" .
+docker build -t vla-smoke:latest images/smoke-train
+
+docker save "$WEB_IMAGE" -o /tmp/vla-platform-web.tar
+docker save vla-smoke:latest -o /tmp/vla-smoke.tar
+sudo k3s ctr images import /tmp/vla-platform-web.tar
+sudo k3s ctr images import /tmp/vla-smoke.tar
+sudo k3s ctr images ls
+rm -f /tmp/vla-platform-web.tar /tmp/vla-smoke.tar
+```
+
+也可执行 `bash examples/build-import-smoke.sh` 构建并导入 smoke。`deploy-web.sh` 在 Web 镜像不存在时默认自动构建/导入，设置 `BUILD_IMAGE=1` 可强制重建；已有镜像归档时可设置 `WEB_IMAGE_TAR`，smoke 归档可设置 `SMOKE_IMAGE_TAR`。
+
+使用本地导入镜像时，对应 Deployment/PyTorchJob 应采用 `IfNotPresent` 拉取策略；`latest` 配合 `Always` 会尝试访问外部镜像仓库。Smoke 镜像名固定为 `vla-smoke:latest`，训练入口为 `/app/train.py`。
+
+**目标机器没有 Docker 时（buildah 路径）**
+
+本机实测没有 `docker`，`scripts/deploy-web.sh` 的自动构建分支会直接报错退出。可用 buildah（本机为 1.23.1，rootless）构建并导入，前端必须用 Node 20 构建（系统自带 Node 12 无法构建 Vite 6 工程，Node 20 装在 `/opt/node20/bin`）：
+
+```bash
+cd /path/to/vla-train-platform
+
+cd frontend
+/opt/node20/bin/npm ci
+/opt/node20/bin/npm run build        # 生成 frontend/dist，backend/Dockerfile 会 COPY 它
+cd ..
+
+buildah bud -f backend/Dockerfile -t vla-platform:local .
+buildah bud -t vla-smoke:latest images/smoke-train
+
+buildah push vla-platform:local docker-archive:/tmp/vla-platform-web.tar:vla-platform:local
+buildah push vla-smoke:latest docker-archive:/tmp/vla-smoke.tar:vla-smoke:latest
+
+sudo k3s ctr -n k8s.io images import /tmp/vla-platform-web.tar
+sudo k3s ctr -n k8s.io images import /tmp/vla-smoke.tar
+sudo k3s ctr -n k8s.io images ls
+rm -f /tmp/vla-platform-web.tar /tmp/vla-smoke.tar
+
+BUILD_IMAGE=0 PROFILE=4090 bash scripts/deploy-web.sh
+```
+
+buildah 的存储与 K3s containerd 相互独立，所以 `buildah push ... docker-archive:` 加 `k3s ctr images import` 这一步不能省。buildah 拉取 `docker.io` 基础镜像走本机 `/etc/containers/registries.conf.d/` 中配置的 `docker.m.daocloud.io` 镜像加速；`python:3.12-slim` 仍需要能访问该加速源。镜像已预先导入时必须带 `BUILD_IMAGE=0`（或改用 `WEB_IMAGE_TAR=`/`SMOKE_IMAGE_TAR=` 指定归档），否则 `deploy-web.sh` 在 `BUILD_IMAGE=auto` 且镜像缺失时会尝试调用不存在的 `docker`。
+
+### 3.2 选择或切换 4090/A100 配置
+
+首次安装由 `PROFILE` 同时选择 Kueue 配额和 Web overlay。已有平台上切换时，先取消或等待已有任务结束，确保没有工作负载仍按旧配额运行，再执行：
+
+**4090：**
+
+```bash
+kubectl apply -k deploy/kueue/4090/
+PROFILE=4090 bash scripts/deploy-web.sh
+```
+
+**单机 8×A100：**
+
+```bash
+kubectl apply -k deploy/kueue/a100/
+PROFILE=a100 bash scripts/deploy-web.sh
+```
+
+4090 overlay 设置 `PLATFORM_ALLOWED_GPUS=1`，A100 overlay 设置 `1,2,4,8`。配额和该变量必须一起切换：前者决定集群能放行多少卡，后者限制表单/API 允许的单任务卡数。已存在 `vla-web-auth` Secret 时，以上命令复用原令牌；只有显式提供新令牌才会轮换并重启 Web。
+
+### 3.3 配置鉴权并启动 Web
+
+当前 4090 overlay 设置 `PLATFORM_AUTH_REQUIRED=false`，网页和 API 暂时免登录，仅限可信内网使用；A100 overlay 默认仍要求令牌。部署脚本首次运行仍会创建 `vla-web-auth` Secret，便于以后恢复鉴权。生成高随机性的静态令牌并通过环境变量交给部署脚本，不要把真实令牌写入仓库、镜像或脚本：
+
+```bash
+export PLATFORM_API_TOKEN="$(openssl rand -hex 32)"
+PROFILE=4090 bash scripts/deploy-web.sh
+```
+
+A100 使用 `PROFILE=a100`。也可用权限受控的单行令牌文件并设置 `PLATFORM_API_TOKEN_FILE`，两种令牌输入方式不要同时使用。对已有 Web 再次提供令牌会更新 Secret 并重启 Deployment，客户端需要同步换用新令牌。
+
+要在 4090 上恢复登录，将 `deploy/web/overlays/4090/deployment.yaml` 中 `PLATFORM_AUTH_REQUIRED` 的值改为 `"true"`，保留有效的 `vla-web-auth` Secret，再执行 `PROFILE=4090 bash scripts/deploy-web.sh`。
+
+Web 后端还支持契约中定义的 `PLATFORM_NAMESPACE`、`PLATFORM_QUEUE`、`PLATFORM_DATASET_HOST_PATH`、`PLATFORM_CHECKPOINT_HOST_PATH`、`PLATFORM_DB_PATH` 等配置；首版通常保留默认值。开启鉴权时，所有 API（健康检查除外）都要求静态令牌，请只通过受控方式分发。
+
+检查服务：
+
+```bash
+kubectl -n vla-platform get deployment,pod,service
+curl -fsS http://127.0.0.1:30080/api/v1/health
+```
+
+免登录时预期健康响应为 `{"status":"ok","auth_required":false}`，开启鉴权时 `auth_required` 为 `true`。
+
+主要 HTTP 接口（前缀 `/api/v1`；开启鉴权时除 `/health` 外都要带 `Authorization: Bearer <token>`）：
+
+- `GET /health`、`GET /config`
+- `GET /jobs`、`POST /jobs`
+- `GET /jobs/{name}`、`DELETE /jobs/{name}`、`POST /jobs/{name}/clone`
+- `GET /jobs/{name}/logs?tail_lines=500`
+- `GET /jobs/{name}/events`：返回该任务的 PyTorchJob 与训练 Pod 事件，按 `last_seen` 倒序；任务不存在返回 404，已取消且对象已删除时返回空 `items`。镜像拉取失败、Pod 调度失败等问题先用它定位。
+- `GET /queues`、`GET /cluster/summary`
+
+完整字段与语义见 `CONTRACTS.md`。
+
+## 4. 网页使用
+
+在内网浏览器打开：
+
+```text
+http://<目标机器IP>:30080
+```
+
+如当前机器防火墙或云安全组限制端口，只向内网可信来源开放 TCP `30080`。当前 4090 配置会直接进入平台；开启鉴权后需在 `/login` 输入访问令牌。主要页面：
+
+- `/dashboard`：GPU 总量、已分配量、空闲量、节点和任务统计，以及每张卡的核心利用率、显存占用和温度。
+- `/submit`：填写任务名、镜像、GPU 数、优先级、命令、环境变量和重启次数。
+- `/jobs`：查看排队/运行状态、取消任务或复制任务。
+- `/jobs/<job-name>`：查看 Kueue、PyTorchJob、Pod 事件、日志和输出目录。
+- `/queues`：查看配额、已用量、已放行和待放行任务。
+
+网页每 3～5 秒轮询。“GPU 分配情况”来自 Kubernetes，表示训练任务获得多少张卡；“GPU 实时使用情况”来自 `nvidia-smi`，表示核心利用率、显存和温度，两者含义不同。`vla-gpu-metrics` DaemonSet 只读采集指标，不申请训练 GPU 配额。排队时还没有训练 Pod，因此日志为空是正常现象；先查看任务详情和队列页，不要把“无日志”直接判断为日志系统故障。
+
+## 5. CLI
+
+CLI 只调用 REST API，不直接操作 Kubernetes。配置文件以 `0600` 权限保存在当前用户配置目录。
+
+```bash
+cd /path/to/vla-train-platform
+cli/vla-train config --server http://127.0.0.1:30080 --token "$PLATFORM_API_TOKEN"
+cli/vla-train submit \
+  --name smoke001 \
+  --gpus 1 \
+  --image vla-smoke:latest \
+  --priority normal \
+  --command 'python /app/train.py --steps 100'
+cli/vla-train list
+cli/vla-train status
+cli/vla-train logs smoke001
+```
+
+`status` 查看任务列表/状态，`logs` 读取日志。 queued 任务可能返回空日志；运行后应看到 CUDA/GPU、训练进度和完成信息。
+
+### 取消与 clone
+
+```bash
+cli/vla-train cancel smoke001
+cli/vla-train clone smoke001 --name smoke002
+```
+
+取消会记录取消历史并删除对应 PyTorchJob，从而释放 GPU；重复取消同一任务不会报错。clone 使用原提交参数，但必须提供一个未使用的新任务名。网页中的 clone 会打开已填充原参数的提交表单。
+
+## 6. 提交两个任务验证排队
+
+在空闲集群上使用足够长的 smoke 步骤，避免第一个任务在第二个提交前就结束。以下名称如已存在，请换成新的合法名称。
+
+### 4090
+
+```bash
+cli/vla-train submit --name queue4090a --gpus 1 --image vla-smoke:latest \
+  --priority normal --command 'python /app/train.py --steps 1000'
+cli/vla-train submit --name queue4090b --gpus 1 --image vla-smoke:latest \
+  --priority normal --command 'python /app/train.py --steps 1000'
+cli/vla-train list
+cli/vla-train status
+```
+
+预期一个为 `RUNNING`、另一个为 `QUEUED`。取消运行任务：
+
+```bash
+cli/vla-train cancel queue4090a
+cli/vla-train logs queue4090b
+```
+
+第二个任务应被自动放行并运行，说明取消释放了 1 卡配额。
+
+### 单机 8×A100
+
+要验证 8 卡排队，两个任务都必须申请 8 卡；两个 1 卡任务可以在 8 卡配额内同时运行，不能证明排队。
+
+```bash
+cli/vla-train submit --name queuea100a --gpus 8 --image vla-smoke:latest \
+  --priority normal \
+  --command 'torchrun --standalone --nproc_per_node=8 /app/train.py --distributed --steps 1000'
+cli/vla-train submit --name queuea100b --gpus 8 --image vla-smoke:latest \
+  --priority normal \
+  --command 'torchrun --standalone --nproc_per_node=8 /app/train.py --distributed --steps 1000'
+cli/vla-train list
+cli/vla-train cancel queuea100a
+```
+
+预期同样是一个运行、一个排队，取消后第二个任务自动运行。8 卡日志还应确认 8 个进程均启动且无 NCCL 错误。
+
+也可以显式使用验收脚本的可选端到端模式；默认模式只检查，不提交训练：
+
+```bash
+PLATFORM_API_TOKEN="$PLATFORM_API_TOKEN" bash scripts/verify-4090.sh --e2e
+PLATFORM_API_TOKEN="$PLATFORM_API_TOKEN" bash scripts/verify-a100.sh --e2e
+PLATFORM_API_TOKEN="$PLATFORM_API_TOKEN" bash scripts/verify-a100.sh --e2e --8gpu-smoke
+```
+
+4090 的 `--e2e` 和 A100 的 `--8gpu-smoke` 会真实占用 GPU。脚本会验证排队与取消，成功任务保留供查看日志/checkpoint；失败时尝试取消本次创建的任务。普通 A100 `--e2e` 只运行一个短 smoke，不验证 8 卡排队。
+
+## 7. Checkpoint 与历史
+
+训练容器内写入：
+
+```text
+/checkpoints/<job-name>
+```
+
+对应宿主机：
+
+```text
+/data/vla-platform/checkpoints/<job-name>
+```
+
+任务结束后检查文件仍存在：
+
+```bash
+ls -la /data/vla-platform/checkpoints/smoke001
+```
+
+Smoke 程序使用 `CHECKPOINT_DIR`；平台按任务提供该目录。自有训练代码应把 checkpoint 写入该环境变量指定的位置。API/CLI 不允许把任意宿主机目录挂载进容器。删除 Kubernetes 任务不等于删除宿主机 checkpoint；删除宿主机目录则不可恢复，请先备份。
+
+Web 重启不应影响 K3s 中的实时任务。SQLite 历史依赖 `/data/history/platform.db` 所在数据卷持久化，实时调度状态绝不从 SQLite 恢复。
+
+## 8. 验收
+
+默认验收不启动训练：
+
+```bash
+bash scripts/verify-4090.sh
+bash scripts/verify-a100.sh
+```
+
+分别在与硬件匹配的环境执行，不要在 4090 机器上期待 A100 检查通过。脚本优先使用能访问集群的 `kubectl`，否则尝试 `k3s kubectl`（需要时使用 `sudo`）；也可用 `KUBECTL_BIN` 指定其他 kubectl 可执行文件。可用 `WEB_URL` 指定 API 地址，默认 `http://127.0.0.1:30080`；可用 `E2E_TIMEOUT` 调整可选 smoke 的等待秒数。
+
+完整人工清单见：
+
+- `docs/acceptance-4090.md`
+- `docs/acceptance-a100.md`
+- `docs/troubleshooting.md`
+
+只有真实提交 CUDA 训练并检查输出后，才能勾选 GPU/NCCL/checkpoint 实测项。
+
+## 9. 卸载
+
+首版没有一个会同时删除 K3s、NVIDIA、Kueue 和平台数据的无差别卸载脚本。按以下顺序手动操作，并在每条删除命令前确认目标机器和命名空间。
+
+1. 在网页或 CLI 取消不再需要的活动任务，备份历史与 checkpoint。
+2. 只删除平台和训练命名空间：
+
+   ```bash
+   kubectl delete namespace vla-platform vla-training
+   ```
+
+   这会删除 Web、训练任务及命名空间内资源。`deploy/base/storage.yaml` 将历史 PV `vla-web-history` 的回收策略设为 `Retain`，删除 Namespace 不会清除宿主机历史文件。备份历史后，如确认不再保留 PV，可另行执行 `kubectl delete persistentvolume vla-web-history`；这仍不会清空其 hostPath。
+
+3. 如果这是专用集群，且确认不再使用本项目队列，可删除集群级队列资源：
+
+   ```bash
+   kubectl delete clusterqueue vla-cluster-queue
+   kubectl delete resourceflavor gpu
+   kubectl delete workloadpriorityclass low normal high
+   ```
+
+4. Kueue、Training Operator、NVIDIA Device Plugin 可能被其他工作负载使用；只有在确认整个集群不再需要时，才按各自安装版本的官方方式卸载。不要直接删除共享 CRD 来“清理”平台。
+5. 只有在整台机器专用于此平台且确认所有 K3s 工作负载都可删除时，才运行 K3s 自带的 `/usr/local/bin/k3s-uninstall.sh`。该操作不局限于本项目。
+6. `/data/vla-platform/datasets`、`/data/vla-platform/checkpoints` 和 `/data/vla-platform/history` 不会因上述 Kubernetes 命令自动清理。备份后再由管理员手动删除不再需要的宿主机数据；删除 history 即永久删除平台提交/取消历史。
+
+## 10. 常见故障速查
+
+| 现象 | 首先检查 |
+|---|---|
+| 容器内 `nvidia-smi` 失败 | NVIDIA Container Toolkit、K3s containerd runtime，重启后节点是否重新 Ready |
+| 节点 GPU 为 0 | Device Plugin Pod、驱动、插件日志和节点 `nvidia.com/gpu` Capacity |
+| PyTorchJob 一直 Pending | PyTorchJob/Pod 事件、LocalQueue、ClusterQueue 配额和现有占用 |
+| Pod 已建但不受配额约束 | 队列标签、Kueue controller、LocalQueue/ClusterQueue 对应关系 |
+| 8 卡任务失败 | `torchrun` 参数、8 卡可见性、NCCL 日志和容器网络 |
+| 镜像拉取失败 | 镜像是否导入 K3s/containerd、标签是否一致、`imagePullPolicy` |
+| 日志为空 | 任务是否仍排队、Pod 是否存在、容器是否已写 stdout/stderr |
+| Web 401/403 | Bearer 令牌是否正确、后端 ServiceAccount RBAC、请求是否经过正确 API 地址 |
+
+### 镜像拉取失败：先用 events 接口定位
+
+```bash
+curl -fsS "http://127.0.0.1:30080/api/v1/jobs/<job-name>/events" | python3 -m json.tool
+```
+
+按 `last_seen` 倒序查看，找 `type=Warning`、`reason=Failed` 且 `message` 含 `ImagePullBackOff`、`ErrImagePull` 或 `manifest unknown` 的条目，`object_name` 指出是哪个 Pod。随后用 `sudo k3s ctr -n k8s.io images ls` 与 PyTorchJob/Deployment 里的 `image` 字符串逐字比对（含标签），并确认 `imagePullPolicy` 为 `IfNotPresent`。若 `items` 为空，通常说明任务还不存在、已取消并清理，或事件已过保留期（`kube-apiserver` 默认 `--event-ttl=1h`），此时退回 `kubectl -n vla-training describe pod <pod-name>` 查看。
+
+### Kueue 集成没开：检查 frameworks 和 Workload owner
+
+```bash
+kubectl -n kueue-system get cm kueue-manager-config -o yaml | grep -A20 "frameworks:"
+kubectl -n vla-training get workload -o yaml | grep -A3 "ownerReferences:"
+```
+
+`frameworks` 列表必须包含 `kubeflow.org/pytorchjob`。若只有 `pod` 等条目，Kueue 会按 Pod 逐个放行：Workload 名为 `pod-<pod>-<hash>`，`ownerReferences` 指向 Pod，多副本任务会失去作业级原子放行的语义。修复方式是用 `deploy/kueue/base/kueue-values.yaml`（chart 默认值，仅启用 `kubeflow.org/pytorchjob`）执行 `helm upgrade --install kueue <chart> -n kueue-system -f deploy/kueue/base/kueue-values.yaml`；`kubectl apply -k deploy/kueue/<profile>/` 只管理队列与优先级，不会修改 Kueue 自身配置。
+
+详细诊断命令见 `docs/troubleshooting.md`。验收脚本失败时也会打印只读诊断命令，且不会输出访问令牌。
+
+## 版本管理
+
+仓库根目录的 `VERSION` 是当前版本号，`CHANGELOG.md` 记录每个大版本的变更。
+
+约定：
+
+- 每个**大版本**（功能集变化、部署方式变化、破坏性接口调整）完成并通过验证后提交一次 commit，同时打 `vX.Y.Z` tag。
+- 日常的小修可以直接 commit，不单独打 tag，但要在 `CHANGELOG.md` 的对应版本条目下补一行。
+- commit message 用 `type: 摘要` 形式，`type` 取 `feat` / `fix` / `docs` / `refactor` / `chore`，正文写清楚动机和验证方式。
+- 提交前跑 `bash scripts/verify-4090.sh`，未通过不要提交到主分支。
+- 下列内容不入库：`node_modules/`、`frontend/dist/`、`artifacts/`（含镜像 tar 与访问令牌）、SQLite 数据库、`__pycache__`。

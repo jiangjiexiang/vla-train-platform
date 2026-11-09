@@ -1,0 +1,13 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vla-web
+  namespace: vla-platform
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          env:
+            - name: PLATFORM_ALLOWED_GPUS
+              value: "1,2,4,8"

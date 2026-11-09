@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vla-web-history
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  volumeMode: Filesystem
+  hostPath:
+    path: /data/vla-platform/history
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vla-web-history
+  namespace: vla-platform
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: manual
+  volumeMode: Filesystem
+  volumeName: vla-web-history

@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Client for the VLA training platform REST API."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import tempfile
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode, urlsplit
+from urllib.request import Request, urlopen
+
+
+NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+class CliError(Exception):
+    def __init__(self, message, exit_code=1):
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
+def default_config_path():
+    if os.environ.get("VLA_TRAIN_CONFIG"):
+        return Path(os.environ["VLA_TRAIN_CONFIG"]).expanduser()
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser()
+    return config_home / "vla-train" / "config.json"
+
+
+def normalize_server(server):
+    server = (server or "").strip().rstrip("/")
+    parsed = urlsplit(server)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise CliError("server 必须是有效的 http:// 或 https:// 地址", 2)
+    if parsed.username or parsed.password:
+        raise CliError("server 地址不能包含用户名或密码", 2)
+    if parsed.query or parsed.fragment:
+        raise CliError("server 地址不能包含查询参数或 fragment", 2)
+    return server
+
+
+def api_base(server):
+    server = normalize_server(server)
+    return server if server.endswith("/api/v1") else server + "/api/v1"
+
+
+def read_config(path):
+    if not path.exists():
+        return {}
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+        if not path.is_file():
+            raise CliError(f"配置路径不是普通文件: {path}", 3)
+        if mode != 0o600:
+            raise CliError(f"配置文件权限必须为 0600，请执行 chmod 600 {path}", 3)
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise CliError(f"配置文件 JSON 无效: {path}: {exc}", 3) from exc
+    except OSError as exc:
+        raise CliError(f"无法读取配置文件 {path}: {exc}", 3) from exc
+    if not isinstance(data, dict):
+        raise CliError(f"配置文件必须包含 JSON 对象: {path}", 3)
+    return data
+
+
+def write_config(path, server, token):
+    if not token:
+        raise CliError("token 不能为空", 2)
+    server = normalize_server(server)
+    old_umask = os.umask(0o077)
+    temporary = None
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.parent.chmod(0o700)
+        descriptor, temporary = tempfile.mkstemp(prefix=".config-", dir=path.parent)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump({"server": server, "token": token}, handle, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        temporary = None
+        path.chmod(0o600)
+    except OSError as exc:
+        raise CliError(f"无法写入配置文件 {path}: {exc}", 3) from exc
+    finally:
+        os.umask(old_umask)
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
+
+def connection(args, require_token=True):
+    path = Path(args.config_file).expanduser() if args.config_file else default_config_path()
+    config = read_config(path)
+    server = args.server or os.environ.get("VLA_TRAIN_SERVER") or config.get("server")
+    token = args.token or os.environ.get("VLA_TRAIN_TOKEN") or config.get("token")
+    if not server:
+        raise CliError("未配置 server；请先运行 vla-train config --server ... --token ...", 3)
+    if require_token and not token:
+        raise CliError("未配置访问令牌；请先运行 vla-train config，或设置 VLA_TRAIN_TOKEN", 3)
+    return api_base(server), token
+
+
+def request(base, token, method, path, payload=None, timeout=30.0):
+    url = base + path
+    body = None
+    headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = Request(url, data=body, headers=headers, method=method)
+    try:
+        with urlopen(req, timeout=timeout) as response:
+            raw = response.read()
+    except HTTPError as exc:
+        raw = exc.read(65536)
+        detail = raw.decode("utf-8", errors="replace").strip()
+        try:
+            parsed = json.loads(detail)
+            detail = parsed.get("detail", parsed) if isinstance(parsed, dict) else parsed
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        if not isinstance(detail, str):
+            detail = json.dumps(detail, ensure_ascii=False)
+        detail = detail or "服务器未提供错误详情"
+        raise CliError(f"API HTTP {exc.code} {exc.reason}: {detail}", 5) from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        raise CliError(f"无法连接平台 API: {reason}", 4) from exc
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CliError("平台 API 返回了无效 JSON", 5) from exc
+
+
+def print_json(value):
+    print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def validate_name(name):
+    if len(name) > 50 or not NAME_RE.fullmatch(name):
+        raise CliError("任务名须匹配 ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ 且最长 50 字符", 2)
+    return name
+
+
+def parse_env(items):
+    result = {}
+    for item in items:
+        if "=" not in item:
+            raise CliError(f"环境变量必须使用 KEY=VALUE 格式: {item}", 2)
+        key, value = item.split("=", 1)
+        if not ENV_RE.fullmatch(key):
+            raise CliError(f"无效环境变量名: {key}", 2)
+        result[key] = value
+    return result
+
+
+def quoted_name(name):
+    return quote(validate_name(name), safe="")
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="vla-train", description="VLA 训练平台 REST API 客户端")
+    parser.add_argument("--config-file", help="配置文件路径（默认遵循 XDG 用户配置目录）")
+    parser.add_argument("--server", help="覆盖平台地址，也可用 VLA_TRAIN_SERVER")
+    parser.add_argument("--token", help="覆盖访问令牌，也可用 VLA_TRAIN_TOKEN（不推荐放入 shell 历史）")
+    parser.add_argument("--timeout", type=float, default=30.0, help="API 超时秒数，默认 30")
+    subparsers = parser.add_subparsers(dest="action", required=True)
+
+    config = subparsers.add_parser("config", help="保存或查看本地 API 配置")
+    config.add_argument("--server", help="平台地址，例如 http://HOST:30080")
+    config.add_argument("--token", help="平台访问令牌")
+    config.add_argument("--show", action="store_true", help="显示配置路径和地址，不显示令牌")
+
+    submit = subparsers.add_parser("submit", help="提交训练任务")
+    submit.add_argument("--name", required=True)
+    submit.add_argument("--gpus", required=True, type=int)
+    submit.add_argument("--image", default="vla-smoke:latest")
+    submit.add_argument("--queue", default="default")
+    submit.add_argument("--priority", choices=("low", "normal", "high"), default="normal")
+    submit.add_argument("--command", required=True)
+    submit.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
+    submit.add_argument("--max-retries", type=int, choices=(0, 1, 2), default=0)
+    submit.add_argument("--dry-run", action="store_true", help="仅打印 REST 请求，不连接平台")
+
+    subparsers.add_parser("list", help="列出任务")
+
+    status = subparsers.add_parser("status", help="查看任务详情；省略名称时列出全部任务")
+    status.add_argument("name", nargs="?")
+
+    logs = subparsers.add_parser("logs", help="读取任务日志")
+    logs.add_argument("name")
+    logs.add_argument("--tail-lines", type=int, default=500)
+
+    cancel = subparsers.add_parser("cancel", help="取消任务")
+    cancel.add_argument("name")
+
+    clone = subparsers.add_parser("clone", help="按原参数复制任务")
+    clone.add_argument("source_name")
+    clone.add_argument("--name", required=True, help="新任务名")
+    return parser
+
+
+def run(args):
+    if args.timeout <= 0:
+        raise CliError("timeout 必须大于 0", 2)
+    if args.action == "config":
+        path = Path(args.config_file).expanduser() if args.config_file else default_config_path()
+        if args.show:
+            if args.server or args.token:
+                raise CliError("--show 不能与 --server/--token 同时使用", 2)
+            config = read_config(path)
+            print_json({
+                "config_file": str(path),
+                "server": config.get("server"),
+                "token_configured": bool(config.get("token")),
+            })
+            return
+        if not args.server or args.token is None:
+            raise CliError("保存配置需要 --server 和 --token；查看配置使用 --show", 2)
+        write_config(path, args.server, args.token)
+        print_json({"config_file": str(path), "server": normalize_server(args.server), "token": "已保存（不显示）", "mode": "0600"})
+        return
+
+    if args.action == "submit":
+        name = validate_name(args.name)
+        if args.gpus <= 0:
+            raise CliError("gpus 必须是正整数；具体允许值由平台配置决定", 2)
+        if not args.image.strip() or not args.command.strip():
+            raise CliError("image 和 command 不能为空", 2)
+        if args.queue != "default":
+            raise CliError("首版 queue 只能为 default", 2)
+        payload = {
+            "name": name,
+            "image": args.image,
+            "gpus": args.gpus,
+            "queue": args.queue,
+            "priority": args.priority,
+            "command": args.command,
+            "env": parse_env(args.env),
+            "max_retries": args.max_retries,
+        }
+        base, token = connection(args, require_token=not args.dry_run)
+        if args.dry_run:
+            print_json({"method": "POST", "url": base + "/jobs", "body": payload})
+            return
+        print_json(request(base, token, "POST", "/jobs", payload, args.timeout))
+        return
+
+    base, token = connection(args)
+    if args.action == "list":
+        print_json(request(base, token, "GET", "/jobs", timeout=args.timeout))
+    elif args.action == "status":
+        path = "/jobs" if args.name is None else "/jobs/" + quoted_name(args.name)
+        print_json(request(base, token, "GET", path, timeout=args.timeout))
+    elif args.action == "logs":
+        if args.tail_lines <= 0:
+            raise CliError("tail-lines 必须是正整数", 2)
+        query = urlencode({"tail_lines": args.tail_lines})
+        result = request(base, token, "GET", f"/jobs/{quoted_name(args.name)}/logs?{query}", timeout=args.timeout)
+        logs = result.get("logs")
+        if not isinstance(logs, str):
+            raise CliError("日志 API 响应缺少字符串字段 logs", 5)
+        print(logs, end="" if logs.endswith("\n") or not logs else "\n")
+    elif args.action == "cancel":
+        print_json(request(base, token, "DELETE", "/jobs/" + quoted_name(args.name), timeout=args.timeout))
+    elif args.action == "clone":
+        validate_name(args.name)
+        path = "/jobs/" + quoted_name(args.source_name) + "/clone"
+        print_json(request(base, token, "POST", path, {"name": args.name}, args.timeout))
+    else:
+        raise CliError(f"未知命令: {args.action}", 2)
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        run(args)
+    except CliError as exc:
+        print(f"vla-train: error: {exc}", file=sys.stderr)
+        return exc.exit_code
+    except KeyboardInterrupt:
+        print("vla-train: 已中断", file=sys.stderr)
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,279 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 360px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #f4f6fa;
+  color: #1d2939;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 0 28px;
+  box-shadow: 0 2px 8px rgb(16 24 40 / 18%);
+}
+
+.brand {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.brand-mark,
+.login-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #315efb;
+  color: #fff;
+  font-size: 20px;
+}
+
+.main-menu {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+}
+
+.logout-button {
+  flex: 0 0 auto;
+  color: rgb(255 255 255 / 80%);
+}
+
+.logout-button:hover {
+  color: #fff !important;
+}
+
+.app-content {
+  width: 100%;
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 28px;
+}
+
+.app-footer {
+  padding: 20px 28px 28px;
+  text-align: center;
+  background: transparent;
+  color: #667085;
+  font-size: 12px;
+}
+
+.page-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.page-heading h2.ant-typography {
+  margin: 0 0 5px;
+  font-size: 26px;
+}
+
+.section-card,
+.error-alert,
+.clone-alert,
+.job-message {
+  margin-bottom: 16px;
+}
+
+.full-height-card {
+  height: 100%;
+}
+
+.detail-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px !important;
+}
+
+.table-filters {
+  margin-bottom: 18px;
+}
+
+.job-search {
+  width: 300px;
+}
+
+.status-filter {
+  width: 140px;
+}
+
+.command-text {
+  display: inline-block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.env-display {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.template-help {
+  margin: 14px 0 10px;
+}
+
+.env-row {
+  display: flex;
+  width: 100%;
+}
+
+.env-key {
+  width: 320px;
+}
+
+.env-value {
+  width: min(480px, 40vw);
+}
+
+.log-viewer {
+  height: 480px;
+  overflow: auto;
+  border: 1px solid #263449;
+  border-radius: 6px;
+  background: #0d1524;
+  overscroll-behavior: contain;
+}
+
+.log-viewer pre {
+  min-height: 100%;
+  margin: 0;
+  padding: 16px;
+  color: #d7e0ed;
+  font: 13px/1.65 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.queue-items {
+  margin-top: 24px;
+}
+
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: radial-gradient(circle at 20% 10%, #263f86 0, transparent 38%), linear-gradient(145deg, #101828, #172554);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 440px;
+  padding: 12px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 28%);
+}
+
+.login-brand {
+  margin-bottom: 30px;
+  text-align: center;
+}
+
+.login-logo {
+  width: 52px;
+  height: 52px;
+  margin-bottom: 16px;
+  font-size: 28px;
+}
+
+.login-brand h2 {
+  margin-bottom: 6px;
+}
+
+.login-error {
+  margin-bottom: 20px;
+}
+
+.login-help {
+  margin: 20px 0 0;
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .app-header {
+    gap: 12px;
+    padding: 0 16px;
+  }
+
+  .brand > span:last-child {
+    display: none;
+  }
+
+  .app-content {
+    padding: 20px 16px;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-heading {
+    flex-direction: column;
+  }
+
+  .env-row {
+    flex-wrap: wrap;
+  }
+
+  .env-key,
+  .env-value,
+  .job-search {
+    width: 100%;
+  }
+}
+
+.event-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.event-message {
+  margin: 0 !important;
+  overflow-wrap: anywhere;
+}
+
+.event-item-warning {
+  border-left: 3px solid #ff4d4f;
+  background: #fff2f0;
+  padding-left: 12px !important;
+}
+
+.event-placeholder {
+  min-height: 48px;
+}

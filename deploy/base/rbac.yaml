@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vla-web
+  namespace: vla-platform
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vla-web-training
+  namespace: vla-training
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+rules:
+  - apiGroups: ["kubeflow.org"]
+    resources: ["pytorchjobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["workloads", "localqueues"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vla-web-training
+  namespace: vla-training
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vla-web-training
+subjects:
+  - kind: ServiceAccount
+    name: vla-web
+    namespace: vla-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vla-web-read-only
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["clusterqueues", "resourceflavors", "workloadpriorityclasses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vla-web-read-only
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vla-web-read-only
+subjects:
+  - kind: ServiceAccount
+    name: vla-web
+    namespace: vla-platform

@@ -1,0 +1,7 @@
+.git/
+artifacts/
+frontend/node_modules/
+.venv/
+**/__pycache__/
+**/*.pyc
+*.log

@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vla-web
+  namespace: vla-platform
+  labels:
+    app.kubernetes.io/name: vla-train-platform
+    app.kubernetes.io/managed-by: vla-train-platform
+    app.kubernetes.io/component: web
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vla-train-platform
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vla-train-platform
+        app.kubernetes.io/managed-by: vla-train-platform
+        app.kubernetes.io/component: web
+    spec:
+      serviceAccountName: vla-web
+      automountServiceAccountToken: true
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: vla-platform:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: PLATFORM_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: vla-web-auth
+                  key: PLATFORM_API_TOKEN
+            - name: PLATFORM_NAMESPACE
+              value: vla-training
+            - name: PLATFORM_QUEUE
+              value: default
+            - name: PLATFORM_ALLOWED_GPUS
+              value: "1"
+            - name: PLATFORM_DEFAULT_IMAGE
+              value: vla-smoke:latest
+            - name: PLATFORM_DEFAULT_COMMAND
+              value: python /app/train.py
+            - name: PLATFORM_DATASET_HOST_PATH
+              value: /data/vla-platform/datasets
+            - name: PLATFORM_CHECKPOINT_HOST_PATH
+              value: /data/vla-platform/checkpoints
+            - name: PLATFORM_DB_PATH
+              value: /data/history/platform.db
+            - name: PLATFORM_LOG_TAIL_DEFAULT
+              value: "500"
+          volumeMounts:
+            - name: history
+              mountPath: /data/history
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: history
+          persistentVolumeClaim:
+            claimName: vla-web-history

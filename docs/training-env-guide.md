@@ -377,6 +377,69 @@ curl -fsS -X POST "$BASE/jobs" \
 
 开启鉴权（`token` / `ldap`）时，所有请求加 `-H "Authorization: Bearer $TOKEN"`。
 
+### 3.5.1 登记训练参数模板（让提交页出现参数表单）
+
+默认情况下，提交页只显示平台内置的一套通用参数（`--steps`、`--batch-size`、`--save-freq` 等）。
+如果你的训练脚本参数名不一样（比如 lerobot 用 `--batch_size`、openpi 用 `--num-train-steps`、
+Hydra 风格 `--config.name`），可以**给镜像登记一份模板**，提交页会据此动态渲染表单，
+用户填完自动拼成正确命令行，不用记参数名。
+
+模板就是一份 JSON，格式与示例见仓库 `examples/params/`：
+
+- `examples/params/lerobot-smolvla.json` —— lerobot 风格（下划线参数）
+- `examples/params/openpi-pi05.json` —— openpi 风格（Hydra 点号参数）
+
+**登记命令**（需要 admin 权限）：
+
+```bash
+# 注意镜像名里的 : 和 / 要 URL 编码；用 curl --get --data-urlencode 更省事
+curl -X PUT \
+  "http://127.0.0.1:30080/api/v1/images/my-train:v1/params" \
+  -H "Content-Type: application/json" \
+  --data-binary @examples/params/lerobot-smolvla.json
+```
+
+**查看当前生效的模板**：
+
+```bash
+curl -s "http://127.0.0.1:30080/api/v1/images/my-train:v1/params" | python3 -m json.tool
+```
+
+返回体里的 `source` 说明来源：
+
+| `source` | 含义 |
+|---|---|
+| `builtin` | 该镜像没有登记模板，使用平台内置的通用参数 |
+| `file` | 已登记的模板 |
+
+**删除登记**（之后回退内置模板）：
+
+```bash
+curl -X DELETE "http://127.0.0.1:30080/api/v1/images/my-train:v1/params"
+```
+
+**字段速查**
+
+| 字段 | 说明 |
+|---|---|
+| `key` | 参数标识，`^[a-z][a-z0-9_]*$`，同一模板内唯一 |
+| `flag` | 命令行 flag，如 `--batch_size`、`--config.name` |
+| `label` | 表单上显示的中文名 |
+| `type` | `int` / `float` / `str` / `bool` / `enum` / `path` |
+| `default` | 默认值，留空时该参数不出现在命令行里 |
+| `min` / `max` | 数值范围（仅 int/float） |
+| `options` | 枚举可选项（仅 enum 必填） |
+| `required` | 是否必填 |
+| `help` / `placeholder` | 表单提示文案 |
+| `true_value` / `false_value` | bool 参数为真/假时拼的值；不设则 true 只拼 flag、false 跳过 |
+
+> **一个容易踩的坑**：`bool` 参数如果同时设了 `default: false` 和 `false_value: "false"`，
+> 那么**不传值时也会拼出 `--flag false`**（default 参与了渲染）。
+> 想让「默认不出现」，就不要给这个 bool 设 `default`。
+
+模板的取值会被拼到命令行末尾，规则与提交页底部的「最终命令预览」完全一致——
+前端预览与后端实际执行经过一致性测试，看到的预览就是真正会跑的命令。
+
 ### 3.6 查看进度与产物
 
 ```bash

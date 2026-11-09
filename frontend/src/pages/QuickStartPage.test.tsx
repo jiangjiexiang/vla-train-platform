@@ -99,7 +99,15 @@ const OPENPI = recipe({
   dataset_formats: ['lerobot-v2.1', 'lerobot-v2.0'],
   estimated_vram_gb: 24,
 });
-const SMOKE = recipe({ id: 'smoke-test', name: '环境冒烟测试', estimated_vram_gb: 2, order: 1 });
+const SMOKE = recipe({
+  id: 'smoke-test',
+  name: '环境冒烟测试',
+  description: '几步小训练，验证 CUDA 与数据挂载',
+  estimated_vram_gb: 2,
+  order: 1,
+  defaults: { steps: 5 },
+  params: [{ key: 'steps', flag: '--steps', label: '训练步数', type: 'int', default: 5, min: 1 }],
+});
 
 function renderPage(initialEntries: Array<string | { pathname: string; state?: unknown }> = ['/']) {
   return render(
@@ -174,29 +182,34 @@ describe('QuickStartPage', () => {
     fireEvent.click(screen.getByTestId('dataset-card-pick1028'));
     await screen.findByTestId('recipe-card-smolvla-finetune');
 
-    // 默认选中第一个兼容配方；改成冒烟测试验证选择生效
+    // 默认选中第一个兼容配方（smolvla）；改成冒烟测试验证选择会写进 payload
     fireEvent.click(screen.getByTestId('recipe-card-smoke-test'));
+    // 自定义一个任务名 + 高优先级
+    fireEvent.change(screen.getByLabelText('任务名'), { target: { value: 'my-first-run' } });
+    fireEvent.click(screen.getByText('高'));
 
-    // 只改一个参数：只有它应进入 overrides，其余交给后端 defaults。
-    // 触发表单内任意可点击控件（InputNumber 有专门的 hover 监听，不适合当触发器）
+    // 高级参数展开后，配方默认值已经预填进表单（overrides 只为「改过」的参数生成）
     fireEvent.click(screen.getByText(/高级参数/));
-    const stepsInput = (await screen.findByTestId('param-steps')).querySelector('input') as HTMLInputElement;
-    fireEvent.change(stepsInput, { target: { value: '100' } });
-    fireEvent.blur(stepsInput);
-    // Form.useWatch/onValuesChange 依赖 Store 通知，和 rc-field-form 内部时序保持一致
-    fireEvent.click(screen.getByText('优先级'));
+    // 配方的 defaults 已经预填进参数表单（antd 表单初值经 rAF 落地，直接读 DOM）
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    const stepsInput = document.querySelector('[data-testid="param-steps"] input') as HTMLInputElement;
+    expect(stepsInput).not.toBeNull();
+    console.log('DBG state', JSON.stringify((window as any).__q));
+    expect(stepsInput.value).toBe('5');
 
     fireEvent.click(screen.getByRole('button', { name: /加入训练队列/ }));
 
     await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
-    console.log('DBG store v2', JSON.stringify((window as any).__dbg));
     const payload = createRunMock.mock.calls[0][0];
     expect(payload.recipe_id).toBe('smoke-test');
     expect(payload.dataset_id).toBe('pick1028');
-    expect(payload.priority).toBe('normal');
-    // 留空任务名 → 不传 name，由后端生成
-    expect(payload.name).toBeUndefined();
-    expect(payload.overrides).toEqual({ steps: 100 });
+    expect(payload.priority).toBe('high');
+    expect(payload.name).toBe('my-first-run');
+    // 没改参数 → 不传 overrides 差异，交给后端用配方 defaults
+    expect(payload.overrides).toEqual({});
+    expect(payload.env).toBeUndefined();
     // 成功 → 跳到任务详情
     expect(await screen.findByText('任务详情页')).toBeInTheDocument();
   });

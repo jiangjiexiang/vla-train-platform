@@ -28,6 +28,9 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
+import { FieldContext } from 'rc-field-form';
+import type { InternalFormInstance } from 'rc-field-form/lib/interface';
+import type { FormInstance } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { ApiError, api, getErrorMessage, isAbortError, isUnauthorized } from '../api/client';
@@ -94,6 +97,18 @@ export function recipeInitialParams(recipe: Recipe): Record<string, unknown> {
     if (key in values) values[key] = value;
   }
   return values;
+}
+
+/**
+ * antd 5 的 Form.Item 不会把父级 name 前缀拼进子字段，而 rc-field-form 的 Field 会读取
+ * FieldContext.prefixName。这里复用同一个 form 实例，只把 prefixName 设为 params，
+ * TrainParamsForm 内部 namePath=[] 的字段就会注册成 params.<key>。
+ */
+function paramsFieldContext(form: FormInstance): InternalFormInstance {
+  return {
+    ...(form as unknown as InternalFormInstance),
+    prefixName: [PARAMS_FIELD],
+  };
 }
 
 /** 只把用户真正改过的参数放进 overrides，未改的交给后端用 defaults/模板默认值。 */
@@ -274,6 +289,43 @@ function RecipeCard({
   );
 }
 
+/**
+ * 高级参数面板。文档里说 FieldContext.prefixName 会拼进字段路径，但实际 Form.Item
+ * 在入口处就把 name 折算成了绝对路径，靠上下文重定向并不可靠。这里直接给每个参数
+ * 渲染完整的 name=[params, key]，取值/校验/初值都由外层 Form 统一管。
+ */
+function ParamsPanel({
+  form,
+  recipe,
+  defaults,
+}: {
+  form: FormInstance;
+  recipe: Recipe;
+  defaults: Record<string, unknown>;
+}) {
+  // 面板默认收起，挂载后把配方默认值写进表单（字段未挂载时 setFieldValue 也会落库，
+  // 等展开后由 Field 读出来）
+  useEffect(() => {
+    form.setFieldValue(PARAMS_FIELD, defaults);
+  }, [form, defaults]);
+
+  return (
+    <Form.Item noStyle shouldUpdate>
+      {() => (
+        <div data-testid="quickstart-params">
+          <Row gutter={16}>
+            {visibleParams(recipeTemplate(recipe)).map((param) => (
+              <Col xs={24} md={param.type === 'bool' ? 12 : 8} key={param.key}>
+                <ParamField param={param} />
+              </Col>
+            ))}
+          </Row>
+        </div>
+      )}
+    </Form.Item>
+  );
+}
+
 export function QuickStartPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -386,7 +438,6 @@ export function QuickStartPage() {
   const selectedRecipeId = selectedRecipe?.id ?? null;
   useEffect(() => {
     setParamDefaults(selectedRecipe ? recipeInitialParams(selectedRecipe) : {});
-    form.setFieldValue(PARAMS_FIELD, selectedRecipe ? recipeInitialParams(selectedRecipe) : {});
     setSubmitError(null);
     // selectedRecipe 由 id 推导，用 id 做依赖即可
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -396,7 +447,6 @@ export function QuickStartPage() {
   const canSubmit = Boolean(selectedDataset && selectedRecipe) && !submitting;
 
   const handleSubmit = async () => {
-    (window as unknown as { __dbg?: unknown }).__dbg = { values: form.getFieldsValue(), all: form.getFieldsValue(true) };
     if (!selectedDataset || !selectedRecipe) return;
     const values = form.getFieldsValue() as { name?: string; priority?: Priority; params?: Record<string, unknown> };
     const params = (values.params ?? {}) as Record<string, unknown>;
@@ -588,10 +638,11 @@ export function QuickStartPage() {
                   ? `高级参数（可选，共 ${paramCount} 项，默认使用配方推荐值）`
                   : '高级参数（该配方没有可调参数）',
                 children: selectedRecipe ? (
-                  <TrainParamsForm
-                    template={recipeTemplate(selectedRecipe)}
-                    source="file"
-                    namePath={[PARAMS_FIELD]}
+                  <ParamsPanel
+                    key={selectedRecipe.id}
+                    form={form}
+                    recipe={selectedRecipe}
+                    defaults={paramDefaults}
                   />
                 ) : (
                   <Typography.Text type="secondary">请先选择数据集和配方</Typography.Text>

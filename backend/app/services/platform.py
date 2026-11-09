@@ -28,6 +28,7 @@ from ..templates.pytorchjob import render_pytorch_job
 from .audit import AuditStore
 from .errors import ServiceError
 from .kubernetes import KubernetesClient
+from .queue_block import diagnose_queue_block
 from .queue_est import estimate_durations, queue_info
 from .quotas import ACTIVE_STATUSES, Quota, QuotaStore, Usage, check_quota, effective_quota
 from .sessions import SessionStore
@@ -254,7 +255,12 @@ class PlatformService:
 
         # 排队位置与等待估算。需要「同一队列里所有 Pending 的 Workload」做全局排序，
         # 因此放在收集完所有任务之后统一计算，而不是每个任务各算一次。
-        self._annotate_queue(live, workloads)
+        cluster_queue: dict[str, Any] | None = None
+        try:
+            cluster_queue = self.kubernetes.get_cluster_queue(self.settings.cluster_queue)
+        except Exception:  # noqa: BLE001
+            cluster_queue = None
+        self._annotate_queue(live, workloads, cluster_queue)
 
         cancelled = {
             name: self._cancelled_response(record)
@@ -754,7 +760,12 @@ class PlatformService:
             ]
         }
 
-    def _annotate_queue(self, live: dict[str, dict[str, Any]], workloads: list[dict[str, Any]]) -> None:
+    def _annotate_queue(
+        self,
+        live: dict[str, dict[str, Any]],
+        workloads: list[dict[str, Any]],
+        cluster_queue: dict[str, Any] | None = None,
+    ) -> None:
         """给每个任务补上 queue_position / queue_eta_seconds / queue_state。
 
         估算依赖三份数据，都在这一次调用里一次算好，避免 O(n^2)：
@@ -798,6 +809,19 @@ class PlatformService:
                 elapsed_seconds=item.get("duration_seconds"),
             )
             item.update(info)
+            # 排队中任务还要告诉用户「为什么排不上、能做什么」
+            if info.get("queue_state") == "queued" and workload is not None:
+                try:
+                    item["block_reason"] = diagnose_queue_block(
+                        job_gpus=int(item.get("gpus") or 1),
+                        cluster_queue=cluster_queue,
+                        workloads=workloads,
+                        job_priority=str(item.get("priority") or "normal"),
+                    )
+                except Exception:  # noqa: BLE001 - 诊断失败不能影响任务列表
+                    item["block_reason"] = None
+            else:
+                item["block_reason"] = None
 
     @staticmethod
     def _workload_for_name(workloads: list[dict[str, Any]], name: str) -> dict[str, Any] | None:

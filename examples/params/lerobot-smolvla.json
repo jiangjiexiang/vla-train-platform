@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "entrypoint": "python /app/train.py",
+  "params": [
+    {
+      "key": "steps",
+      "flag": "--steps",
+      "label": "训练步数",
+      "type": "int",
+      "default": 1000,
+      "min": 1,
+      "max": 10000000,
+      "help": "总优化步数。第一次验证链路建议 50-100 步。"
+    },
+    {
+      "key": "batch_size",
+      "flag": "--batch_size",
+      "label": "batch size",
+      "type": "int",
+      "default": 8,
+      "min": 1,
+      "max": 512,
+      "help": "单步样本数。SmolVLA 在 48G 显存上通常 8-32 可跑。"
+    },
+    {
+      "key": "grad_accum",
+      "flag": "--gradient_accumulation_steps",
+      "label": "梯度累积",
+      "type": "int",
+      "default": 1,
+      "min": 1,
+      "max": 256,
+      "help": "显存放不下大 batch 时，用累积放大有效 batch。"
+    },
+    {
+      "key": "save_freq",
+      "flag": "--save_freq",
+      "label": "保存 checkpoint 间隔（步）",
+      "type": "int",
+      "default": 500,
+      "min": 1,
+      "help": "每 N 步存一次。存到 /checkpoints/<任务名>/ 下，任务结束不删除。"
+    },
+    {
+      "key": "log_freq",
+      "flag": "--log_freq",
+      "label": "打印日志间隔（步）",
+      "type": "int",
+      "default": 10,
+      "min": 1
+    },
+    {
+      "key": "num_workers",
+      "flag": "--num_workers",
+      "label": "数据加载进程数",
+      "type": "int",
+      "default": 4,
+      "min": 0,
+      "max": 32
+    },
+    {
+      "key": "lr",
+      "flag": "--policy.optimizer_lr",
+      "label": "学习率",
+      "type": "float",
+      "default": 1e-4,
+      "placeholder": "如 1e-4"
+    },
+    {
+      "key": "device",
+      "flag": "--policy.device",
+      "label": "训练设备",
+      "type": "enum",
+      "default": "cuda",
+      "options": ["cuda", "cpu"]
+    },
+    {
+      "key": "dtype",
+      "flag": "--policy.use_amp",
+      "label": "混合精度（AMP）",
+      "type": "bool",
+      "default": true,
+      "true_value": "true",
+      "false_value": "false",
+      "help": "bfloat16 混合精度；显存紧张时保持开启。"
+    },
+    {
+      "key": "resume",
+      "flag": "--resume_from",
+      "label": "从 checkpoint 恢复",
+      "type": "path",
+      "default": null,
+      "placeholder": "/checkpoints/<任务名>/checkpoints/last"
+    }
+  ],
+  "extra_args": {
+    "label": "其他参数",
+    "help": "原样追加到命令末尾，用于框架新增但模板还没覆盖的参数",
+    "enabled": true,
+    "default": ""
+  }
+}

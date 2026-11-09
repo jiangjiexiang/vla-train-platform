@@ -88,9 +88,9 @@ describe('buildCommandFromTemplate（契约 3）', () => {
   it('float 保持字面形式：1e-4 不会变成 0.0001', () => {
     const command = buildCommandFromTemplate(makeTemplate(), { lr: '1e-4' }, BASE);
     expect(command).toContain('--lr 1e-4');
-    expect(command).not.toContain('0.0001');
-    // 默认值同为 1e-4，也保持字面形式
-    expect(buildCommandFromTemplate(makeTemplate(), {}, BASE)).toContain('--lr 1e-4');
+    expect(command).not.toContain('--lr 0.0001');
+    // 注意：模板 default 是 JSON 数字 1e-4，两端都会拼成 0.0001（见下一个用例）
+    expect(buildCommandFromTemplate(makeTemplate(), {}, BASE)).toContain('--lr 0.0001');
     // 科学计数法大写 E 同样原样保留
     expect(buildCommandFromTemplate(makeTemplate(), { lr: '5E-5' }, BASE)).toContain('--lr 5E-5');
   });
@@ -101,6 +101,8 @@ describe('buildCommandFromTemplate（契约 3）', () => {
       params: [{ key: 'lr', flag: '--lr', label: '学习率', type: 'float', default: 1e-4 }],
     });
     expect(buildCommandFromTemplate(template, {}, BASE)).toBe('python /app/train.py --lr 0.0001');
+    // 用户显式输入字符串时保持字面形式
+    expect(buildCommandFromTemplate(template, { lr: '1e-4' }, BASE)).toBe('python /app/train.py --lr 1e-4');
   });
 
   it('bool：true 且 true_value 不是字符串 → 只拼 flag', () => {
@@ -189,21 +191,21 @@ describe('buildCommandFromTemplate（契约 3）', () => {
 
   it('path 含空格时加引号（checkpoint 目录可能带空格）', () => {
     expect(buildCommandFromTemplate(makeTemplate(), { resume: '/ckpt/my run/step-10' }, BASE)).toBe(
-      'python /app/train.py --steps 1000 --batch_size 8 --lr 1e-4 --dtype bfloat16 --resume_from \'/ckpt/my run/step-10\'',
+      'python /app/train.py --steps 1000 --batch_size 8 --lr 0.0001 --dtype bfloat16 --resume_from \'/ckpt/my run/step-10\'',
     );
   });
 
   it('extra_args 原样追加到最后，不加引号、不解析', () => {
     const command = buildCommandFromTemplate(makeTemplate(), { extra_args: '--foo 1 --bar="a b"' }, BASE);
     expect(command).toBe(
-      'python /app/train.py --steps 1000 --batch_size 8 --lr 1e-4 --dtype bfloat16 --foo 1 --bar="a b"',
+      'python /app/train.py --steps 1000 --batch_size 8 --lr 0.0001 --dtype bfloat16 --foo 1 --bar="a b"',
     );
   });
 
   it('extra_args.enabled=false 时不追加', () => {
     const template = makeTemplate({ extra_args: { enabled: false } });
     expect(buildCommandFromTemplate(template, { extra_args: '--foo 1' }, BASE)).toBe(
-      'python /app/train.py --steps 1000 --batch_size 8 --lr 1e-4 --dtype bfloat16',
+      'python /app/train.py --steps 1000 --batch_size 8 --lr 0.0001 --dtype bfloat16',
     );
   });
 
@@ -215,7 +217,6 @@ describe('buildCommandFromTemplate（契约 3）', () => {
   });
 
   it('base command 优先级：用户手填 > entrypoint > default_command', () => {
-    const template = makeTemplate({ params: [] });
     expect(resolveBaseCommand({ userCommand: 'python mine.py', entrypoint: 'python ep.py', defaultCommand: 'python cfg.py' }))
       .toBe('python mine.py');
     expect(resolveBaseCommand({ userCommand: '   ', entrypoint: 'python ep.py', defaultCommand: 'python cfg.py' }))

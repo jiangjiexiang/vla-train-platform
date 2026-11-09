@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "entrypoint": "python /opt/openpi/scripts/train.py",
+  "params": [
+    {
+      "key": "config_name",
+      "flag": "--config.name",
+      "label": "训练配置名",
+      "type": "enum",
+      "default": "pi05_droid",
+      "options": ["pi05_droid", "pi05_aloha", "pi05_libero", "pi05_aloha_pen_uncap"],
+      "required": true,
+      "help": "openpi 的 config 名，决定模型结构、数据集和权重加载方式。选错会导致维度不匹配。"
+    },
+    {
+      "key": "exp_name",
+      "flag": "--exp-name",
+      "label": "实验名",
+      "type": "str",
+      "default": null,
+      "placeholder": "会写到 /checkpoints/<任务名>/<实验名>/",
+      "help": "留空则用任务名。"
+    },
+    {
+      "key": "num_train_steps",
+      "flag": "--num-train-steps",
+      "label": "训练步数",
+      "type": "int",
+      "default": 1000,
+      "min": 1,
+      "help": "openpi 用 --num-train-steps，不是 --steps。"
+    },
+    {
+      "key": "batch_size",
+      "flag": "--batch-size",
+      "label": "batch size",
+      "type": "int",
+      "default": 8,
+      "min": 1,
+      "max": 256
+    },
+    {
+      "key": "save_interval",
+      "flag": "--save-interval",
+      "label": "保存 checkpoint 间隔（步）",
+      "type": "int",
+      "default": 500,
+      "min": 1
+    },
+    {
+      "key": "log_interval",
+      "flag": "--log-interval",
+      "label": "打印日志间隔（步）",
+      "type": "int",
+      "default": 10,
+      "min": 1
+    },
+    {
+      "key": "lr",
+      "flag": "--lr",
+      "label": "学习率",
+      "type": "float",
+      "default": 2.5e-5,
+      "placeholder": "如 2.5e-5"
+    },
+    {
+      "key": "overwrite",
+      "flag": "--overwrite",
+      "label": "覆盖已有输出目录",
+      "type": "bool",
+      "default": false,
+      "help": "同名输出目录已存在时，开启才会覆盖。"
+    },
+    {
+      "key": "wandb_enabled",
+      "flag": "--wandb-enabled",
+      "label": "上报 W&B",
+      "type": "bool",
+      "default": false,
+      "help": "内网环境通常不可用，默认关闭；开启需设置 WANDB_API_KEY 环境变量。"
+    },
+    {
+      "key": "resume",
+      "flag": "--resume",
+      "label": "从 checkpoint 恢复",
+      "type": "bool",
+      "default": false,
+      "help": "从 exp-name 对应的已有输出目录继续训练。"
+    },
+    {
+      "key": "fsdp_devices",
+      "flag": "--fsdp-devices",
+      "label": "FSDP 分片设备数",
+      "type": "int",
+      "default": 1,
+      "min": 1,
+      "help": "单卡保持 1；多卡时设为卡数。"
+    }
+  ],
+  "extra_args": {
+    "label": "其他参数",
+    "help": "Hydra 风格覆盖，例如 --pytorch-weight-loader.defer-loading=true",
+    "enabled": true,
+    "default": ""
+  }
+}

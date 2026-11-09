@@ -51,6 +51,9 @@ class Settings:
     gpu_metrics_ttl: float = 2.0
     # 集群总览缓存。总览页轮询与提交前预检都会读它，加短 TTL 挡掉重复调用。
     cluster_summary_ttl: float = 2.0
+    # 任务结束后多久回收 K8s 对象（秒）。产物在 /checkpoints 下独立保存，
+    # 删对象不影响结果。0 表示不回收（保留全部历史对象）。
+    job_ttl_seconds: int = 3600
     static_dir: str = str(Path(__file__).resolve().parent.parent / "static")
 
     def __post_init__(self) -> None:
@@ -121,6 +124,9 @@ class Settings:
             kubeconfig=os.environ.get("PLATFORM_KUBECONFIG") or None,
             log_tail_default=log_tail,
             gpu_metrics_url=os.environ.get("PLATFORM_GPU_METRICS_URL", "http://vla-gpu-metrics:8080/"),
+            job_ttl_seconds=_parse_nonnegative_int(
+                os.environ.get("PLATFORM_JOB_TTL_SECONDS", "3600"), "PLATFORM_JOB_TTL_SECONDS"
+            ),
             cluster_summary_ttl=_parse_nonnegative_float(
                 os.environ.get("PLATFORM_CLUSTER_SUMMARY_TTL", "2.0"), "PLATFORM_CLUSTER_SUMMARY_TTL"
             ),
@@ -204,4 +210,14 @@ def _parse_nonnegative_float(raw: str, name: str) -> float:
         raise RuntimeError(f"{name} must be a number") from exc
     if value < 0:
         raise RuntimeError(f"{name} must not be negative")
+    return value
+
+def _parse_nonnegative_int(raw: str, name: str) -> int:
+    """解析非负整数环境变量，非法值直接报错而不是静默用默认值。"""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0, got {value}")
     return value

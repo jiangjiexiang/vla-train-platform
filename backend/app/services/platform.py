@@ -996,7 +996,11 @@ class PlatformService:
             "labels": spec.labels,
             "gpu_type": "nvidia.com/gpu",
             "nodes": spec.nodes,
-            "gpus_per_node": spec.gpus_per_node,
+            # 单机提交时用户不会填 gpus_per_node，返回 null 对前端没意义。
+            # 回填实际值：多机用声明的值，单机就是 gpus 本身。
+            "gpus_per_node": spec.gpus_per_node
+            if spec.gpus_per_node is not None
+            else (spec.gpus // spec.nodes if spec.nodes else None),
             "created_at": created_at,
             "started_at": started_at,
             "finished_at": finished_at,
@@ -1143,7 +1147,11 @@ class PlatformService:
             "labels": spec.labels,
             "gpu_type": "nvidia.com/gpu",
             "nodes": spec.nodes,
-            "gpus_per_node": spec.gpus_per_node,
+            # 单机提交时用户不会填 gpus_per_node，返回 null 对前端没意义。
+            # 回填实际值：多机用声明的值，单机就是 gpus 本身。
+            "gpus_per_node": spec.gpus_per_node
+            if spec.gpus_per_node is not None
+            else (spec.gpus // spec.nodes if spec.nodes else None),
             "created_at": created_at,
             "started_at": None,
             "finished_at": cancelled_at,

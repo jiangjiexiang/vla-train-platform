@@ -39,6 +39,9 @@ def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) 
         if name != "CHECKPOINT_DIR"
     ]
     environment.append({"name": "CHECKPOINT_DIR", "value": f"/checkpoints/{spec.name}"})
+    # 指标 hook 用 JOB_NAME 拼出 metrics.jsonl 的路径。此前没注入，hook 拿不到任务名
+    # 就只能放弃写指标——这也是真实训练一直看不到 loss 曲线的原因之一。
+    environment.append({"name": "JOB_NAME", "value": spec.name})
 
     return {
         "apiVersion": "kubeflow.org/v1",
@@ -51,6 +54,12 @@ def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) 
         },
         "spec": {
             "backoffLimit": spec.max_retries,
+            # 任务结束后自动删除对象。不设的话已完成的 PyTorchJob 会永久留在
+            # 集群里（实测堆积了 30 个），kubectl 输出越来越难读，也占 API 内存。
+            # 产物在 /checkpoints 下独立保存，删对象不影响训练结果。
+            "runPolicy": {
+                "ttlSecondsAfterFinished": settings.job_ttl_seconds,
+            },
             "pytorchReplicaSpecs": {
                 "Master": {
                     "replicas": 1,

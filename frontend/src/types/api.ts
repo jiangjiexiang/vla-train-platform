@@ -22,6 +22,8 @@ export interface SubmitJobRequest {
   command: string;
   env: Record<string, string>;
   max_retries: number;
+  // 取消任务时留给训练进程退出的宽限秒数（1-600）
+  termination_grace_period_seconds: number;
 }
 
 export interface Job extends SubmitJobRequest {

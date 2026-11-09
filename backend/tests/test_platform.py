@@ -112,6 +112,17 @@ def test_failed_create_leaves_no_history(service, kube, history):
 
 # --- status derivation ----------------------------------------------------
 
+def test_response_exposes_grace_period(service, kube):
+    service.submit(make_spec(termination_grace_period_seconds=7))
+    assert service.get_job("exp001")["termination_grace_period_seconds"] == 7
+
+
+def test_cancel_response_keeps_grace_period(service, kube):
+    service.submit(make_spec(termination_grace_period_seconds=9))
+    add_pod(kube, "exp001", phase="Running")
+    assert service.cancel("exp001")["termination_grace_period_seconds"] == 9
+
+
 def test_status_queued_without_workload(service, kube):
     service.submit(make_spec())
     job = service.get_job("exp001")

@@ -22,6 +22,8 @@ interface SubmitFormValues {
   command: string;
   env: EnvEntry[];
   max_retries: number;
+  // 表单清空时 InputNumber 会给出 null，提交前回退到 30
+  termination_grace_period_seconds: number | null;
 }
 
 export function SubmitJobPage() {
@@ -73,6 +75,7 @@ export function SubmitJobPage() {
       image: values.image.trim(),
       command: values.command.trim(),
       env,
+      termination_grace_period_seconds: values.termination_grace_period_seconds ?? 30,
     };
     setSubmitting(true);
     try {
@@ -123,6 +126,7 @@ export function SubmitJobPage() {
               command: sourceJob?.command || config.default_command,
               env: sourceJob ? Object.entries(sourceJob.env).map(([key, value]) => ({ key, value })) : [{ key: 'PYTHONUNBUFFERED', value: '1' }],
               max_retries: sourceJob?.max_retries ?? 0,
+              termination_grace_period_seconds: sourceJob?.termination_grace_period_seconds ?? 30,
             }}
           >
             <Card title="任务模板" className="section-card">
@@ -178,6 +182,13 @@ export function SubmitJobPage() {
               </Form.Item>
               <Form.Item name="max_retries" label="失败重启次数" rules={[{ required: true, message: '请设置失败重启次数' }]} extra="0 表示不重启，最多允许 2 次">
                 <InputNumber min={0} max={2} precision={0} />
+              </Form.Item>
+              <Form.Item
+                name="termination_grace_period_seconds"
+                label="取消宽限期（秒）"
+                extra="取消任务时留给训练进程退出的秒数。越小取消越快释放 GPU，越大越不容易丢掉未保存的 checkpoint"
+              >
+                <InputNumber min={1} max={600} precision={0} />
               </Form.Item>
             </Card>
 

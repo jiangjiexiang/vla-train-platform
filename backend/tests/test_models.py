@@ -49,6 +49,16 @@ def test_max_retries_limited_to_two():
         make_spec(max_retries=3)
 
 
+def test_grace_period_defaults_to_30():
+    assert make_spec().termination_grace_period_seconds == 30
+
+
+@pytest.mark.parametrize("value", [0, 601])
+def test_grace_period_bounds(value):
+    with pytest.raises(ValidationError):
+        make_spec(termination_grace_period_seconds=value)
+
+
 def test_gpus_must_be_positive():
     with pytest.raises(ValidationError):
         make_spec(gpus=0)

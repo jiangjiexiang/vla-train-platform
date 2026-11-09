@@ -210,6 +210,18 @@ cli/vla-train events smoke001
 
 `status` 查看任务列表/状态，`logs` 读取日志。queued 任务可能返回空日志；运行后应看到 CUDA/GPU、训练进度和完成信息。
 
+### 取消宽限期
+
+`--termination-grace-period`（1-600，默认 30）决定取消任务时训练进程还有多少秒可以退出。
+宽限期越大越不容易丢未保存的 checkpoint，但 GPU 释放越慢，排队任务等待越久：
+
+```bash
+cli/vla-train submit --name short001 --gpus 1 --command 'python /app/train.py' --termination-grace-period 5
+```
+
+本机实测：宽限期 5 秒时，取消运行中任务后排队任务约 8 秒开始运行；用默认 30 秒时约 32 秒。
+网页提交表单里有同名字段，任务详情页会显示实际取值。
+
 `events` 按时间倒序列出 PyTorchJob 与训练 Pod 的事件，用于排查「已放行但没跑起来」这类问题：
 
 ```bash

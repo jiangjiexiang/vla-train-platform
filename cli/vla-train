@@ -218,6 +218,13 @@ def build_parser():
     submit.add_argument("--command", required=True)
     submit.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
     submit.add_argument("--max-retries", type=int, choices=(0, 1, 2), default=0)
+    submit.add_argument(
+        "--termination-grace-period",
+        type=int,
+        default=30,
+        metavar="SECONDS",
+        help="取消任务时留给训练进程退出的秒数（1-600，默认 30）",
+    )
     submit.add_argument("--dry-run", action="store_true", help="仅打印 REST 请求，不连接平台")
 
     subparsers.add_parser("list", help="列出任务")
@@ -271,6 +278,8 @@ def run(args):
             raise CliError("image 和 command 不能为空", 2)
         if args.queue != "default":
             raise CliError("首版 queue 只能为 default", 2)
+        if not 1 <= args.termination_grace_period <= 600:
+            raise CliError("termination-grace-period 必须在 1-600 之间", 2)
         payload = {
             "name": name,
             "image": args.image,
@@ -280,6 +289,7 @@ def run(args):
             "command": args.command,
             "env": parse_env(args.env),
             "max_retries": args.max_retries,
+            "termination_grace_period_seconds": args.termination_grace_period,
         }
         base, token = connection(args, require_token=not args.dry_run)
         if args.dry_run:

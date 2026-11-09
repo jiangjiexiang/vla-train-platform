@@ -25,6 +25,10 @@ class SubmitSpec(BaseModel):
     command: str = Field(min_length=1)
     env: dict[str, str] = Field(default_factory=dict)
     max_retries: Literal[0, 1, 2] = 0
+    # How long the training container gets to exit after a cancel. The Kubernetes
+    # default is 30s, which is also what makes "cancel then the queued job starts"
+    # feel slow; smaller values free the GPU sooner but risk losing unsaved state.
+    termination_grace_period_seconds: int = Field(default=30, ge=1, le=600)
 
     @field_validator("name")
     @classmethod

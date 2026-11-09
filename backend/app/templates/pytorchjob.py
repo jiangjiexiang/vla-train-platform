@@ -51,6 +51,7 @@ def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) 
                         "metadata": {"labels": labels},
                         "spec": {
                             "runtimeClassName": "nvidia",
+                            "terminationGracePeriodSeconds": spec.termination_grace_period_seconds,
                             "containers": [
                                 {
                                     "name": "pytorch",

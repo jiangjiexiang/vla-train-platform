@@ -124,6 +124,7 @@ export function JobDetailPage() {
                 <Descriptions.Item label="优先级"><PriorityTag priority={job.priority} /></Descriptions.Item>
                 <Descriptions.Item label="Kueue 队列">{job.queue}</Descriptions.Item>
                 <Descriptions.Item label="失败重启次数">{job.max_retries}</Descriptions.Item>
+                <Descriptions.Item label="取消宽限期">{`${job.termination_grace_period_seconds ?? 30} 秒`}</Descriptions.Item>
                 <Descriptions.Item label="训练命令" span={2}><Typography.Text code className="command-text">{job.command}</Typography.Text></Descriptions.Item>
                 <Descriptions.Item label="环境变量" span={2}>
                   {Object.keys(job.env).length ? <pre className="env-display">{Object.entries(job.env).map(([key, value]) => `${key}=${value}`).join('\n')}</pre> : '—'}

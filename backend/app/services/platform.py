@@ -347,6 +347,7 @@ class PlatformService:
             "command": spec.command,
             "env": spec.env,
             "max_retries": spec.max_retries,
+            "termination_grace_period_seconds": spec.termination_grace_period_seconds,
             "created_at": created_at,
             "started_at": started_at,
             "finished_at": finished_at,
@@ -385,6 +386,7 @@ class PlatformService:
         }
         gpu = container.get("resources", {}).get("limits", {}).get("nvidia.com/gpu", 1)
         retries = job.get("spec", {}).get("backoffLimit", 0)
+        grace = master.get("template", {}).get("spec", {}).get("terminationGracePeriodSeconds", 30)
         return SubmitSpec.model_validate(
             {
                 "name": metadata.get("name"),
@@ -395,6 +397,7 @@ class PlatformService:
                 "command": shell_command,
                 "env": environment,
                 "max_retries": retries if retries in (0, 1, 2) else 0,
+                "termination_grace_period_seconds": grace if isinstance(grace, int) and 1 <= grace <= 600 else 30,
             }
         )
 
@@ -470,6 +473,7 @@ class PlatformService:
             "command": spec.command,
             "env": spec.env,
             "max_retries": spec.max_retries,
+            "termination_grace_period_seconds": spec.termination_grace_period_seconds,
             "created_at": created_at,
             "started_at": None,
             "finished_at": cancelled_at,

@@ -102,7 +102,8 @@ When authentication is enabled, the browser uses `Authorization: Bearer <token>`
   "priority": "normal",
   "command": "python /app/train.py --steps 100",
   "env": {"PYTHONUNBUFFERED": "1"},
-  "max_retries": 0
+  "max_retries": 0,
+  "termination_grace_period_seconds": 30
 }
 ```
 
@@ -113,6 +114,9 @@ Rules:
 - `gpus` must be in `PLATFORM_ALLOWED_GPUS`.
 - `env` keys must be valid environment variable names. Values are strings.
 - `max_retries` is 0, 1, or 2. Zero maps to restartPolicy Never; positive maps to OnFailure.
+- `termination_grace_period_seconds` is 1-600, default 30. It sets the Pod's
+  `terminationGracePeriodSeconds`, i.e. how long a cancelled training process gets before SIGKILL.
+  Smaller values release the GPU sooner; larger values give checkpoints more time to flush.
 - `command` is capped at 65536 bytes and the summed `env` entries at 65536 bytes, because the whole spec is
   stored in a Kubernetes annotation and annotations are capped at 256 KiB. These caps are enforced on submit
   only, never when reading an object or history back, so older oversized jobs stay readable and cancellable.
@@ -132,6 +136,7 @@ Rules:
   "command": "python /app/train.py --steps 100",
   "env": {"PYTHONUNBUFFERED": "1"},
   "max_retries": 0,
+  "termination_grace_period_seconds": 30,
   "created_at": "2026-01-01T00:00:00Z",
   "started_at": null,
   "finished_at": null,
@@ -232,7 +237,7 @@ Commands:
 
 ```text
 vla-train config --server http://HOST:30080 --token TOKEN
-vla-train submit --name exp001 --gpus 1 --image vla-smoke:latest --priority normal --command 'python /app/train.py'
+vla-train submit --name exp001 --gpus 1 --image vla-smoke:latest --priority normal --command 'python /app/train.py' [--termination-grace-period 30]
 vla-train list
 vla-train status
 vla-train logs exp001

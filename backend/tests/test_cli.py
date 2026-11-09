@@ -81,6 +81,17 @@ def test_parser_requires_submit_fields(cli):
     assert args.gpus == 1
 
 
+def test_parser_accepts_grace_period(cli):
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        ["submit", "--name", "exp001", "--gpus", "1", "--command", "true", "--termination-grace-period", "5"]
+    )
+    assert args.termination_grace_period == 5
+
+    args = parser.parse_args(["submit", "--name", "exp001", "--gpus", "1", "--command", "true"])
+    assert args.termination_grace_period == 30
+
+
 def test_print_events_handles_empty(cli, capsys):
     cli.print_events("exp001", {"name": "exp001", "items": []}, False)
     assert "暂无事件" in capsys.readouterr().out

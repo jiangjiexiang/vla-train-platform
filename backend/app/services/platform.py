@@ -9,7 +9,7 @@ import urllib.request
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
@@ -23,12 +23,16 @@ from ..params_templates import (
     parse_template,
     validate_image_name,
 )
+from ..recipes.loader import Recipe, RecipeStore
 from ..templates.pytorchjob import render_pytorch_job
 from .errors import ServiceError
 from .kubernetes import KubernetesClient
 from .quotas import ACTIVE_STATUSES, Quota, QuotaStore, Usage, check_quota, effective_quota
 from .sessions import SessionStore
 
+if TYPE_CHECKING:  # 仅类型标注使用，运行时延迟导入以避免循环依赖
+    from ..params_templates import ParamsTemplate
+    from .runs import RunRequest
 
 class PlatformService:
     def __init__(
@@ -244,6 +248,48 @@ class PlatformService:
         if limit is not None:
             items = items[effective_offset : effective_offset + limit]
         return {"items": items, "total": total, "limit": limit, "offset": effective_offset}
+
+    # ------------------------------------------------------------------
+    # 训练配方与一键训练
+    # ------------------------------------------------------------------
+    def _recipe_store(self) -> RecipeStore:
+        store = getattr(self, "_recipes", None)
+        if store is None:
+            store = RecipeStore()
+            self._recipes = store
+        return store
+
+    def list_recipes(self) -> list[Recipe]:
+        return self._recipe_store().load_all()
+
+    def get_recipe(self, recipe_id: str) -> Recipe:
+        recipe = self._recipe_store().get(recipe_id)
+        if recipe is None:
+            raise ServiceError(404, f"recipe {recipe_id} not found")
+        return recipe
+
+    def recipe_template(self, recipe: Recipe) -> ParamsTemplate:
+        from .runs import resolve_template  # 延迟导入，避免循环依赖
+
+        return resolve_template(recipe, self)
+
+    def create_run(self, request: RunRequest, owner: str) -> dict[str, Any]:
+        """一键训练：展开配方与数据集，然后走既有 submit 路径。"""
+        from .runs import build_run  # 延迟导入，避免循环依赖
+
+        recipe = self.get_recipe(request.recipe_id)
+        dataset = self.get_dataset(request.dataset_id)
+        existing = {item["name"] for item in self._list_jobs(self.kubernetes.list_namespace_pods())["items"]}
+        payload = build_run(
+            request,
+            recipe=recipe,
+            dataset=dataset,
+            service=self,
+            owner=owner,
+            existing_names=existing,
+        )
+        spec = SubmitSpec.model_validate(payload)
+        return self.submit(spec, owner=owner)
 
     # ------------------------------------------------------------------
     # 数据集

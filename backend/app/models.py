@@ -192,3 +192,37 @@ class DatasetScanRequest(BaseModel):
 
     id: str | None = Field(default=None, max_length=100)
     deep: bool = False
+
+
+class RunSubmitRequest(BaseModel):
+    """一键训练请求。
+
+    这是「一键训练」唯一的校验入口：API 层用它拦下非法输入，再原样转成
+    services/runs.RunRequest。两个模型保持字段与规则一致，避免出现
+    「工具层抛 ValidationError 而没转成 HTTP 422」这种情况。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    recipe_id: str = Field(min_length=1, max_length=64)
+    dataset_id: str = Field(min_length=1, max_length=100)
+    name: str | None = Field(default=None, max_length=50)
+    overrides: dict[str, Any] = Field(default_factory=dict)
+    priority: str = "normal"
+    env: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def validate_run_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not JOB_NAME_PATTERN.fullmatch(value):
+            raise ValueError("任务名只能包含小写字母、数字和中划线，且不能以中划线开头或结尾")
+        return value
+
+    @field_validator("priority")
+    @classmethod
+    def validate_run_priority(cls, value: str) -> str:
+        if value not in ("low", "normal", "high"):
+            raise ValueError("优先级必须是 low / normal / high")
+        return value

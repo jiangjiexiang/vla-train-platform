@@ -1,0 +1,27 @@
+id: smoke-test
+name: 环境冒烟测试
+description: 用 vla-smoke 镜像跑几步小训练，只验证 CUDA、数据挂载与 checkpoint 写入，几秒完成。新环境上线前建议先跑一次。
+image: vla-smoke:latest
+entrypoint: python /app/train.py
+dataset_formats:
+  - lerobot-v3.0
+  - lerobot-v2.1
+  - lerobot-v2.0
+# 冒烟任务只需要步数，内联一份最小模板，不依赖内置模板的键名
+template:
+  schema_version: 1
+  params:
+    - key: steps
+      flag: --steps
+      label: 训练步数
+      type: int
+      default: 5
+      min: 1
+      max: 1000
+      help: 冒烟测试保持 5 步即可，约十几秒
+defaults:
+  steps: 5
+gpu_count: 1
+estimated_vram_gb: 2
+order: 1
+public: true

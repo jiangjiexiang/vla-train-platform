@@ -113,8 +113,13 @@ def queue_info(
             "queue_state": _queue_state(status, workload),
         }
 
-    name = workload.get("metadata", {}).get("name", "")
-    position = workload_pending_order(workloads).get(name)
+    # 注意：Kueue 的 Workload 名是 "pytorchjob-<任务名>-<后缀>"，不是任务名本身。
+    # 早先这里直接拿 metadata.name 去查，key 永远是 workload 全名，
+    # 而调用方传进来的是任务名，于是 queue_position 恒为 None——
+    # 用户排队时看不到自己排第几，只能干等。
+    # 这里用 workload 对象本身定位，不依赖名字约定。
+    workload_name = workload.get("metadata", {}).get("name", "")
+    position = workload_pending_order(workloads).get(workload_name)
     eta: float | None = None
     source: str | None = None
     if position is not None:

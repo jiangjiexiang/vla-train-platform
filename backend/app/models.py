@@ -183,3 +183,12 @@ def spec_from_stored_json(payload: str) -> SubmitSpec:
         raise ValueError("stored spec is not an object")
     known = set(SubmitSpec.model_fields)
     return SubmitSpec.model_validate({key: value for key, value in data.items() if key in known})
+
+
+class DatasetScanRequest(BaseModel):
+    """触发数据集扫描。id 为空表示扫描全部。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = Field(default=None, max_length=100)
+    deep: bool = False

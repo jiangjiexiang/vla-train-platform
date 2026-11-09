@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api.routes import router
+from .api.routes_datasets import router as datasets_router
 from .config import Settings
 from .history import HistoryStore
 from .services.errors import ServiceError
@@ -45,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
     app.include_router(router)
+    app.include_router(datasets_router)
 
     static_root = Path(settings.static_dir).resolve()
     assets = static_root / "assets"

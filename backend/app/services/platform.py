@@ -8,11 +8,13 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
 from ..config import ROLE_ADMIN, ROLE_USER, Settings
+from ..datasets.store import DatasetStore
 from ..history import HistoryStore, utc_now
 from ..models import SubmitSpec, check_labels, check_payload_size
 from ..params_templates import (
@@ -242,6 +244,62 @@ class PlatformService:
         if limit is not None:
             items = items[effective_offset : effective_offset + limit]
         return {"items": items, "total": total, "limit": limit, "offset": effective_offset}
+
+    # ------------------------------------------------------------------
+    # 数据集
+    # ------------------------------------------------------------------
+    def _dataset_store(self) -> DatasetStore:
+        """惰性创建，避免每次启动都建表（表本身是幂等的）。"""
+        store = getattr(self, "_datasets", None)
+        if store is None:
+            store = DatasetStore(self.settings.db_path)
+            self._datasets = store
+        return store
+
+    def _datasets_root(self) -> Path:
+        return Path(self.settings.datasets_mount_path)
+
+    def list_datasets(self, refresh: bool = False) -> dict[str, Any]:
+        """列出数据集。缓存为准，refresh 时先重扫有变化的目录。"""
+        store = self._dataset_store()
+        root = self._datasets_root()
+        if refresh:
+            pending = store.needs_rescan(root)
+            if pending:
+                store.scan_many(root, pending)
+        items = [meta.as_dict() for meta in store.list_all()]
+        summary = {
+            "total": len(items),
+            "ready": sum(1 for item in items if item["status"] == "ready"),
+            "warning": sum(1 for item in items if item["status"] == "warning"),
+            "unusable": sum(1 for item in items if item["status"] in ("unusable", "error")),
+            "total_frames": sum(int(item["frames"]) for item in items),
+        }
+        return {"items": items, "summary": summary, "root": str(root)}
+
+    def get_dataset(self, dataset_id: str, deep: bool = False) -> dict[str, Any]:
+        store = self._dataset_store()
+        root = self._datasets_root()
+        meta = store.get(dataset_id)
+        # 缓存没有、或要求深扫描而现有记录还是浅扫描时，补扫一次
+        if meta is None or (deep and meta.scan_depth != "deep"):
+            try:
+                meta = store.scan_one(root, dataset_id, deep=deep)
+            except FileNotFoundError as exc:
+                raise ServiceError(404, f"dataset {dataset_id} not found") from exc
+        return meta.as_dict()
+
+    def scan_datasets(self, dataset_id: str | None = None, deep: bool = False) -> dict[str, Any]:
+        store = self._dataset_store()
+        root = self._datasets_root()
+        targets = [dataset_id] if dataset_id else None
+        if targets is not None and not (root / dataset_id).is_dir():  # type: ignore[operator]
+            raise ServiceError(404, f"dataset {dataset_id} not found")
+        results = store.scan_many(root, targets, deep=deep)
+        return {
+            "scanned": len(results),
+            "items": [meta.as_dict() for meta in results],
+        }
 
     def get_params_template(self, image: str) -> dict[str, Any]:
         """返回镜像的参数模板；未登记时回退内置通用模板。"""

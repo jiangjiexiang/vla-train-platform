@@ -37,6 +37,9 @@ class Settings:
     default_image: str = "vla-smoke:latest"
     default_command: str = "python /app/train.py"
     dataset_host_path: str = "/data/vla-platform/datasets"
+    # Web 容器内看到数据集的路径。Web Pod 挂载了同一个 hostPath，
+    # 扫描器在这里读 meta/info.json（见 deploy/web 的 volumeMounts）。
+    datasets_mount_path: str = "/datasets"
     checkpoint_host_path: str = "/data/vla-platform/checkpoints"
     db_path: str = "/data/history/platform.db"
     kubeconfig: str | None = None
@@ -110,6 +113,7 @@ class Settings:
             default_image=os.environ.get("PLATFORM_DEFAULT_IMAGE", "vla-smoke:latest"),
             default_command=os.environ.get("PLATFORM_DEFAULT_COMMAND", "python /app/train.py"),
             dataset_host_path=os.environ.get("PLATFORM_DATASET_HOST_PATH", "/data/vla-platform/datasets"),
+            datasets_mount_path=os.environ.get("PLATFORM_DATASETS_MOUNT_PATH", "/datasets"),
             checkpoint_host_path=os.environ.get("PLATFORM_CHECKPOINT_HOST_PATH", "/data/vla-platform/checkpoints"),
             db_path=os.environ.get("PLATFORM_DB_PATH", "/data/history/platform.db"),
             kubeconfig=os.environ.get("PLATFORM_KUBECONFIG") or None,

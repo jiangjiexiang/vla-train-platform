@@ -113,6 +113,11 @@ if [[ -n "$WEB_IMAGE_TAR" ]]; then
 elif [[ "$BUILD_IMAGE" == "1" ]] || { [[ "$BUILD_IMAGE" == "auto" ]] && ! image_present "$WEB_IMAGE"; }; then
   [[ -f "$WEB_DOCKERFILE" ]] || die "Web Dockerfile not found: $WEB_DOCKERFILE; provide WEB_IMAGE_TAR or preload $WEB_IMAGE"
   [[ -d "$WEB_BUILD_CONTEXT" ]] || die "Web build context is not a directory: $WEB_BUILD_CONTEXT"
+  # backend/Dockerfile COPYs the compiled SPA, and frontend/dist is not tracked in
+  # git, so a fresh clone must build the frontend first.
+  if [[ ! -d "$WEB_BUILD_CONTEXT/frontend/dist" ]]; then
+    die "Missing $WEB_BUILD_CONTEXT/frontend/dist; run 'npm ci && npm run build' in frontend/ first, or supply WEB_IMAGE_TAR"
+  fi
   if command -v docker >/dev/null 2>&1; then
     log "Building $WEB_IMAGE with Docker (no registry push)"
     docker build -f "$WEB_DOCKERFILE" -t "$WEB_IMAGE" "$WEB_BUILD_CONTEXT"

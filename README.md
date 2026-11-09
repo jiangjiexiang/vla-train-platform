@@ -380,3 +380,23 @@ kubectl -n vla-training get workload -o yaml | grep -A3 "ownerReferences:"
 - commit message 用 `type: 摘要` 形式，`type` 取 `feat` / `fix` / `docs` / `refactor` / `chore`，正文写清楚动机和验证方式。
 - 提交前跑 `bash scripts/verify-4090.sh`，未通过不要提交到主分支。
 - 下列内容不入库：`node_modules/`、`frontend/dist/`、`artifacts/`（含镜像 tar 与访问令牌）、SQLite 数据库、`__pycache__`。
+
+发版流程（用 `scripts/release.sh` 固化上面的约定）：
+
+```bash
+# 1. 正常开发并提交改动
+git add -A && git commit -m "feat: ..."
+
+# 2. 在 CHANGELOG.md 顶部补一个 "## [0.2.0] - YYYY-MM-DD" 小节
+$EDITOR CHANGELOG.md
+git add CHANGELOG.md && git commit -m "docs: 记录 v0.2.0 变更"
+
+# 3. 发版：校验版本号与 CHANGELOG、跑验收、更新 VERSION、提交并打 tag
+scripts/release.sh 0.2.0
+
+# 只预览不执行
+scripts/release.sh 0.2.0 --dry-run
+```
+
+脚本会拒绝：版本号非 `X.Y.Z`、不高于当前版本、CHANGELOG 缺少对应小节、工作区不干净、
+以及 `verify-4090.sh` 不通过（确认要跳过时用 `SKIP_VERIFY=1`）。

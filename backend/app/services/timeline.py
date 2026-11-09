@@ -108,6 +108,14 @@ def _render(reached: dict[str, dict[str, Any]], status: str) -> dict[str, Any]:
                     current_stage = key
         items.append({"stage": key, "label": label, "state": state, "at": (info or {}).get("at")})
 
+    # 已结束的任务没有「当前阶段」——所有阶段都走完了。
+    # 之前的 bug：容器状态缺失时 image 被标成 current，导致「已结束」和
+    # 「卡在拉镜像」同时出现，用户被误导。
+    if status in ("SUCCEEDED", "FAILED", "CANCELLED"):
+        current_stage = None
+        for item in items:
+            if item["state"] == "current":
+                item["state"] = "done"
     return {"current_stage": current_stage, "items": items}
 
 

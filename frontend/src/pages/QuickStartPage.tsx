@@ -635,8 +635,11 @@ export function QuickStartPage() {
       setSubmitError(describePreflightErrors(errors));
       return;
     }
-    const notes = result.checks.filter((check) => check.level !== 'error');
-    if (notes.length > 0) {
+    // 只有 warning 才需要用户确认。
+    // info（显存预估、任务将排队）是纯信息提示，每次都弹窗会让用户形成「闭眼点确定」
+    // 的习惯，反而忽略真正需要注意的 warning。
+    const warnings = result.checks.filter((check) => check.level === 'warning');
+    if (warnings.length > 0) {
       setPreflight(result);
       setConfirming(true);
       return;

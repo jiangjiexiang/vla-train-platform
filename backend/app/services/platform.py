@@ -837,10 +837,7 @@ class PlatformService:
         """
         durations: dict[str, float] = {}
         try:
-            records = []
-            for spec, submitted_at in self.history.iter_submissions():
-                # 历史提交记录本身没有耗时，真正的耗时来自实时任务的 duration_seconds
-                del spec, submitted_at
+            # 只用实时任务的 duration_seconds：历史提交记录里没有耗时字段
             records = [
                 {"labels": item.get("labels") or {}, "duration_seconds": item.get("duration_seconds")}
                 for item in live.values()
@@ -874,11 +871,15 @@ class PlatformService:
             # 排队中任务还要告诉用户「为什么排不上、能做什么」
             if info.get("queue_state") == "queued" and workload is not None:
                 try:
+                    # 传个人用量与配额，否则 user_quota 这条根因永远判定不出来
+                    owner = str(item.get("owner") or "")
                     item["block_reason"] = diagnose_queue_block(
                         job_gpus=int(item.get("gpus") or 1),
                         cluster_queue=cluster_queue,
                         workloads=workloads,
                         job_priority=str(item.get("priority") or "normal"),
+                        user_usage=(self.usage_for(owner, list(live.values())).as_dict() if owner else None),
+                        user_quota=(self.quota_for(owner).as_dict() if owner else None),
                     )
                 except Exception:  # noqa: BLE001 - 诊断失败不能影响任务列表
                     item["block_reason"] = None

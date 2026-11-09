@@ -169,3 +169,28 @@ def test_empty_objects_do_not_crash():
     result = build_timeline(job={}, workload=None, pod=None, status="QUEUED")
 
     assert len(result["items"]) == len(STAGES)
+
+def test_finished_job_has_no_current_stage():
+    """已结束的任务没有「当前阶段」——所有阶段都走完了。
+
+    曾经的 bug：容器状态缺失时 image 被标成 current，
+    导致「已结束」和「卡在拉镜像」同时出现，严重误导用户。
+    """
+    result = build_timeline(
+        job=make_job(
+            conditions=[{"type": "Succeeded", "status": "True", "lastTransitionTime": "2026-01-01T01:00:00Z"}]
+        ),
+        workload=make_workload(True),
+        pod=make_pod(running=False),  # 容器状态缺失
+        status="SUCCEEDED",
+    )
+
+    assert result["current_stage"] is None
+    assert not any(item["state"] == "current" for item in result["items"])
+
+
+def test_cancelled_job_has_no_current_stage():
+    result = build_timeline(job=make_job(), workload=make_workload(True), pod=None, status="CANCELLED")
+
+    assert result["current_stage"] is None
+

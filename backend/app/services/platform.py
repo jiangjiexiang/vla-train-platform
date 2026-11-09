@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -22,6 +24,8 @@ class PlatformService:
         self.settings = settings
         self.history = history
         self.kubernetes = kubernetes
+        self._metrics_cache: tuple[float, dict[str, Any]] | None = None
+        self._metrics_lock = threading.Lock()
 
     def submit(self, spec: SubmitSpec) -> dict[str, Any]:
         if spec.queue != self.settings.queue:
@@ -141,7 +145,17 @@ class PlatformService:
         # CANCELLED once its Kubernetes object is removed.
         current = self._job_response(job, None, [])["status"]
         preserved = current if current in ("SUCCEEDED", "FAILED") else "CANCELLED"
-        self.kubernetes.delete_job(name)
+        try:
+            self.kubernetes.delete_job(name)
+        except ServiceError as exc:
+            # 并发取消时，另一个请求可能已经删掉了对象；此时应幂等返回已有记录，
+            # 而不是把 404 抛给调用方。
+            if exc.status_code != 404:
+                raise
+            existing = self.history.get_cancellation(name)
+            if existing is not None:
+                return self._cancelled_response(existing)
+            raise
         cancellation = self.history.mark_cancelled(spec, created_at, status=preserved)
         return self._cancelled_response(cancellation)
 
@@ -246,10 +260,36 @@ class PlatformService:
         processes that use a GPU outside the cluster, so utilisation and memory
         come from nvidia-smi through that service. Never raises: a missing or
         broken service degrades to available=false so the dashboard keeps working.
+
+        The service is a single-connection process, so concurrent callers would
+        queue behind it and every cache expiry would produce a thundering herd.
+        A short TTL plus a lock keeps one fetch per window, and failures are
+        cached too so an unreachable service cannot stall every request.
         """
         url = self.settings.gpu_metrics_url
         if not url:
             return {"available": False, "items": []}
+        ttl = self.settings.gpu_metrics_ttl
+        cached = self._fresh_metrics(ttl)
+        if cached is not None:
+            return cached
+        with self._metrics_lock:
+            cached = self._fresh_metrics(ttl)
+            if cached is not None:
+                return cached
+            result = self._fetch_gpu_metrics(url)
+            if ttl > 0:
+                self._metrics_cache = (time.monotonic(), result)
+            return result
+
+    def _fresh_metrics(self, ttl: float) -> dict[str, Any] | None:
+        if ttl <= 0 or self._metrics_cache is None:
+            return None
+        cached_at, cached = self._metrics_cache
+        return cached if time.monotonic() - cached_at < ttl else None
+
+    @staticmethod
+    def _fetch_gpu_metrics(url: str) -> dict[str, Any]:
         try:
             with urllib.request.urlopen(url, timeout=2.0) as response:
                 payload = json.loads(response.read().decode("utf-8"))

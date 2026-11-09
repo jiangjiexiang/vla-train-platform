@@ -1,6 +1,10 @@
-# VLA GPU 训练排队平台
+# 高性能分布系统
 
-面向单机 NVIDIA GPU 的内网训练排队平台。用户通过网页或 CLI 提交 PyTorchJob，由 Kueue 按 GPU 配额排队，Kubeflow Training Operator 执行训练；K3s 中的实时状态是事实来源，SQLite 只保存提交和取消历史。
+高性能分布系统：面向单机 NVIDIA GPU 的内网训练排队与调度服务。用户通过网页或 CLI 提交 PyTorchJob，由 Kueue 按 GPU 配额排队，Kubeflow Training Operator 执行训练；K3s 中的实时状态是事实来源，SQLite 只保存提交和取消历史。
+
+> **名称说明**：产品对外名称为「高性能分布系统」。代码与集群中的 `vla-platform` / `vla-training`
+> 命名空间、`vla-platform:local` 镜像名、`app.kubernetes.io/name=vla-train-platform` 标签与
+> `PLATFORM_*` 环境变量属于既有技术标识，改名会破坏正在运行的任务与历史记录，因此保持不变。
 
 首版支持两种互斥的单机配置：
 
@@ -67,13 +71,21 @@ PROFILE=4090 bash scripts/install-stack.sh
 
 ### 3.1 构建并导入镜像
 
+Web 镜像是**自包含的多阶段构建**（根目录 `Dockerfile`）：
+
+1. `node:20-slim` 阶段执行 `npm ci && npm run build` 生成 SPA；
+2. `python:3.12-slim` 阶段安装后端依赖；
+3. 最终镜像只保留运行时的 Python、应用代码与静态资源，并以非 root 用户 `vla` 运行。
+
+因此构建只需要 Docker 或 buildah，不需要在宿主机装 Node，也不需要提前准备 `frontend/dist`。
+
 Web 默认标签为 `vla-platform:local`，与 `deploy/web/base/deployment.yaml` 一致。手动构建和导入：
 
 ```bash
 cd /path/to/vla-train-platform
 WEB_IMAGE=vla-platform:local
 
-docker build -f backend/Dockerfile -t "$WEB_IMAGE" .
+docker build -t "$WEB_IMAGE" .
 docker build -t vla-smoke:latest images/smoke-train
 
 docker save "$WEB_IMAGE" -o /tmp/vla-platform-web.tar
@@ -90,17 +102,14 @@ rm -f /tmp/vla-platform-web.tar /tmp/vla-smoke.tar
 
 **目标机器没有 Docker 时（buildah 路径）**
 
-本机实测没有 `docker`，`scripts/deploy-web.sh` 的自动构建分支会直接报错退出。可用 buildah（本机为 1.23.1，rootless）构建并导入，前端必须用 Node 20 构建（系统自带 Node 12 无法构建 Vite 6 工程，Node 20 装在 `/opt/node20/bin`）：
+本机实测没有 `docker`，`scripts/deploy-web.sh` 会自动回退到 buildah（1.23.1）。
+镜像本身是多阶段构建：前端在 `node:20-slim` 阶段编译，后端依赖在 `python:3.12-slim` 阶段安装，
+**宿主机不需要 Node，也不需要预先生成 `frontend/dist`**。
 
 ```bash
 cd /path/to/vla-train-platform
 
-cd frontend
-/opt/node20/bin/npm ci
-/opt/node20/bin/npm run build        # 生成 frontend/dist，backend/Dockerfile 会 COPY 它
-cd ..
-
-buildah bud -f backend/Dockerfile -t vla-platform:local .
+buildah bud -t vla-platform:local .
 buildah bud -t vla-smoke:latest images/smoke-train
 
 buildah push vla-platform:local docker-archive:/tmp/vla-platform-web.tar:vla-platform:local

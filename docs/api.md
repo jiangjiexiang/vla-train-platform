@@ -1,4 +1,4 @@
-# VLA Train Platform 接口参考
+# 高性能分布系统 接口参考
 
 面向调用方（CLI、前端、脚本）的 HTTP API 说明。字段名与类型以线上 `GET /openapi.json` 和 `backend/app/api/routes.py` 为准；示例响应取自 4090 overlay 的真实返回（校验范围见 [§10](#10-附录文档来源与校验)）。
 

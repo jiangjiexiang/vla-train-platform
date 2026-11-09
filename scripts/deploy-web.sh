@@ -8,7 +8,7 @@ WEB_IMAGE="${WEB_IMAGE:-vla-platform:local}"
 WEB_IMAGE_TAR="${WEB_IMAGE_TAR:-}"
 SMOKE_IMAGE_TAR="${SMOKE_IMAGE_TAR:-}"
 BUILD_IMAGE="${BUILD_IMAGE:-auto}"
-WEB_DOCKERFILE="${WEB_DOCKERFILE:-$ROOT_DIR/backend/Dockerfile}"
+WEB_DOCKERFILE="${WEB_DOCKERFILE:-$ROOT_DIR/Dockerfile}"
 WEB_BUILD_CONTEXT="${WEB_BUILD_CONTEXT:-$ROOT_DIR}"
 PLATFORM_API_TOKEN_FILE="${PLATFORM_API_TOKEN_FILE:-}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-300s}"
@@ -39,7 +39,7 @@ require all base/build images to be available in the local builder cache.
 
 Optional build overrides:
   WEB_IMAGE=vla-platform:local
-  WEB_DOCKERFILE=$ROOT_DIR/backend/Dockerfile
+  WEB_DOCKERFILE=$ROOT_DIR/Dockerfile
   WEB_BUILD_CONTEXT=$ROOT_DIR
 
 Optional smoke image import:
@@ -113,7 +113,7 @@ if [[ -n "$WEB_IMAGE_TAR" ]]; then
 elif [[ "$BUILD_IMAGE" == "1" ]] || { [[ "$BUILD_IMAGE" == "auto" ]] && ! image_present "$WEB_IMAGE"; }; then
   [[ -f "$WEB_DOCKERFILE" ]] || die "Web Dockerfile not found: $WEB_DOCKERFILE; provide WEB_IMAGE_TAR or preload $WEB_IMAGE"
   [[ -d "$WEB_BUILD_CONTEXT" ]] || die "Web build context is not a directory: $WEB_BUILD_CONTEXT"
-  # backend/Dockerfile COPYs the compiled SPA, and frontend/dist is not tracked in
+  # Dockerfile COPYs the compiled SPA, and frontend/dist is not tracked in
   # git, so a fresh clone must build the frontend first.
   if [[ ! -d "$WEB_BUILD_CONTEXT/frontend/dist" ]]; then
     die "Missing $WEB_BUILD_CONTEXT/frontend/dist; run 'npm ci && npm run build' in frontend/ first, or supply WEB_IMAGE_TAR"

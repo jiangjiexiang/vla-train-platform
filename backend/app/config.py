@@ -21,6 +21,10 @@ class Settings:
     kubeconfig: str | None = None
     log_tail_default: int = 500
     gpu_metrics_url: str = "http://vla-gpu-metrics:8080/"
+    # The metrics endpoint is served by a single-connection `nc` process, so
+    # concurrent dashboard polls queue up behind it. A short cache keeps p95
+    # flat without making the numbers visibly stale.
+    gpu_metrics_ttl: float = 2.0
     static_dir: str = str(Path(__file__).resolve().parent.parent / "static")
 
     @classmethod
@@ -49,6 +53,9 @@ class Settings:
             kubeconfig=os.environ.get("PLATFORM_KUBECONFIG") or None,
             log_tail_default=log_tail,
             gpu_metrics_url=os.environ.get("PLATFORM_GPU_METRICS_URL", "http://vla-gpu-metrics:8080/"),
+            gpu_metrics_ttl=_parse_nonnegative_float(
+                os.environ.get("PLATFORM_GPU_METRICS_TTL", "2.0"), "PLATFORM_GPU_METRICS_TTL"
+            ),
             static_dir=os.environ.get("PLATFORM_STATIC_DIR", str(Path(__file__).resolve().parent.parent / "static")),
         )
 
@@ -79,4 +86,14 @@ def _parse_positive_int(raw: str, name: str) -> int:
         raise RuntimeError(f"{name} must be an integer") from exc
     if value <= 0:
         raise RuntimeError(f"{name} must be positive")
+    return value
+
+
+def _parse_nonnegative_float(raw: str, name: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number") from exc
+    if value < 0:
+        raise RuntimeError(f"{name} must not be negative")
     return value

@@ -31,7 +31,7 @@ export function AppLayout() {
       <Header className="app-header">
         <div className="brand" onClick={() => navigate('/dashboard')} role="button" tabIndex={0}>
           <span className="brand-mark"><ApiOutlined /></span>
-          <span>VLA 训练平台</span>
+          <span>高性能分布系统</span>
         </div>
         <Menu
           theme="dark"
@@ -52,7 +52,7 @@ export function AppLayout() {
       </Content>
       <Footer className="app-footer">
         <Space split={<Typography.Text type="secondary">·</Typography.Text>}>
-          <span>VLA GPU 训练排队平台</span>
+          <span>GPU 训练任务排队与调度</span>
           <Typography.Text type="secondary">API: {API_BASE}</Typography.Text>
           <Typography.Text type="secondary">数据每 4 秒自动刷新</Typography.Text>
         </Space>

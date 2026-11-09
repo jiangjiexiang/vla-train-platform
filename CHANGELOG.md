@@ -2,6 +2,38 @@
 
 本项目遵循语义化版本。每次大版本更新提交一次 commit 并打 tag，新条目追加到文件顶部。
 
+## [0.8.0] - 2026-11-09
+
+### 更名
+
+- 产品对外名称统一为「高性能分布系统」（网页标题、登录页、侧边栏、FastAPI 标题、README、接口文档）。
+  命名空间 `vla-platform` / `vla-training`、镜像 `vla-platform:local`、标签与 `PLATFORM_*` 环境变量
+  属于既有技术标识，改名会破坏运行中的任务与历史记录，因此保持不变，README 中已注明。
+
+### 新增
+
+- 根目录 `Dockerfile` 改为**多阶段自包含构建**：`node:20-slim` 阶段编译前端，
+  `python:3.12-slim` 阶段安装后端依赖，最终镜像只保留运行时。宿主机不再需要安装 Node，
+  也不再需要预先生成 `frontend/dist`；`backend/Dockerfile` 已移除。
+- `docker-compose.yml`：`docker compose up -d web` 运行服务，`docker compose run --rm test` 跑测试。
+- `docker/test.Dockerfile`：预装 Python 3.12 与 Node 20 及两侧依赖的测试环境镜像。
+  已在容器内实跑通过：后端 153 passed、前端 45 passed，宿主机无需安装 Python/Node。
+- Playwright 端到端测试 7 例（总览、任务列表、提交校验、提交+取消、详情事件、导航），
+  复用系统 Chrome，不下载浏览器；`make e2e` 为入口。
+- Makefile 增加 `e2e` 目标，`build` 目标简化为纯镜像构建。
+
+### 修复
+
+- 并发取消的幂等性：两个请求同时取消同一任务时，后到的请求不再返回 404，而是返回已有取消记录。
+- GPU 指标服务调用加短 TTL 缓存与互斥锁（失败结果同样缓存）：`/api/v1/cluster/summary`
+  顺序请求从约 170-280ms 降到 12-15ms，8 并发下 p95 从 543-816ms 降到 159ms，尖峰消失。
+- 修复镜像切换到非 root 用户后 SQLite 报 `readonly database`、导致提交与取消返回 500 的问题；
+  当前仍以 root 运行，并在 Dockerfile 注明改为非 root 需要同步处理 `/data/history` 属主。
+
+### 文档
+
+- README 增加「名称说明」与镜像内构建说明。
+
 ## [0.7.1] - 2026-11-09
 
 ### 文档

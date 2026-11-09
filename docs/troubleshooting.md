@@ -148,11 +148,11 @@ sudo k3s ctr images ls
 rm -f /tmp/vla-smoke.tar
 ```
 
-Web 镜像以 `backend/Dockerfile` 构建，标签必须与 `deploy/web/` 中 Deployment 完全一致，并同样导入 K3s/containerd。没有 Docker 时，等价构建流程为：
+Web 镜像以 `Dockerfile` 构建，标签必须与 `deploy/web/` 中 Deployment 完全一致，并同样导入 K3s/containerd。没有 Docker 时，等价构建流程为：
 
 ```bash
 cd /path/to/vla-train-platform
-buildah bud --isolation=chroot -t vla-platform:local -f backend/Dockerfile .
+buildah bud --isolation=chroot -t vla-platform:local -f Dockerfile .
 buildah tag localhost/vla-platform:local docker.io/library/vla-platform:local
 buildah push docker.io/library/vla-platform:local docker-archive:/tmp/vla-platform.tar
 sudo k3s ctr images import /tmp/vla-platform.tar

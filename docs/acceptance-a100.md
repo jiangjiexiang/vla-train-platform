@@ -13,7 +13,7 @@
 
 ## 2. 构建与部署检查（不等于 GPU 验收）
 
-- [ ] 前端生产构建、后端检查及 `backend/Dockerfile` 单容器构建通过。
+- [ ] 前端生产构建、后端检查及 `Dockerfile` 单容器构建通过。
 - [ ] `images/smoke-train` 构建为 `vla-smoke:latest`，Web 与 smoke 镜像均已导入 K3s/containerd。
 - [ ] `deploy/kueue/a100/` 已应用，Web 的 `PLATFORM_ALLOWED_GPUS=1,2,4,8`。
 - [ ] `bash -n scripts/verify-a100.sh` 通过。

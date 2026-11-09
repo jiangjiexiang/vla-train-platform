@@ -187,6 +187,29 @@ def test_cancel_running_job_marks_cancelled(service, kube):
     assert service.get_job("exp001")["status"] == "CANCELLED"
 
 
+def test_cancel_is_idempotent_when_object_vanishes(service, kube):
+    """并发取消：对象已被另一个请求删除时，应返回已有记录而不是 404。"""
+    service.submit(make_spec())
+    add_pod(kube, "exp001", phase="Running")
+    first = service.cancel("exp001")
+    assert first["status"] == "CANCELLED"
+
+    # 模拟竞态：get_job 之后对象才消失，delete 抛 404
+    kube.jobs["exp001"] = {
+        "metadata": {"name": "exp001", "uid": "uid-exp001", "labels": {}, "annotations": {},
+                     "creationTimestamp": "2026-01-01T00:00:00Z"},
+        "spec": {},
+        "status": {"conditions": []},
+    }
+
+    def racy_delete(name):
+        raise ServiceError(404, "not found")
+
+    kube.delete_job = racy_delete
+    second = service.cancel("exp001")
+    assert second["status"] == "CANCELLED", "并发取消不应把 404 抛给调用方"
+
+
 def test_cancel_finished_job_preserves_success(service, kube):
     service.submit(make_spec())
     set_job_condition(kube, "exp001", "Succeeded")
@@ -433,6 +456,78 @@ def test_gpu_metrics_parsed_and_sorted(tmp_path, kube):
     assert [item["index"] for item in result["items"]] == [0, 1], "应按 index 排序"
     assert result["items"][0]["utilization_percent"] == 95
     assert result["items"][0]["temperature_celsius"] == 55
+
+
+def test_gpu_metrics_cached_within_ttl(tmp_path, kube):
+    settings = Settings(
+        api_token="t",
+        auth_required=False,
+        db_path=str(tmp_path / "cache.db"),
+        gpu_metrics_url="http://metrics.invalid/",
+        gpu_metrics_ttl=60.0,
+    )
+    service = PlatformService(settings, HistoryStore(settings.db_path), kube)
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps([{"index": 0, "name": "GPU0", "utilization_percent": 1,
+                                "memory_used_mib": 2, "memory_total_mib": 3,
+                                "temperature_celsius": 4}]).encode()
+
+    with patch("app.services.platform.urllib.request.urlopen", return_value=FakeResponse()) as mocked:
+        first = service.gpu_metrics()
+        second = service.gpu_metrics()
+        assert mocked.call_count == 1, "TTL 内应复用缓存，不重复请求指标服务"
+    assert first == second
+
+
+def test_gpu_metrics_cache_disabled_when_ttl_zero(tmp_path, kube):
+    settings = Settings(
+        api_token="t",
+        auth_required=False,
+        db_path=str(tmp_path / "nocache.db"),
+        gpu_metrics_url="http://metrics.invalid/",
+        gpu_metrics_ttl=0.0,
+    )
+    service = PlatformService(settings, HistoryStore(settings.db_path), kube)
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps([]).encode()
+
+    with patch("app.services.platform.urllib.request.urlopen", return_value=FakeResponse()) as mocked:
+        service.gpu_metrics()
+        service.gpu_metrics()
+        assert mocked.call_count == 2
+
+
+def test_gpu_metrics_caches_failures(tmp_path, kube):
+    """指标服务挂掉时也要缓存失败，否则每个请求都要等满 2 秒超时。"""
+    settings = Settings(
+        api_token="t",
+        auth_required=False,
+        db_path=str(tmp_path / "failcache.db"),
+        gpu_metrics_url="http://metrics.invalid/",
+        gpu_metrics_ttl=60.0,
+    )
+    service = PlatformService(settings, HistoryStore(settings.db_path), kube)
+    with patch("app.services.platform.urllib.request.urlopen", side_effect=OSError("down")) as mocked:
+        first = service.gpu_metrics()
+        second = service.gpu_metrics()
+        assert mocked.call_count == 1
+    assert first == second == {"available": False, "items": []}
 
 
 def test_gpu_metrics_degrades_on_error(tmp_path, kube):

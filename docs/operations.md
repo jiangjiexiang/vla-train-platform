@@ -325,7 +325,7 @@ PROFILE=4090 bash scripts/deploy-web.sh
 # 路径 B：从 tag 重新构建（本机无 Docker，用 buildah）
 cd /home/jjx/vla-train-platform
 cd frontend && /opt/node20/bin/npm ci && /opt/node20/bin/npm run build && cd ..
-buildah bud --isolation=chroot -t vla-platform:local -f backend/Dockerfile .
+buildah bud --isolation=chroot -t vla-platform:local -f Dockerfile .
 buildah bud -t vla-smoke:latest images/smoke-train
 buildah push vla-platform:local docker-archive:/tmp/vla-platform.tar:vla-platform:local
 buildah push vla-smoke:latest docker-archive:/tmp/vla-smoke.tar:vla-smoke:latest
@@ -427,7 +427,7 @@ cd frontend
 /opt/node20/bin/npm run build
 cd ..
 
-buildah bud --isolation=chroot -t vla-platform:local -f backend/Dockerfile .
+buildah bud --isolation=chroot -t vla-platform:local -f Dockerfile .
 buildah bud -t vla-smoke:latest images/smoke-train
 
 buildah push vla-platform:local docker-archive:/tmp/vla-platform-web.tar:vla-platform:local
@@ -536,7 +536,7 @@ kubectl -n vla-platform get pod -l app.kubernetes.io/component=web \
 cd /home/jjx/vla-train-platform
 git checkout v0.4.0
 cd frontend && /opt/node20/bin/npm ci && /opt/node20/bin/npm run build && cd ..
-buildah bud --isolation=chroot -t vla-platform:rollback-0.4.0 -f backend/Dockerfile .
+buildah bud --isolation=chroot -t vla-platform:rollback-0.4.0 -f Dockerfile .
 buildah push vla-platform:rollback-0.4.0 \
   docker-archive:/tmp/vla-platform-rollback.tar:vla-platform:rollback-0.4.0
 sudo k3s ctr images import /tmp/vla-platform-rollback.tar

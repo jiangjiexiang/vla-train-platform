@@ -20,7 +20,7 @@ logger = logging.getLogger("vla-platform")
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
-    app = FastAPI(title="VLA Train Platform", version="1.0.0")
+    app = FastAPI(title="高性能分布系统", version="1.0.0")
     app.state.settings = settings
     history = HistoryStore(settings.db_path)
     kubernetes = KubernetesClient(settings)

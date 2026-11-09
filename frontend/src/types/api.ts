@@ -275,3 +275,102 @@ export interface ImageParamsResponse {
   warning?: string;
   template: ParamsTemplate;
 }
+
+// ---- v1.0：数据集（见 backend/app/datasets/scanner.py DatasetMeta.as_dict）----
+
+// scanning 是扫描进行中的临时状态；error 表示扫描本身失败
+export type DatasetStatus = 'scanning' | 'ready' | 'warning' | 'unusable' | 'error';
+
+export type DatasetIssueLevel = 'error' | 'warning' | 'info';
+
+export interface DatasetIssue {
+  level: DatasetIssueLevel | string;
+  code: string;
+  message: string;
+}
+
+export interface DatasetMeta {
+  id: string;
+  name: string;
+  // 容器内路径，如 /datasets/pick1028
+  path: string;
+  // 数据集格式，如 lerobot-v3.0；扫描失败时可能是 unknown
+  format: string;
+  status: DatasetStatus | string;
+  size_bytes: number;
+  episodes: number;
+  frames: number;
+  fps: number;
+  tasks: string[];
+  robot_type: string | null;
+  // 相机名列表，如 ["observation.images.top"]
+  cameras: string[];
+  // [height, width]，浅扫描拿不到时为 null
+  image_size: number[] | null;
+  state_dim: number;
+  action_dim: number;
+  action_names: string[];
+  state_names: string[];
+  duration_seconds: number;
+  issues: DatasetIssue[];
+  scanned_at: string;
+  scan_depth: 'shallow' | 'deep' | string;
+  dir_mtime: number;
+}
+
+export interface DatasetSummary {
+  total: number;
+  ready: number;
+  warning: number;
+  unusable: number;
+  total_frames: number;
+}
+
+export interface DatasetListResponse {
+  items: DatasetMeta[];
+  summary: DatasetSummary;
+  root: string;
+}
+
+// ---- v1.0：训练配方（见 backend/app/recipes/loader.py + routes_runs._recipe_summary）----
+
+export interface Recipe {
+  id: string;
+  name: string;
+  description: string;
+  // 训练镜像；配置解析失败的配方是空串
+  image: string;
+  entrypoint: string | null;
+  // 支持的数据集格式，与 DatasetMeta.format 精确匹配
+  dataset_formats: string[];
+  params_template: string | null;
+  // 默认参数取值（只对模板里声明过的 key 生效）
+  defaults: Record<string, unknown>;
+  gpu_count: number;
+  estimated_vram_gb: number | null;
+  env: Record<string, string>;
+  order: number;
+  // false 只在高级提交页可见
+  public: boolean;
+  // 内联模板（template 字段）与 params_template 二选一
+  has_custom_template?: boolean;
+  // 列表接口已展开参数，渲染表单不必再请求一次
+  params: ParamSpec[];
+  extra_args: ExtraArgsSpec | null;
+}
+
+export interface RecipeListResponse {
+  items: Recipe[];
+}
+
+// POST /runs 的请求体（见 backend/app/models.py RunSubmitRequest）
+export interface RunRequest {
+  recipe_id: string;
+  dataset_id: string;
+  // 留空（不传）由后端生成 <recipe>-<dataset>-<序号>
+  name?: string | null;
+  // 键名是 ParamSpec.key；未知 key 会被后端以 422 拒绝
+  overrides?: Record<string, unknown>;
+  priority?: Priority;
+  env?: Record<string, string>;
+}

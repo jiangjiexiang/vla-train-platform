@@ -358,3 +358,227 @@ body {
   margin-bottom: 16px;
   font-size: 12px;
 }
+
+/* ---- v1.0 快速开始 / 数据集 / 配方 ---- */
+.quickstart-steps {
+  padding: 4px 8px;
+}
+
+.quickstart-search {
+  width: 220px;
+}
+
+.pick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.pick-grid-recipes {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.pick-card-tooltip-wrap {
+  display: block;
+  height: 100%;
+}
+
+.pick-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 14px 16px;
+  border: 1px solid #e4e7ec;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.pick-card:hover {
+  border-color: #85a5ff;
+  box-shadow: 0 4px 14px rgb(49 94 251 / 12%);
+}
+
+.pick-card:focus-visible {
+  border-color: #315efb;
+  outline: 2px solid rgb(49 94 251 / 25%);
+  outline-offset: 1px;
+}
+
+.pick-card-selected {
+  border-color: #315efb;
+  background: #f5f8ff;
+  box-shadow: 0 0 0 1px #315efb inset;
+}
+
+.pick-card-disabled {
+  background: #f7f8fa;
+  color: #98a2b3;
+  cursor: not-allowed;
+  filter: grayscale(0.35);
+}
+
+.pick-card-disabled:hover {
+  border-color: #e4e7ec;
+  box-shadow: none;
+}
+
+.pick-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pick-card-head .ant-tag {
+  margin-inline-end: 4px;
+}
+
+.pick-card-check {
+  color: #315efb;
+  font-size: 16px;
+}
+
+.pick-card-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.pick-meta-item {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pick-meta-label {
+  color: #98a2b3;
+  font-size: 12px;
+}
+
+.pick-meta-value {
+  overflow: hidden;
+  color: #1d2939;
+  font-size: 13px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick-card-disabled .pick-meta-value {
+  color: #98a2b3;
+}
+
+.pick-card-desc {
+  margin-bottom: 0 !important;
+  font-size: 13px;
+}
+
+.pick-card-reason {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.dataset-warning-hint {
+  color: #faad14;
+  cursor: help;
+}
+
+.quickstart-advanced {
+  margin-bottom: 12px;
+}
+
+.quickstart-advanced .ant-collapse-header {
+  padding-left: 0 !important;
+}
+
+.cell-secondary {
+  font-size: 12px;
+}
+
+.summary-footnote {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.dataset-issue-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.dataset-issue {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-left: 3px solid #d0d5dd;
+  border-radius: 6px;
+  background: #fafbff;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+
+.dataset-issue-error {
+  border-left-color: #ff4d4f;
+  background: #fff2f0;
+}
+
+.dataset-issue-warning {
+  border-left-color: #faad14;
+  background: #fffbe6;
+}
+
+.dataset-issue-info {
+  border-left-color: #1677ff;
+  background: #e6f4ff;
+}
+
+.dataset-issue-code {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.recipe-collapse {
+  margin-bottom: 16px;
+  background: transparent;
+}
+
+.recipe-collapse .ant-collapse-item {
+  margin-bottom: 12px;
+  border-radius: 10px !important;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 6%);
+}
+
+.recipe-collapse-label {
+  width: 100%;
+}
+
+.recipe-collapse-desc {
+  flex: 1;
+  min-width: 160px;
+  max-width: 560px;
+  font-size: 13px;
+}
+
+.recipe-detail-meta {
+  margin-bottom: 18px;
+}
+
+.recipe-footnote {
+  margin-top: 4px;
+}
+
+@media (max-width: 640px) {
+  .quickstart-search {
+    width: 100%;
+  }
+
+  .pick-card-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

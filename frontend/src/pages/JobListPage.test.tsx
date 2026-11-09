@@ -40,7 +40,7 @@ describe('JobListPage', () => {
 
     await waitFor(() => expect(getJobsMock).toHaveBeenCalledTimes(1));
     expect(getJobsMock).toHaveBeenCalledWith({ limit: 20, offset: 0 }, expect.anything());
-    expect(await screen.findByText('没有任务，点击“提交任务”开始')).toBeInTheDocument();
+    expect(await screen.findByText('还没有任务，去「快速开始」一键发起训练吧')).toBeInTheDocument();
   });
 
   it('sends the selected status, resets to page 1 and uses the filtered empty text', async () => {

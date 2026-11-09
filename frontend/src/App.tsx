@@ -6,11 +6,14 @@ import { AppLayout } from './components/AppLayout';
 import { ForbiddenPage } from './components/ForbiddenPage';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { DashboardPage } from './pages/DashboardPage';
+import { DatasetsPage } from './pages/DatasetsPage';
 import { JobDetailPage } from './pages/JobDetailPage';
 import { JobListPage } from './pages/JobListPage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { QuickStartPage } from './pages/QuickStartPage';
 import { QueuesPage } from './pages/QueuesPage';
+import { RecipesPage } from './pages/RecipesPage';
 import { SubmitJobPage } from './pages/SubmitJobPage';
 import { UsersPage } from './pages/UsersPage';
 
@@ -36,12 +39,6 @@ function AdminOnly({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-function HomeRedirect() {
-  const { authRequired, isAuthenticated } = useAuth();
-  if (authRequired === null) return <LoadingScreen />;
-  return <Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />;
-}
-
 export default function App() {
   return (
     <ConfigProvider
@@ -57,15 +54,20 @@ export default function App() {
             <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route element={<ProtectedRoutes />}>
+                {/* v1.0：首页就是「一键训练」入口 */}
+                <Route path="/" element={<QuickStartPage />} />
+                <Route path="/datasets" element={<DatasetsPage />} />
+                <Route path="/recipes" element={<RecipesPage />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
-                <Route path="/submit" element={<SubmitJobPage />} />
+                {/* 旧的提交入口保留为别名，老书签不会 404 */}
+                <Route path="/submit" element={<Navigate to="/advanced/submit" replace />} />
+                <Route path="/advanced/submit" element={<SubmitJobPage />} />
                 <Route path="/jobs" element={<JobListPage />} />
                 <Route path="/jobs/:name" element={<JobDetailPage />} />
                 <Route path="/queues" element={<QueuesPage />} />
                 <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
                 <Route path="*" element={<NotFoundPage />} />
               </Route>
-              <Route path="/" element={<HomeRedirect />} />
             </Routes>
           </BrowserRouter>
         </AuthProvider>

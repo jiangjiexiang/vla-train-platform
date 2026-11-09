@@ -485,6 +485,38 @@ class PlatformService:
             "logs": self.kubernetes.read_pod_log(pod_name, tail_lines),
         }
 
+    def job_diagnosis(self, name: str) -> dict[str, Any]:
+        """归一化失败原因。只读，不写库。"""
+        from .diagnostics import diagnose
+
+        job = self.get_job(name)
+        status = str(job.get("status"))
+        if status not in ("FAILED", "UNKNOWN"):
+            return {"name": name, "status": status, "diagnosis": None}
+
+        log_tail = ""
+        try:
+            log_tail = self.logs(name, 200).get("logs") or ""
+        except ServiceError:
+            log_tail = ""
+        events = []
+        try:
+            events = self.events(name).get("items") or []
+        except ServiceError:
+            events = []
+
+        return {
+            "name": name,
+            "status": status,
+            "diagnosis": diagnose(
+                status=status,
+                reason=job.get("pod_status"),
+                message=job.get("message"),
+                log_tail=log_tail[-8000:],
+                events=events,
+            ),
+        }
+
     def job_metrics(self, name: str, limit: int = 500) -> dict[str, Any]:
         """训练指标（loss 曲线）。任务不存在返回 404；文件不存在返回空列表。"""
         job = self.kubernetes.get_job(name)

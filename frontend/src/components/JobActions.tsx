@@ -16,7 +16,7 @@ export function JobActions({ job, onChanged, size = 'small' }: JobActionsProps) 
   const canCancel = job.status === 'QUEUED' || job.status === 'RUNNING';
 
   const clone = () => {
-    navigate('/submit', { state: { sourceJob: job } });
+    navigate('/advanced/submit', { state: { sourceJob: job } });
   };
 
   const confirmCancel = () => {

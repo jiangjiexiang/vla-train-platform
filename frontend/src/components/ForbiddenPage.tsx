@@ -17,7 +17,7 @@ export function ForbiddenPage({
       status="403"
       title={title}
       subTitle={subTitle}
-      extra={<Button type="primary" onClick={() => navigate('/dashboard')}>返回总览</Button>}
+      extra={<Button type="primary" onClick={() => navigate('/')}>返回快速开始</Button>}
       className="forbidden-page"
     />
   );

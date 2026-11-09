@@ -140,7 +140,7 @@ export function JobListPage() {
   ];
 
   const hasFilters = status !== 'ALL' || searchTerm !== '';
-  const emptyDescription = hasFilters ? '没有匹配的任务，请调整筛选条件' : '没有任务，点击“提交任务”开始';
+  const emptyDescription = hasFilters ? '没有匹配的任务，请调整筛选条件' : '还没有任务，去「快速开始」一键发起训练吧';
 
   return (
     <div>
@@ -151,7 +151,7 @@ export function JobListPage() {
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/submit')}>提交任务</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/advanced/submit')}>提交任务</Button>
         </Space>
       </div>
       {quotaInfo.text && (

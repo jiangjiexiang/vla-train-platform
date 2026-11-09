@@ -1,4 +1,4 @@
-import type { ClusterSummary, CurrentUser, HealthResponse, Job, JobEventsResponse, JobListResponse, JobLogs, JobStatus, LoginResponse, PlatformConfig, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, SubmitJobRequest, UserListResponse, ImageListResponse, ImageParamsResponse } from '../types/api';
+import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, HealthResponse, Job, JobEventsResponse, JobListResponse, JobLogs, JobStatus, LoginResponse, PlatformConfig, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, Recipe, RecipeListResponse, RunRequest, SubmitJobRequest, UserListResponse, ImageListResponse, ImageParamsResponse } from '../types/api';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE || '/api/v1').replace(/\/+$/, '');
 // ldap 模式下的会话令牌
@@ -167,6 +167,22 @@ export const api = {
   getJobLogs: (name: string, tailLines = 500, signal?: AbortSignal) =>
     request<JobLogs>(`/jobs/${encodeURIComponent(name)}/logs?tail_lines=${tailLines}`, { signal }),
   getQueues: (signal?: AbortSignal) => request<QueueListResponse>('/queues', { signal }),
+
+  // ---- v1.0 数据集（只读；refresh=true 时后端先重扫有变化的目录）----
+  listDatasets: (refresh = false, signal?: AbortSignal) =>
+    request<DatasetListResponse>(`/datasets${refresh ? '?refresh=true' : ''}`, { signal }),
+  // deep=true 会读 parquet 与视频目录，只在详情抽屉按需触发
+  getDataset: (id: string, deep = false, signal?: AbortSignal) =>
+    request<DatasetMeta>(`/datasets/${encodeURIComponent(id)}${deep ? '?deep=true' : ''}`, { signal }),
+
+  // ---- v1.0 训练配方与一键训练 ----
+  // 列表项已含展开后的 params，提交页据此渲染参数表单
+  listRecipes: (signal?: AbortSignal) => request<RecipeListResponse>('/recipes', { signal }),
+  getRecipe: (id: string, signal?: AbortSignal) =>
+    request<Recipe>(`/recipes/${encodeURIComponent(id)}`, { signal }),
+  // 201 返回新建的 Job；422 = 格式不兼容 / 数据集不可用 / 参数未知，409 = 任务名重复
+  createRun: (payload: RunRequest) =>
+    request<Job>('/runs', { method: 'POST', body: JSON.stringify(payload) }),
 };
 
 export function isAbortError(error: unknown): boolean {

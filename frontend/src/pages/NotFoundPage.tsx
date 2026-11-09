@@ -8,7 +8,7 @@ export function NotFoundPage() {
       status="404"
       title="页面不存在"
       subTitle="请通过顶部导航访问平台功能。"
-      extra={<Button type="primary" onClick={() => navigate('/dashboard')}>返回总览</Button>}
+      extra={<Button type="primary" onClick={() => navigate('/')}>返回快速开始</Button>}
     />
   );
 }

@@ -275,6 +275,21 @@ def job_logs(
     return service.logs(name, tail_lines or settings.log_tail_default)
 
 
+@router.get("/jobs/{name}/diagnosis")
+def job_diagnosis(
+    name: JobName,
+    user: AuthContext = Depends(require_user),
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    """失败诊断：把事件与日志尾部归一到「发生了什么 + 怎么办」。
+
+    只做只读推断，不改变任务状态。任务没失败时返回 ``diagnosis: null``。
+    """
+    job = service.get_job(name)
+    _ensure_visible(user, job)
+    return service.job_diagnosis(name)
+
+
 @router.get("/jobs/{name}/metrics")
 def job_metrics(
     name: JobName,

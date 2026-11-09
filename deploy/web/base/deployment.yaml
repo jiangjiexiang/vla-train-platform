@@ -70,6 +70,16 @@ spec:
                   name: vla-web-auth
                   key: PLATFORM_API_TOKEN
                   optional: true
+            # 多用户令牌表（token 模式）。格式 用户名:角色:令牌，逗号分隔。
+            # 不配置时退回单一 PLATFORM_API_TOKEN（等价一个 admin）。
+            # 之前漏了这一项：Secret 里明明写了，但没引用成环境变量，
+            # 于是所有人都走单令牌分支，身份全是同一个 token。
+            - name: PLATFORM_USER_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: vla-web-auth
+                  key: PLATFORM_USER_TOKENS
+                  optional: true
             - name: PLATFORM_AUTH_MODE
               value: token
             - name: PLATFORM_NAMESPACE

@@ -69,6 +69,8 @@ class PlatformService:
         # TTL 很短（2 秒），用户看到的数字仍然接近实时。
         self._cluster_cache: tuple[float, dict[str, Any]] | None = None
         self._cluster_lock = threading.Lock()
+        # 一键训练的名字生成必须串行，避免并发下撞名
+        self._run_create_lock = threading.Lock()
         self._metrics_cache: tuple[float, dict[str, Any]] | None = None
         self._metrics_lock = threading.Lock()
         self._submit_lock = threading.Lock()
@@ -331,9 +333,12 @@ class PlatformService:
         )
 
     def create_run(self, request: RunRequest, owner: str) -> dict[str, Any]:
-        """一键训练：展开配方与数据集，然后走既有 submit 路径。"""
-        from .runs import build_run  # 延迟导入，避免循环依赖
+        """一键训练：展开配方与数据集，然后走既有 submit 路径。
 
+        「查重名 → 生成编号 → 创建」这三步必须串行：多个用户同时点开始时，
+        并发查到的 existing 是同一份快照，会生成同一个任务名，只有一个能建成功，
+        其余用户看到「任务名已存在」这种对他们毫无意义的错误。
+        """
         recipe = self.get_recipe(request.recipe_id)
         dataset = self.get_dataset(request.dataset_id)
         # 提交前预检：把能在入队前发现的问题直接拦下，不做无谓的 GPU 调度
@@ -341,8 +346,31 @@ class PlatformService:
         if not preflight_result["ok"]:
             errors = [check for check in preflight_result["checks"] if check["level"] == "error"]
             raise ServiceError(422, errors[0]["message"] if errors else "预检未通过")
+
+        with self._run_create_lock:
+            payload = self._build_run_payload(request, recipe, dataset, owner)
+            spec = SubmitSpec.model_validate(payload)
+            # 与 job.submit 一致：审计记操作者（current_actor），不是任务归属 owner
+            self.audit.record(
+                "run.create",
+                actor=self._current_actor,
+                target=spec.name,
+                detail={"recipe": recipe.id, "dataset": request.dataset_id, "overrides": request.overrides},
+            )
+            return self.submit(spec, owner=owner)
+
+    def _build_run_payload(
+        self,
+        request: RunRequest,
+        recipe: Any,
+        dataset: dict[str, Any],
+        owner: str,
+    ) -> dict[str, Any]:
+        """在锁内完成「查已有名字 → 生成唯一名字 → 组装提交体」。"""
+        from .runs import build_run
+
         existing = {item["name"] for item in self._list_jobs(self.kubernetes.list_namespace_pods())["items"]}
-        payload = build_run(
+        return build_run(
             request,
             recipe=recipe,
             dataset=dataset,
@@ -350,15 +378,6 @@ class PlatformService:
             owner=owner,
             existing_names=existing,
         )
-        spec = SubmitSpec.model_validate(payload)
-        # 与 job.submit 一致：审计记操作者（current_actor），不是任务归属 owner
-        self.audit.record(
-            "run.create",
-            actor=self._current_actor,
-            target=spec.name,
-            detail={"recipe": recipe.id, "dataset": request.dataset_id, "overrides": request.overrides},
-        )
-        return self.submit(spec, owner=owner)
 
     # ------------------------------------------------------------------
     # 数据集

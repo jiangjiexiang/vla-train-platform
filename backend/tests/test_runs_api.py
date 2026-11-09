@@ -390,3 +390,55 @@ def test_recipes_dir_container_layout(monkeypatch):
     # 容器：parents[2] = /app；源码：parents[2] = backend/
     assert here.parents[2].name in ("backend", "app")
 
+def test_concurrent_run_creation_gets_distinct_names(client, tmp_path):
+    """并发点「开始」时，每个请求都应拿到不同的自动任务名。
+
+    曾经的 bug：查重名与创建是分开的两步，并发请求拿到同一份 existing 快照，
+    生成同一个名字，只有一个能建成，其余用户看到「任务名已存在」——
+    可他们本来就没填任务名。
+    """
+    import json as _json
+    import threading
+
+    dataset_dir = tmp_path / "datasets" / "ds1"
+    (dataset_dir / "meta").mkdir(parents=True)
+    (dataset_dir / "meta" / "info.json").write_text(
+        _json.dumps(
+            {
+                "codebase_version": "v3.0",
+                "robot_type": "test",
+                "total_episodes": 30,
+                "total_frames": 3000,
+                "total_tasks": 1,
+                "fps": 30,
+                "features": {
+                    "observation.images.cam": {"dtype": "video", "shape": [480, 640, 3]},
+                    "observation.state": {"dtype": "float32", "shape": [7]},
+                    "action": {"dtype": "float32", "shape": [7]},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (dataset_dir / "data" / "chunk-000").mkdir(parents=True)
+    (dataset_dir / "data" / "chunk-000" / "file-000.parquet").write_bytes(b"PAR1")
+    client.get("/api/v1/datasets?refresh=true")
+
+    recipe_id = client.get("/api/v1/recipes").json()["items"][0]["id"]
+    results: list[tuple[int, str]] = []
+
+    def submit() -> None:
+        response = client.post("/api/v1/runs", json={"recipe_id": recipe_id, "dataset_id": "ds1"})
+        body = response.json()
+        results.append((response.status_code, body.get("name") or body.get("detail", "")))
+
+    threads = [threading.Thread(target=submit) for _ in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    names = [name for status, name in results if status == 201]
+    # 全部成功，且名字互不相同
+    assert len(names) == 5, results
+    assert len(set(names)) == 5, names

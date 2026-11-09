@@ -36,6 +36,8 @@ class HistoryStore:
                 );
                 CREATE INDEX IF NOT EXISTS submissions_name_id
                     ON submissions(name, id DESC);
+                -- 表名沿用历史命名：既存用户取消，也存"删除已完成任务"的记录，
+                -- 后者用 status 字段保留真实终态（SUCCEEDED / FAILED）。
                 CREATE TABLE IF NOT EXISTS cancellations (
                     name TEXT PRIMARY KEY,
                     spec_json TEXT NOT NULL,

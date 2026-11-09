@@ -133,3 +133,16 @@ NVIDIA device plugin v0.20.1、驱动 595.71.05、Web 镜像 `vla-platform:local
 - Web Deployment 重启后实时任务与历史是否保留。
 - `clone` 端到端、失败任务的 `FAILED` 终态与 `max_retries` 行为。
 - 单机 8×A100 全部项目。
+
+### 2026-11-09 补充验证（v0.7.0）
+
+- **Web 重启后任务与历史保留**：提交一个运行中的任务，`kubectl rollout restart deployment/vla-web`
+  并等待就绪，重启后同一任务仍是 `RUNNING`，`created_at`、镜像等字段与重启前完全一致；
+  任务总数 24 不变，取消历史 14 条、成功历史 9 条均可查。通过。
+- **SQLite 备份与恢复**：用 `VACUUM INTO` 在线备份运行中的库（524288 字节），
+  恢复副本 `PRAGMA integrity_check` 为 `ok`，`submissions` 26 条、`cancellations` 20 条，
+  平台的 `HistoryStore` 能正常读出全部记录并解析原始提交参数。通过。
+  说明：`cancellations` 表实际存放"删除记录"，其中 14 条是用户取消、5 条是删除已成功任务
+  （保留 `SUCCEEDED`）、1 条是删除已失败任务（保留 `FAILED`），因此表内 20 条而
+  `/api/v1/jobs?status=CANCELLED` 只统计到 14 条，属预期行为。
+- **未验证项不变**：单机 8×A100 全部项目、前端浏览器端到端。

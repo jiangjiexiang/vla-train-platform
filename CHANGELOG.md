@@ -2,6 +2,16 @@
 
 本项目遵循语义化版本。每次大版本更新提交一次 commit 并打 tag，新条目追加到文件顶部。
 
+## [0.7.1] - 2026-11-09
+
+### 文档
+
+- `docs/acceptance-4090.md` 记录两项补充验证：Web 重启后任务与历史保留、
+  SQLite 在线备份与恢复（`VACUUM INTO` + `integrity_check` + `HistoryStore` 读取）。
+- 说明 `cancellations` 表的真实语义：既存用户取消，也存「删除已完成任务」的记录，
+  后者用 `status` 字段保留 `SUCCEEDED` / `FAILED`，因此表内行数会多于
+  `/api/v1/jobs?status=CANCELLED` 的统计值。
+
 ## [0.7.0] - 2026-11-09
 
 ### 新增

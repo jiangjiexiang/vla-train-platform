@@ -52,7 +52,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: web
-          image: vla-platform:local
+          # 用完整仓库路径：containerd 里导入的镜像名就是 docker.io/library/vla-platform，
+          # 只写短名会让 kubelet 去远端 registry 拉取（内网被镜像站白名单拒绝，403）。
+          image: docker.io/library/vla-platform:local
+          # 镜像随部署导入到节点，不需要每次从远端拉
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

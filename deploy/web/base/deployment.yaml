@@ -39,11 +39,16 @@ spec:
               containerPort: 8000
               protocol: TCP
           env:
+            # optional：auth_mode=off 时不需要令牌；ldap 模式下也不用它。
+            # 只有 token 模式必须存在，缺失时由后端启动时报 PLATFORM_API_TOKEN 错误。
             - name: PLATFORM_API_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: vla-web-auth
                   key: PLATFORM_API_TOKEN
+                  optional: true
+            - name: PLATFORM_AUTH_MODE
+              value: token
             - name: PLATFORM_NAMESPACE
               value: vla-training
             - name: PLATFORM_QUEUE
@@ -62,6 +67,18 @@ spec:
               value: /data/history/platform.db
             - name: PLATFORM_LOG_TAIL_DEFAULT
               value: "500"
+            # v0.9：单机默认，多机/配额/LDAP 由 overlay 或 Secret 覆盖。
+            - name: PLATFORM_SESSION_TTL_HOURS
+              value: "12"
+            - name: PLATFORM_MAX_NODES
+              value: "1"
+            # LDAP 服务账号密码只从 Secret 读；非 ldap 模式不建该 Secret 也能启动。
+            - name: PLATFORM_LDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: vla-web-ldap
+                  key: PLATFORM_LDAP_BIND_PASSWORD
+                  optional: true
           volumeMounts:
             - name: history
               mountPath: /data/history

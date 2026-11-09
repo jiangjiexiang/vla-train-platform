@@ -166,6 +166,35 @@ def parse_env(items):
     return result
 
 
+LABEL_RE = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
+
+
+def parse_labels(items):
+    """校验标签；规则与后端 models.SubmitSpec 保持一致。"""
+    result = {}
+    total = 0
+    for item in items:
+        if "=" not in item:
+            raise CliError(f"标签必须使用 KEY=VALUE 格式: {item}", 2)
+        key, value = item.split("=", 1)
+        if not LABEL_RE.fullmatch(key) or not LABEL_RE.fullmatch(value):
+            raise CliError(f"标签键和值须匹配 ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$: {item}", 2)
+        result[key] = value
+        total += len(key) + len(value)
+    if total > 256:
+        raise CliError("标签键值总长不能超过 256 字节", 2)
+    return result
+
+
+def read_password(prompt):
+    """无 echo 地读取密码；无 TTY 时退回标准输入。"""
+    if sys.stdin.isatty():
+        import getpass
+
+        return getpass.getpass(prompt)
+    return sys.stdin.readline().rstrip("\n")
+
+
 def quoted_name(name):
     return quote(validate_name(name), safe="")
 
@@ -204,6 +233,14 @@ def build_parser():
     parser.add_argument("--timeout", type=float, default=30.0, help="API 超时秒数，默认 30")
     subparsers = parser.add_subparsers(dest="action", required=True)
 
+    login = subparsers.add_parser("login", help="用 LDAP 账号登录并保存平台会话令牌")
+    login.add_argument("--username", help="省略时交互式输入")
+    login.add_argument("--password-stdin", action="store_true", help="从标准输入读取密码，避免出现在 shell 历史")
+
+    subparsers.add_parser("whoami", help="显示当前登录用户与配额")
+
+    subparsers.add_parser("logout", help="注销当前会话令牌")
+
     config = subparsers.add_parser("config", help="保存或查看本地 API 配置")
     config.add_argument("--server", help="平台地址，例如 http://HOST:30080")
     config.add_argument("--token", help="平台访问令牌")
@@ -211,12 +248,21 @@ def build_parser():
 
     submit = subparsers.add_parser("submit", help="提交训练任务")
     submit.add_argument("--name", required=True)
-    submit.add_argument("--gpus", required=True, type=int)
+    submit.add_argument("--gpus", type=int, help="申请的总 GPU 数；多机时可由 --nodes/--gpus-per-node 推导")
+    submit.add_argument("--nodes", type=int, default=1, help="节点数，默认 1（需要服务端 PLATFORM_MAX_NODES>1）")
+    submit.add_argument("--gpus-per-node", type=int, help="每节点 GPU 数，仅在 --nodes>1 时使用")
     submit.add_argument("--image", default="vla-smoke:latest")
     submit.add_argument("--queue", default="default")
     submit.add_argument("--priority", choices=("low", "normal", "high"), default="normal")
     submit.add_argument("--command", required=True)
     submit.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
+    submit.add_argument(
+        "--label",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="自由标签，可重复；写入任务注解，不参与调度",
+    )
     submit.add_argument("--max-retries", type=int, choices=(0, 1, 2), default=0)
     submit.add_argument(
         "--termination-grace-period",
@@ -270,9 +316,66 @@ def run(args):
         print_json({"config_file": str(path), "server": normalize_server(args.server), "token": "已保存（不显示）", "mode": "0600"})
         return
 
+    if args.action == "login":
+        username = args.username
+        if not username:
+            if not sys.stdin.isatty():
+                raise CliError("非交互环境请使用 --username", 2)
+            username = input("用户名: ").strip()
+        if not username:
+            raise CliError("用户名不能为空", 2)
+        password = read_password(f"{username} 的密码: ")
+        if not password:
+            raise CliError("密码不能为空", 2)
+        base, _ = connection(args, require_token=False)
+        result = request(base, None, "POST", "/auth/login",
+                         {"username": username, "password": password}, args.timeout)
+        token = result.get("token")
+        if not token:
+            raise CliError("登录响应缺少 token", 5)
+        path = Path(args.config_file).expanduser() if args.config_file else default_config_path()
+        server = args.server or read_config(path).get("server") or os.environ.get("VLA_TRAIN_SERVER")
+        if not server:
+            raise CliError("尚未配置平台地址，请先执行 vla-train config --server ...", 2)
+        write_config(path, server, token)
+        user = result.get("user") or {}
+        print_json({
+            "config_file": str(path),
+            "server": normalize_server(server),
+            "username": user.get("username"),
+            "role": user.get("role"),
+            "expires_at": result.get("expires_at"),
+            "token": "已保存（不显示）",
+        })
+        return
+
+    if args.action in ("whoami", "logout"):
+        base, token = connection(args)
+        if args.action == "whoami":
+            print_json(request(base, token, "GET", "/auth/me", timeout=args.timeout))
+            return
+        # 后端对 logout 返回 204（无响应体），request() 需要能容忍空 body。
+        request(base, token, "POST", "/auth/logout", None, args.timeout)
+        print("已注销；本地配置中的令牌已失效，可执行 vla-train login 重新登录。")
+        return
+
     if args.action == "submit":
         name = validate_name(args.name)
-        if args.gpus <= 0:
+        if args.nodes < 1:
+            raise CliError("nodes 必须大于等于 1", 2)
+        gpus = args.gpus
+        if args.nodes > 1:
+            if args.gpus_per_node is None:
+                raise CliError("多机提交必须指定 --gpus-per-node", 2)
+            derived = args.nodes * args.gpus_per_node
+            if gpus is not None and gpus != derived:
+                raise CliError(f"gpus={gpus} 与 nodes*gpus_per_node={derived} 不一致", 2)
+            gpus = derived
+        elif gpus is None:
+            raise CliError("单机提交必须指定 --gpus", 2)
+        elif args.gpus_per_node is not None:
+            raise CliError("--gpus-per-node 仅在 --nodes>1 时使用", 2)
+        if gpus <= 0:
             raise CliError("gpus 必须是正整数；具体允许值由平台配置决定", 2)
         if not args.image.strip() or not args.command.strip():
             raise CliError("image 和 command 不能为空", 2)
@@ -283,13 +386,15 @@ def run(args):
         payload = {
             "name": name,
             "image": args.image,
-            "gpus": args.gpus,
+            "gpus": gpus,
+            "nodes": args.nodes,
             "queue": args.queue,
             "priority": args.priority,
             "command": args.command,
             "env": parse_env(args.env),
             "max_retries": args.max_retries,
             "termination_grace_period_seconds": args.termination_grace_period,
+            "labels": parse_labels(args.label),
         }
         base, token = connection(args, require_token=not args.dry_run)
         if args.dry_run:

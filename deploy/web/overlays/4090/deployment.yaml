@@ -9,5 +9,9 @@ spec:
       containers:
         - name: web
           env:
+            # 4090 内网单机默认免登录。PLATFORM_AUTH_MODE 优先于
+            # PLATFORM_AUTH_REQUIRED，两者都写是为了让老版本镜像回退时行为一致。
+            - name: PLATFORM_AUTH_MODE
+              value: "off"
             - name: PLATFORM_AUTH_REQUIRED
               value: "false"

@@ -23,7 +23,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     history = HistoryStore(settings.db_path)
     kubernetes = KubernetesClient(settings)
-    app.state.service = PlatformService(settings, history, kubernetes)
+    service = PlatformService(settings, history, kubernetes)
+    app.state.service = service
+
+    @app.on_event("startup")
+    def purge_expired_sessions() -> None:
+        # 会话持久化在 SQLite 里；重启时顺手清掉过期令牌，避免表无限增长。
+        removed = service.sessions.purge_expired()
+        if removed:
+            logger.info("purged %s expired sessions", removed)
 
     @app.exception_handler(ServiceError)
     async def service_error_handler(_request: Request, exc: ServiceError) -> JSONResponse:

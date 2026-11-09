@@ -486,7 +486,11 @@ def test_health_reports_status_and_auth_mode(api_client):
     response = api_client.get("/api/v1/health")
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"status": "ok", "auth_required": False}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["auth_required"] is False
+    # v0.9：/health 额外暴露 auth_mode，供前端在未登录时决定登录页形态。
+    assert body["auth_mode"] == "off"
 
 
 def test_config_returns_platform_limits(api_client):

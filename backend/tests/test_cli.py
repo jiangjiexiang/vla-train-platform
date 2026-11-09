@@ -121,3 +121,66 @@ def test_print_events_renders_fields(cli, capsys):
     out = capsys.readouterr().out
     assert "Warning" in out and "Failed" in out and "x3" in out
     assert "Failed to pull image" in out
+
+
+def test_parse_labels(cli):
+    assert cli.parse_labels(["team=perc", "stage=v2"]) == {"team": "perc", "stage": "v2"}
+    assert cli.parse_labels([]) == {}
+    for bad in (["NOEQUALS"], ["Bad=x"], ["k="], ["k=v"][:0] + ["chain=" + "x" * 300]):
+        with pytest.raises(cli.CliError):
+            cli.parse_labels(bad)
+
+
+def test_parser_accepts_login_and_node_flags(cli):
+    parser = cli.build_parser()
+    args = parser.parse_args(["login", "--username", "alice", "--password-stdin"])
+    assert args.action == "login" and args.username == "alice" and args.password_stdin is True
+    assert parser.parse_args(["whoami"]).action == "whoami"
+    assert parser.parse_args(["logout"]).action == "logout"
+
+    args = parser.parse_args(
+        ["submit", "--name", "exp001", "--nodes", "2", "--gpus-per-node", "1", "--command", "true"]
+    )
+    # --gpus 在多机时可省略，由 nodes * gpus_per_node 推导。
+    assert args.gpus is None and args.nodes == 2 and args.gpus_per_node == 1
+
+
+def test_submit_dry_run_derives_gpus_for_multi_node(cli, monkeypatch, capsys, tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text('{"server": "http://h:30080", "token": "t"}', encoding="utf-8")
+    config.chmod(0o600)
+    monkeypatch.setattr(cli, "default_config_path", lambda: config)
+    import sys as _sys
+
+    monkeypatch.setattr(
+        _sys,
+        "argv",
+        [
+            "vla-train", "submit", "--name", "exp001", "--nodes", "2",
+            "--gpus-per-node", "4", "--command", "true", "--label", "a=b", "--dry-run",
+        ],
+    )
+    assert cli.main() == 0
+    import json as _json
+
+    body = _json.loads(capsys.readouterr().out)["body"]
+    assert body["gpus"] == 8
+    assert body["nodes"] == 2
+    assert body["labels"] == {"a": "b"}
+
+
+def test_submit_rejects_inconsistent_gpu_flags(cli, monkeypatch, tmp_path, capsys):
+    config = tmp_path / "config.json"
+    config.write_text('{"server": "http://h:30080", "token": "t"}', encoding="utf-8")
+    config.chmod(0o600)
+    monkeypatch.setattr(cli, "default_config_path", lambda: config)
+    import sys as _sys
+
+    for argv in (
+        ["submit", "--name", "exp001", "--nodes", "2", "--command", "true"],
+        ["submit", "--name", "exp001", "--gpus", "3", "--nodes", "2", "--gpus-per-node", "1", "--command", "true"],
+        ["submit", "--name", "exp001", "--command", "true"],
+        ["submit", "--name", "exp001", "--gpus", "1", "--gpus-per-node", "1", "--command", "true"],
+    ):
+        monkeypatch.setattr(_sys, "argv", ["vla-train", *argv, "--dry-run"])
+        assert cli.main() == 2, argv

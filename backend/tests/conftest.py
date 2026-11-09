@@ -144,3 +144,45 @@ def api_client(settings, service, monkeypatch, tmp_path):
     app.state.service = service
     with TestClient(app) as client:
         yield client
+
+
+# --- v0.9 鉴权 / 配额测试的公共夹具 ------------------------------------------
+
+
+def make_settings(tmp_path, **overrides) -> Settings:
+    """构造一份指定鉴权模式的 Settings；默认库文件按用例隔离。"""
+    values = {
+        "api_token": "test-token",
+        "db_path": str(tmp_path / "auth.db"),
+        "gpu_metrics_url": "",
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
+def build_service(settings: Settings, kube: FakeKubernetes | None = None) -> PlatformService:
+    kube = kube or FakeKubernetes()
+    return PlatformService(settings, HistoryStore(settings.db_path), kube)
+
+
+@pytest.fixture
+def app_client(monkeypatch, tmp_path):
+    """按需构造 TestClient：app_client(settings) -> (client, service)。
+
+    ``app.main`` 在导入时会用环境变量建一个模块级 app，先把它指到临时库，
+    再显式传入调用方构造的 settings。调用方负责 with 关闭 TestClient。
+    """
+    monkeypatch.setenv("PLATFORM_AUTH_REQUIRED", "false")
+    monkeypatch.setenv("PLATFORM_API_TOKEN", "test-token")
+    monkeypatch.setenv("PLATFORM_DB_PATH", str(tmp_path / "import-side-effect.db"))
+
+    from app.main import create_app
+    from fastapi.testclient import TestClient
+
+    def factory(settings: Settings) -> tuple[TestClient, PlatformService]:
+        service = build_service(settings)
+        app = create_app(settings)
+        app.state.service = service
+        return TestClient(app), service
+
+    return factory

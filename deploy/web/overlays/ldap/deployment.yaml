@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vla-web
+  namespace: vla-platform
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          env:
+            # 由 4090 overlay 的 off 改回 ldap；PLATFORM_AUTH_REQUIRED 保持 false
+            # 会被 auth_mode=ldap 覆盖（auth_mode 优先），这里显式写 true 更直观。
+            - name: PLATFORM_AUTH_MODE
+              value: "ldap"
+            - name: PLATFORM_AUTH_REQUIRED
+              value: "true"
+            # 以下按公司目录实际值修改；{base_dn} 会被 PLATFORM_LDAP_BASE_DN 替换。
+            - name: PLATFORM_LDAP_URL
+              value: "ldap://ldap.corp.example.com:389"
+            - name: PLATFORM_LDAP_BASE_DN
+              value: "dc=corp,dc=example,dc=com"
+            - name: PLATFORM_LDAP_USER_TEMPLATE
+              value: "uid={username},{base_dn}"
+            - name: PLATFORM_LDAP_GROUP_DN_ADMIN
+              value: "cn=vla-admins,ou=groups,dc=corp,dc=example,dc=com"
+            # 只读复查会话用的服务账号 DN；密码在 vla-web-ldap Secret 中。
+            - name: PLATFORM_LDAP_BIND_DN
+              value: "cn=vla-readonly,ou=services,dc=corp,dc=example,dc=com"
+            - name: PLATFORM_SESSION_TTL_HOURS
+              value: "12"

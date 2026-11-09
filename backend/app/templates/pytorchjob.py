@@ -9,6 +9,10 @@ APP_LABELS = {
     "app.kubernetes.io/name": "vla-train-platform",
     "app.kubernetes.io/managed-by": "vla-train-platform",
 }
+# 用户自定义标签写进注解而不是 Kubernetes label：自由文本不参与调度，
+# 放到 label 上会受 63 字符/键值规则限制，也会影响选择器和 Kueue 计算。
+USER_LABEL_ANNOTATION_PREFIX = "vla-platform/user-label-"
+OWNER_ANNOTATION = "vla-platform/owner"
 
 
 def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) -> dict:
@@ -24,6 +28,11 @@ def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) 
             spec.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":")
         ),
     }
+    if spec.owner:
+        # 单独的 owner 注解：不解析整个 spec 也能按提交者筛选对象。
+        annotations[OWNER_ANNOTATION] = spec.owner
+    for key, value in sorted(spec.labels.items()):
+        annotations[f"{USER_LABEL_ANNOTATION_PREFIX}{key}"] = value
     environment = [
         {"name": name, "value": value}
         for name, value in sorted(spec.env.items())

@@ -309,12 +309,32 @@ class PlatformService:
 
         return resolve_template(recipe, self)
 
+    def preflight_run(self, request: RunRequest) -> dict[str, Any]:
+        """提交前预检：不创建任何对象，只检查能不能跑、会有什么问题。"""
+        from .preflight import preflight as run_preflight
+
+        recipe = self.get_recipe(request.recipe_id)
+        dataset = self.get_dataset(request.dataset_id)
+        summary = self.cluster_summary()
+        return run_preflight(
+            dataset=dataset,
+            recipe=recipe.as_dict(),
+            gpu_total=int(summary.get("gpu_total") or 0),
+            gpu_allocated=int(summary.get("gpu_allocated") or 0),
+            requested_gpus=recipe.gpu_count,
+        )
+
     def create_run(self, request: RunRequest, owner: str) -> dict[str, Any]:
         """一键训练：展开配方与数据集，然后走既有 submit 路径。"""
         from .runs import build_run  # 延迟导入，避免循环依赖
 
         recipe = self.get_recipe(request.recipe_id)
         dataset = self.get_dataset(request.dataset_id)
+        # 提交前预检：把能在入队前发现的问题直接拦下，不做无谓的 GPU 调度
+        preflight_result = self.preflight_run(request)
+        if not preflight_result["ok"]:
+            errors = [check for check in preflight_result["checks"] if check["level"] == "error"]
+            raise ServiceError(422, errors[0]["message"] if errors else "预检未通过")
         existing = {item["name"] for item in self._list_jobs(self.kubernetes.list_namespace_pods())["items"]}
         payload = build_run(
             request,

@@ -196,7 +196,9 @@ describe('QuickStartPage', () => {
     });
     const stepsInput = document.querySelector('[data-testid="param-steps"] input') as HTMLInputElement;
     expect(stepsInput).not.toBeNull();
-    console.log('DBG ph', stepsInput.placeholder, stepsInput.value);
+    // 参数框以占位文案展示配方默认值（antd 的 Form 初值只落到 store，展开即可见）
+    expect(stepsInput.placeholder).toBe('5');
+    console.log('STABLE value=', JSON.stringify(stepsInput.value), 'props=', JSON.stringify((stepsInput as any)[Object.keys(stepsInput).find((k) => k.startsWith('__reactProps'))!]?.value));
 
     fireEvent.click(screen.getByRole('button', { name: /加入训练队列/ }));
 

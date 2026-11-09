@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatBytes, formatCount, formatMinutes, formatParamDefault } from './dataset';
+import { formatBytes, formatCount, formatMinutes, formatParamDefault, paramPlaceholder } from './dataset';
 
 describe('dataset 展示格式化', () => {
   it('formatBytes', () => {
@@ -22,6 +22,12 @@ describe('dataset 展示格式化', () => {
   it('formatCount', () => {
     expect(formatCount(1024000)).toBe('1,024,000');
     expect(formatCount(undefined)).toBe('0');
+  });
+
+  it('paramPlaceholder 优先用显式 placeholder，否则回退默认值', () => {
+    expect(paramPlaceholder({ default: 5 })).toBe('5');
+    expect(paramPlaceholder({ default: 5, placeholder: '例如 100' })).toBe('例如 100');
+    expect(paramPlaceholder({ default: null })).toBeUndefined();
   });
 
   it('formatParamDefault', () => {

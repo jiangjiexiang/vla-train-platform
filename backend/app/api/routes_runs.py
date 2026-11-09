@@ -53,6 +53,19 @@ def get_recipe(recipe_id: str, service: PlatformService = Depends(get_service)) 
     return _recipe_summary(recipe, service)
 
 
+@router.post("/runs/preflight")
+def preflight_run(
+    payload: RunSubmitRequest,
+    _user: AuthContext = Depends(require_user),
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    """提交前预检：返回能否提交、有哪些警告，不创建任务。
+
+    前端点「加入队列」前先调这个，把问题展示出来，而不是让任务进队列后失败。
+    """
+    return service.preflight_run(RunRequest(**payload.model_dump()))
+
+
 @router.post("/runs", status_code=201)
 def create_run(
     payload: RunSubmitRequest,

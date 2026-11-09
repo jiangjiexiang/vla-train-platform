@@ -327,6 +327,22 @@ function QuickParamControl({ param }: { param: ParamSpec }) {
 }
 
 /**
+ * Collapse 的 children 每次渲染都会重新创建，React 会把它当成新类型的子树而卸载重挂；
+ * 参数 Field 会因此丢掉挂载时读到的初值并停止刷新。这里把展开内容做成稳定组件。
+ */
+function ParamsCollapseContent({
+  form,
+  recipe,
+  defaults,
+}: {
+  form: FormInstance;
+  recipe: Recipe;
+  defaults: Record<string, unknown>;
+}) {
+  return <ParamsPanel form={form} recipe={recipe} defaults={defaults} />;
+}
+
+/**
  * 高级参数面板。
  *
  * 注意不要直接把 TrainParamsForm 塞进本页的 Form：它内部的 Form.Item 用相对路径
@@ -343,9 +359,17 @@ function ParamsPanel({
   recipe: Recipe;
   defaults: Record<string, unknown>;
 }) {
-  // 面板默认收起：挂载后把配方默认值写进表单，展开时 Field 直接读出
+  // 面板默认收起：挂载后把配方默认值写进表单。
+  // 用 setFields 逐个字段写入（setFieldValue 设置整块对象时，已挂载的 Field 拿不到初值）。
+  console.log('PANEL MOUNT', JSON.stringify(defaults), 'hasInstance', typeof (form as any).getInternalHooks, 'storeKeys', JSON.stringify(Object.keys(form.getFieldsValue(true))));
   useEffect(() => {
-    form.setFieldValue(PARAMS_FIELD, defaults);
+    form.setFields(
+      Object.entries(defaults).map(([key, value]) => ({
+        name: [PARAMS_FIELD, key],
+        value,
+      })),
+    );
+    setTimeout(() => console.log('LATER store', JSON.stringify(form.getFieldsValue(true))), 20);
   }, [form, defaults]);
 
   const params = visibleParams(recipeTemplate(recipe));
@@ -683,7 +707,7 @@ export function QuickStartPage() {
                   ? `高级参数（可选，共 ${paramCount} 项，默认使用配方推荐值）`
                   : '高级参数（该配方没有可调参数）',
                 children: selectedRecipe ? (
-                  <ParamsPanel
+                  <ParamsCollapseContent
                     key={selectedRecipe.id}
                     form={form}
                     recipe={selectedRecipe}

@@ -63,6 +63,11 @@ if [[ -n "$(git status --porcelain)" ]]; then
   die "工作区不干净，请先提交或清理：$(git status --porcelain | head -5 | tr "\n" " ")"
 fi
 
+if [[ "$DRY_RUN" != "1" ]]; then
+  log "运行后端单元测试"
+  bash "$SCRIPT_DIR/test.sh" -q || die "单元测试未通过，已中止发版"
+fi
+
 if [[ "$DRY_RUN" != "1" && "${SKIP_VERIFY:-0}" != "1" ]]; then
   log "运行验收脚本 scripts/verify-4090.sh"
   bash "$SCRIPT_DIR/verify-4090.sh" || die "验收未通过，已中止发版（可用 SKIP_VERIFY=1 跳过）"

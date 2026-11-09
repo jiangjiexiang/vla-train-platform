@@ -369,6 +369,21 @@ kubectl -n vla-training get workload -o yaml | grep -A3 "ownerReferences:"
 
 详细诊断命令见 `docs/troubleshooting.md`。验收脚本失败时也会打印只读诊断命令，且不会输出访问令牌。
 
+## 测试
+
+后端单元测试用 pytest，不需要集群：Kubernetes 客户端被替换成内存假实现，
+覆盖参数校验、状态推导、取消语义、事件映射、历史迁移和 GPU 指标解析。
+
+```bash
+scripts/test.sh            # 首次运行会自动建 .venv 并安装 backend/requirements-dev.txt
+scripts/test.sh -q         # 静默模式
+scripts/test.sh -k cancel  # 只跑相关用例
+```
+
+`scripts/release.sh` 发版前会先跑一遍单元测试，未通过直接中止。
+集群侧的端到端验收仍由 `scripts/verify-4090.sh` 负责，两者是互补的：
+单测保证逻辑正确，验收保证真实集群跑得通。
+
 ## 版本管理
 
 仓库根目录的 `VERSION` 是当前版本号，`CHANGELOG.md` 记录每个大版本的变更。

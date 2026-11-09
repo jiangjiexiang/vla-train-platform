@@ -35,7 +35,11 @@ class SubmitSpec(BaseModel):
 
     @field_validator("image", "command")
     @classmethod
-    def validate_non_blank(cls, value: str) -> str:
+    def validate_non_blank(cls, value: str | None) -> str | None:
+        # SubmitRequest makes these fields optional; an explicit null from the
+        # client means "use the platform default", not "invalid value".
+        if value is None:
+            return None
         if not value.strip() or "\x00" in value:
             raise ValueError("value must not be blank or contain NUL characters")
         return value

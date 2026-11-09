@@ -475,6 +475,7 @@ bash scripts/verify-a100.sh
 功能与运维专题文档：
 
 - `docs/api.md`：HTTP 接口字段表与错误码（含 v0.9 的鉴权与用户端点）
+- `docs/user-guide.md`：面向算法工程师的使用手册（一键训练、预检、排队、loss 曲线、失败诊断）
 - `docs/auth.md`：三种鉴权模式、LDAP 接入、按用户配额、401/503 排查
 - `docs/multi-node.md`：多机前置条件、Kueue topology、NCCL 排查、性能预期
 - `docs/high-availability.md`：Web 可用性边界、备份恢复窗口、升级与回滚

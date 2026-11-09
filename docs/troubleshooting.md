@@ -229,3 +229,53 @@ curl -fsS -H "Authorization: Bearer $PLATFORM_API_TOKEN" \
 需要排查的「真故障」是下游环节，不是 `docker` 缺失：镜像没导入看 `sudo k3s ctr -n k8s.io images ls`
 （见第 6 节），Pod 起不来看 `kubectl describe pod`（见第 3 节），NodePort 不通见
 `docs/operations.md` 4.8。
+
+## DataLoader worker killed by signal: Bus error
+
+### 现象
+
+训练刚开始（通常是第 0 步）就失败：
+
+```
+RuntimeError: DataLoader worker (pid 192) is killed by signal: Bus error.
+It is possible that dataloader's workers are out of shared memory.
+Please try to raise your shared memory limit.
+```
+
+GPU 完全没用上（util 0%），看起来像数据问题，实际是**容器共享内存不够**。
+
+### 原因
+
+容器默认的 `/dev/shm` 只有 64MB。PyTorch DataLoader 通过共享内存把 batch
+从 worker 进程传给主进程，`num_workers` 越多、`batch_size` 越大，需要的
+共享内存越大。64MB 在 `batch_size=8` + `num_workers=4` 时必然被打爆。
+
+### 平台的处理
+
+训练 Pod 模板默认挂一块 4Gi 内存盘到 `/dev/shm`，不需要用户做任何事。
+大小可以用 `PLATFORM_SHM_SIZE` 调整（比如换到内存更大的机器时可以调大）。
+
+### 实测对比
+
+同一份代码、同一个镜像、同样的 `batch_size=8 / num_workers=4`：
+
+| 任务 | Pod 的卷 | 结果 |
+|---|---|---|
+| `smolvla-pick1028-001` | datasets, checkpoints | 第 0 步 Bus error |
+| `smolvla-pick1028-002` | **dshm(4Gi)**, datasets, checkpoints | 500 步跑完，193 秒 |
+
+### 如果还遇到
+
+训练启动时的「环境自检」会打印 `shm_gb` 和 `num_workers`。先看这两个值：
+
+- `shm_gb` 明显小于 1 → 说明挂载没生效，检查 Pod 定义里有没有 `dshm` 卷
+- `shm_gb` 够但还是崩 → 把 `PLATFORM_SHM_SIZE` 调大，或降低 `num_workers`
+
+降低 `num_workers` 是退而求其次：它会拖慢数据加载，不解决根本问题。
+
+### 一个容易忽略的点
+
+小参数训练（比如 `batch_size=2` + `num_workers=2`）在 64MB 下**能跑通**。
+所以不能凭一次小规模训练就认为环境没问题——真实配置下的验证才算数。
+这个坑我们是在跑 500 步验证时才暴露的。
+

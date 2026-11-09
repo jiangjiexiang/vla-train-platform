@@ -2,6 +2,28 @@
 
 本项目遵循语义化版本。每次大版本更新提交一次 commit 并打 tag，新条目追加到文件顶部。
 
+## [0.7.0] - 2026-11-09
+
+### 新增
+
+- `scripts/cleanup-jobs.py`：按状态与结束时间清理历史任务，默认只预览。删除走 REST API，
+  因此会进入平台历史并保留真实终态（成功任务删除后仍是 `SUCCEEDED`）；运行中与排队中的任务不会被清理。
+  `make cleanup` 为等价入口。
+- `make bundle`：把完整仓库导出为 git bundle，用于没有 remote 时的离线备份；已验证可
+  `git clone` 出完整历史与全部标签。
+- CI 配置：`.github/workflows/ci.yml`（GitHub Actions）与 `.gitlab-ci.yml`，均运行前后端测试与前端生产构建，
+  不含任何密钥；集群侧验收 `verify-4090.sh` 不放入 CI（需要真实 GPU）。
+
+### 改进
+
+- 接口层测试改用 FastAPI `TestClient`（新增固定版本 `httpx==0.28.1`），新建 `backend/tests/test_api.py`
+  共 59 例，覆盖全部端点的参数校验、错误码与响应结构；移除此前手写的极简 ASGI 驱动。
+- 后端测试 100 → 149 例，前端 45 例，合计 194 例。
+
+### 文档
+
+- README 新增「维护」章节（历史任务清理、仓库离线备份）与「持续集成」章节。
+
 ## [0.6.0] - 2026-11-09
 
 ### 新增

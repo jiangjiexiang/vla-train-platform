@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from unittest.mock import patch
-from urllib.parse import urlsplit
 
 import pytest
-from fastapi import FastAPI
 
-from app.api.routes import get_service, router as api_router
 from app.config import Settings
 from app.history import HistoryStore
 from app.models import SubmitSpec
@@ -551,91 +547,3 @@ def test_list_jobs_q_is_case_insensitive_and_matches_cancelled_history(service, 
     assert job_names(service.list_jobs(q="CANCELLED")) == ["exp-cancelled-run"]
     assert job_names(service.list_jobs(q="LIVE")) == ["exp-live-run"]
     assert set(job_names(service.list_jobs(q="EXP-"))) == {"exp-cancelled-run", "exp-live-run"}
-
-
-# --- GET /jobs API contract (ASGI without httpx) --------------------------
-
-def api_get(service, target):
-    """Drive the ASGI app directly: FastAPI's TestClient needs httpx, which is not installed."""
-    app = FastAPI()
-    app.state.settings = service.settings
-    app.include_router(api_router)
-    app.dependency_overrides[get_service] = lambda: service
-    parsed = urlsplit(target)
-    messages = []
-
-    async def receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    async def send(message):
-        messages.append(message)
-
-    scope = {
-        "type": "http",
-        "asgi": {"version": "3.0"},
-        "http_version": "1.1",
-        "method": "GET",
-        "scheme": "http",
-        "path": parsed.path,
-        "raw_path": parsed.path.encode(),
-        "query_string": parsed.query.encode(),
-        "root_path": "",
-        "headers": [(b"host", b"testserver")],
-        "client": ("testclient", 50000),
-        "server": ("testserver", 80),
-    }
-    asyncio.run(app(scope, receive, send))
-    start = next(item for item in messages if item["type"] == "http.response.start")
-    body = b"".join(
-        item.get("body", b"") for item in messages if item["type"] == "http.response.body"
-    )
-    return start["status"], json.loads(body) if body else None
-
-
-def test_jobs_api_returns_pagination_envelope(service, kube):
-    for index, name in enumerate(("exp000", "exp001", "exp002")):
-        submit_with_created_at(service, kube, name, f"2026-01-01T00:0{index}:00Z")
-
-    status, payload = api_get(service, "/api/v1/jobs")
-    assert status == 200
-    assert payload["total"] == 3
-    assert payload["limit"] is None
-    assert payload["offset"] == 0
-    assert [item["name"] for item in payload["items"]] == ["exp002", "exp001", "exp000"]
-
-    status, payload = api_get(service, "/api/v1/jobs?limit=2&offset=1")
-    assert status == 200
-    assert payload["total"] == 3
-    assert payload["limit"] == 2
-    assert payload["offset"] == 1
-    assert [item["name"] for item in payload["items"]] == ["exp001", "exp000"]
-
-
-def test_jobs_api_accepts_boundary_values(service):
-    status, payload = api_get(
-        service,
-        "/api/v1/jobs?limit=200&offset=0&status=RUNNING&q=" + "x" * 100,
-    )
-    assert status == 200
-    assert payload["limit"] == 200
-    assert payload["total"] == 0
-    assert payload["items"] == []
-
-
-@pytest.mark.parametrize(
-    "target",
-    [
-        "/api/v1/jobs?limit=0",
-        "/api/v1/jobs?limit=201",
-        "/api/v1/jobs?limit=abc",
-        "/api/v1/jobs?offset=-1",
-        "/api/v1/jobs?offset=abc",
-        "/api/v1/jobs?status=UNKNOWN",
-        "/api/v1/jobs?status=running",
-        "/api/v1/jobs?q=" + "x" * 101,
-    ],
-)
-def test_jobs_api_rejects_invalid_query_parameters(service, target):
-    status, payload = api_get(service, target)
-    assert status == 422
-    assert "detail" in payload

@@ -123,3 +123,25 @@ def kube():
 @pytest.fixture
 def service(settings, history, kube):
     return PlatformService(settings, history, kube)
+
+
+@pytest.fixture
+def api_client(settings, service, monkeypatch, tmp_path):
+    """TestClient wired to the fake Kubernetes client and a temp SQLite DB.
+
+    ``app.main`` builds a module-level app while it is imported, so point its
+    env-derived settings at a throwaway DB before importing it. The app under
+    test always receives the explicit ``settings`` fixture, never env values.
+    """
+    monkeypatch.setenv("PLATFORM_AUTH_REQUIRED", "false")
+    monkeypatch.setenv("PLATFORM_API_TOKEN", "test-token")
+    monkeypatch.setenv("PLATFORM_DB_PATH", str(tmp_path / "import-side-effect.db"))
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    app = create_app(settings)
+    app.state.service = service
+    with TestClient(app) as client:
+        yield client

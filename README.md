@@ -414,6 +414,35 @@ Node 版本低于 18 时自动改用 `/opt/node20/bin`（可用 `NODE_BIN_DIR` �
 `scripts/release.sh` 发版前会跑完整测试，未通过直接中止。集群侧端到端验收仍由
 `scripts/verify-4090.sh` 负责，两者互补：单测保证逻辑正确，验收保证真实集群跑得通。
 
+## 维护
+
+### 清理历史任务
+
+任务结束后对应的 PyTorchJob 对象会一直保留，占用名字也占用 etcd。定期清理：
+
+```bash
+scripts/cleanup-jobs.py                      # 预览：7 天前结束的 SUCCEEDED/FAILED 任务
+scripts/cleanup-jobs.py --older-than-days 1  # 预览：1 天前的
+scripts/cleanup-jobs.py --status SUCCEEDED   # 只看成功的
+scripts/cleanup-jobs.py --keep smoke001      # 明确保留某些任务
+scripts/cleanup-jobs.py --apply              # 真正删除
+```
+
+删除走 REST API（`DELETE /api/v1/jobs/{name}`），所以会进入平台历史，并且**保留真实终态**：
+已成功的任务删除后仍是 `SUCCEEDED`，不会被改写成 `CANCELLED`。运行中和排队中的任务不会被清理。
+
+### 仓库离线备份
+
+仓库目前没有配置 git remote，用 git bundle 做离线备份：
+
+```bash
+make bundle
+# 生成 artifacts/backups/vla-train-platform-<version>.bundle，把它复制到别的机器
+git clone vla-train-platform-<version>.bundle restored-repo   # 恢复完整历史与标签
+```
+
+建议每次 `make release` 之后执行一次 `make bundle`，并把 bundle 同步到另一台机器。
+
 ## 版本管理
 
 仓库根目录的 `VERSION` 是当前版本号，`CHANGELOG.md` 记录每个大版本的变更。
@@ -445,3 +474,27 @@ scripts/release.sh 0.2.0 --dry-run
 
 脚本会拒绝：版本号非 `X.Y.Z`、不高于当前版本、CHANGELOG 缺少对应小节、工作区不干净、
 以及 `verify-4090.sh` 不通过（确认要跳过时用 `SKIP_VERIFY=1`）。
+
+## 持续集成
+
+仓库提供两套等价的 CI 配置，只跑不需要集群的单元测试与前端构建：
+
+- **GitHub Actions**：`.github/workflows/ci.yml`，在 `push` 和 `pull_request` 时触发；仅修改 `docs/**` 或根目录 Markdown 时跳过。两个并行 job：
+  - 后端：Python 3.12，`pip install -r backend/requirements-dev.txt`，再跑 `python -m pytest backend/tests`。
+  - 前端：Node 20，在 `frontend/` 下执行 `npm ci`、`npm run test`（vitest）、`npm run build`（`tsc --noEmit && vite build`）。
+- **GitLab CI**：`.gitlab-ci.yml`，同样分 `backend` 与 `frontend` 两个 job，分别使用 `python:3.12-slim` 和 `node:20` 镜像，执行与上面相同的命令。
+
+两套配置都不引用任何密钥，也不需要证书或访问令牌。
+
+### 为什么 CI 不跑 `scripts/verify-4090.sh`
+
+`scripts/verify-4090.sh` 是目标机器上的端到端验收脚本：它需要访问真实的 K3s 集群（`kubectl` 或 `k3s kubectl`），检查 NVIDIA GPU、Device Plugin、Kueue 和存储，并可能创建、清理验收用的工作负载。托管 CI runner 没有这些集群资源与 GPU，也不应持有集群凭据，所以 CI 只跑单元测试；真实集群验收仍在 4090/A100 目标机上执行。
+
+### 本地复现 CI 检查
+
+```bash
+scripts/test.sh                                          # 后端 pytest + 前端 vitest
+cd frontend && npm ci && npm run test && npm run build  # 前端单独跑并构建
+```
+
+如果 `frontend/node_modules` 已存在，可以跳过 `npm ci`；`scripts/test.sh` 也会复用已有依赖。CI 使用 Python 3.12 与 Node 20，本地建议保持一致（脚本在 Node 低于 18 时会自动改用 `/opt/node20`）。

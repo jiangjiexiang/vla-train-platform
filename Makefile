@@ -15,7 +15,7 @@ V ?=
 SUDO ?= sudo
 K3S ?= /usr/local/bin/k3s
 
-.PHONY: help test test-backend test-frontend verify build deploy release clean
+.PHONY: help test test-backend test-frontend verify build deploy release bundle cleanup clean
 
 help:
 	@printf 'VLA 训练排队平台 —— 当前版本 %s\n\n' "$$(cat $(ROOT_DIR)/VERSION 2>/dev/null || echo unknown)"
@@ -26,6 +26,8 @@ help:
 	@printf '  make build             构建 Web 镜像并导入 containerd（需 root）\n'
 	@printf '  make deploy            PROFILE=4090|a100 部署 Web\n'
 	@printf '  make release V=x.y.z   发版（会跑测试与验收，然后提交并打 tag）\n'
+	@printf '  make bundle            导出完整仓库为 git bundle（离线备份）\n'
+	@printf '  make cleanup           预览可清理的历史任务（CLEANUP_ARGS="--apply" 执行）\n'
 	@printf '  make clean             清理 __pycache__、前端构建产物与构建缓存\n'
 
 test:
@@ -59,6 +61,15 @@ deploy:
 release:
 	@if [ -z "$(V)" ]; then printf '用法：make release V=0.5.0\n' >&2; exit 2; fi
 	@bash $(ROOT_DIR)/scripts/release.sh $(V)
+
+cleanup:
+	@$(ROOT_DIR)/scripts/cleanup-jobs.py $(CLEANUP_ARGS)
+
+bundle:
+	@mkdir -p $(ROOT_DIR)/artifacts/backups
+	@git -C $(ROOT_DIR) bundle create $(ROOT_DIR)/artifacts/backups/vla-train-platform-$(VERSION).bundle --all
+	@printf '已生成 %s\n' "$$(ls -lh $(ROOT_DIR)/artifacts/backups/vla-train-platform-$(VERSION).bundle | awk '{print $$9"  "$$5}')"
+	@printf '把这个文件复制到别的机器即可离线恢复：git clone <bundle> repo\n'
 
 clean:
 	@find $(ROOT_DIR) -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true

@@ -382,16 +382,21 @@ export function QuickStartPage() {
     [compatibleRecipes, recipeId],
   );
 
-  // 换配方 → 参数表单重置成该配方的初始值
+  // 换配方 → 参数表单重置成该配方的初始值（只依赖 id，避免对象引用变化导致反复重置冲掉输入）
+  const selectedRecipeId = selectedRecipe?.id ?? null;
   useEffect(() => {
     setParamDefaults(selectedRecipe ? recipeInitialParams(selectedRecipe) : {});
+    form.setFieldValue(PARAMS_FIELD, selectedRecipe ? recipeInitialParams(selectedRecipe) : {});
     setSubmitError(null);
-  }, [selectedRecipe]);
+    // selectedRecipe 由 id 推导，用 id 做依赖即可
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRecipeId]);
 
   const currentStep = !selectedDataset ? 0 : !selectedRecipe ? 1 : 2;
   const canSubmit = Boolean(selectedDataset && selectedRecipe) && !submitting;
 
   const handleSubmit = async () => {
+    (window as unknown as { __dbg?: unknown }).__dbg = { values: form.getFieldsValue(), all: form.getFieldsValue(true) };
     if (!selectedDataset || !selectedRecipe) return;
     const values = form.getFieldsValue() as { name?: string; priority?: Priority; params?: Record<string, unknown> };
     const params = (values.params ?? {}) as Record<string, unknown>;
@@ -544,11 +549,9 @@ export function QuickStartPage() {
         extra={selectedRecipe ? <Tag color="blue">{selectedRecipe.name}</Tag> : null}
       >
         <Form
-          key={selectedRecipe?.id ?? 'empty'}
           form={form}
           layout="vertical"
           requiredMark={false}
-          onValuesChange={(_, all) => { const w = window as unknown as { __dbg?: unknown[] }; w.__dbg = [...(w.__dbg ?? []), all]; }}
           initialValues={{ name: '', priority: 'normal' as Priority, params: paramDefaults }}
         >
           <Row gutter={16}>

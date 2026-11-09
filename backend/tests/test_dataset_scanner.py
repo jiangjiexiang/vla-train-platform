@@ -313,3 +313,49 @@ def test_shallow_scan_flags_leftover_backup_dirs(tmp_path):
 
     assert ("info", "leftover_backup") in {(issue.level, issue.code) for issue in meta.issues}
 
+def test_deep_scan_extracts_stats_summary(tmp_path):
+    """stats.json 的分布摘要用于判断数据质量（某个关节是否几乎不动）。"""
+    dataset = build_dataset(tmp_path, make_info())
+    (dataset / "meta" / "stats.json").write_text(
+        json.dumps(
+            {
+                "action": {
+                    "min": [-1.0, 0.5, 0.0],
+                    "max": [1.0, 0.5000001, 2.0],
+                    "mean": [0.0, 0.5, 1.0],
+                    "std": [0.5, 0.0000001, 0.6],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    meta = scan_deep(dataset)
+
+    assert meta.stats is not None
+    action = meta.stats["action"]
+    assert len(action["dims"]) == 3
+    # 第 1 维极差几乎为 0，应标记为 static
+    assert 1 in action["static_dims"]
+    assert 0 not in action["static_dims"]
+    assert action["dims"][0]["range"] == 2.0
+
+
+def test_deep_scan_without_stats_returns_none(tmp_path):
+    dataset = build_dataset(tmp_path, make_info())
+
+    meta = scan_deep(dataset)
+
+    assert meta.stats is None
+
+
+def test_read_stats_summary_tolerates_malformed(tmp_path):
+    dataset = build_dataset(tmp_path, make_info())
+    (dataset / "meta" / "stats.json").write_text(
+        json.dumps({"action": {"min": "not a list"}}), encoding="utf-8"
+    )
+
+    from app.datasets.scanner import read_stats_summary
+
+    assert read_stats_summary(dataset) is None
+

@@ -1,5 +1,4 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { Form } from 'antd';
 import { App as AntdApp } from 'antd';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -181,23 +180,16 @@ describe('QuickStartPage', () => {
     // 只改一个参数：只有它应进入 overrides，其余交给后端 defaults。
     // 触发表单内任意可点击控件（InputNumber 有专门的 hover 监听，不适合当触发器）
     fireEvent.click(screen.getByText(/高级参数/));
-    const stepsItem = await screen.findByTestId('param-steps');
-    const stepsInput = stepsItem.querySelector('input') as HTMLInputElement;
-    const anyField = screen.getByLabelText('任务名') as HTMLInputElement;
-    fireEvent.change(anyField, { target: { value: 'my-job' } });
-    console.log('DBG after name change', JSON.stringify((window as unknown as {__dbg?: unknown[]}).__dbg));
-    fireEvent.change(anyField, { target: { value: '' } });
-    console.log('DBG name in form?', (stepsItem.closest('form') !== null));
+    const stepsInput = (await screen.findByTestId('param-steps')).querySelector('input') as HTMLInputElement;
     fireEvent.change(stepsInput, { target: { value: '100' } });
     fireEvent.blur(stepsInput);
-    console.log('DBG after change', stepsInput.value, stepsInput.outerHTML);
-    fireEvent.click(document.querySelector('.quickstart-advanced .ant-collapse-header') as HTMLElement);
-    console.log('DBG onValuesChange', JSON.stringify((window as unknown as {__dbg?: unknown[]}).__dbg));
-    fireEvent.click(screen.getByLabelText('任务名'));
+    // Form.useWatch/onValuesChange 依赖 Store 通知，和 rc-field-form 内部时序保持一致
+    fireEvent.click(screen.getByText('优先级'));
 
     fireEvent.click(screen.getByRole('button', { name: /加入训练队列/ }));
 
     await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
+    console.log('DBG store v2', JSON.stringify((window as any).__dbg));
     const payload = createRunMock.mock.calls[0][0];
     expect(payload.recipe_id).toBe('smoke-test');
     expect(payload.dataset_id).toBe('pick1028');

@@ -67,6 +67,8 @@ class DatasetMeta:
     scanned_at: str = ""
     scan_depth: str = "shallow"
     dir_mtime: float = 0.0
+    # 动作/状态的分布摘要（深扫描时填充），用于判断数据质量
+    stats: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +94,7 @@ class DatasetMeta:
             "scanned_at": self.scanned_at,
             "scan_depth": self.scan_depth,
             "dir_mtime": self.dir_mtime,
+            "stats": self.stats,
         }
 
     @classmethod
@@ -375,6 +378,7 @@ def scan_deep(root: Path, dataset_id: str | None = None) -> DatasetMeta:
     _check_data_files(meta, root)
     _check_video_files(meta, root)
     _check_stats(meta, root)
+    meta.stats = read_stats_summary(root)
 
     meta.status = _derive_status(meta)
     return meta
@@ -461,6 +465,73 @@ def _check_stats(meta: DatasetMeta, root: Path) -> None:
                 "需要先跑 lerobot 的 augment_dataset_quantile_stats.py",
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# 数据分布洞察
+# ---------------------------------------------------------------------------
+# 判断某个维度「几乎不动」的阈值：标准差相对极差的比例。
+# 数据经过不同量纲归一化，用相对值比绝对值更稳。
+STATIC_DIM_RATIO = 0.01
+
+
+def read_stats_summary(root: Path) -> dict[str, Any] | None:
+    """从 meta/stats.json 提取动作/状态的分布摘要，用于判断数据质量。
+
+    返回结构与 ``features`` 对齐，每维带 min/max/mean/std 和 ``static`` 标记——
+    「某个关节几乎不动」往往意味着采集时没用到该关节，或者标定有问题，
+    这类问题在训练 loss 上很难看出来，但会直接拖垮策略效果。
+    """
+    stats_path = root / "meta" / "stats.json"
+    if not stats_path.is_file():
+        return None
+    try:
+        stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(stats, dict):
+        return None
+
+    summary: dict[str, Any] = {}
+    for key in ("observation.state", "action"):
+        block = stats.get(key)
+        if not isinstance(block, dict):
+            continue
+        required = ("min", "max", "mean", "std")
+        if not all(isinstance(block.get(field), list) for field in required):
+            continue
+        dims = []
+        for index in range(len(block["min"])):
+            try:
+                low = float(block["min"][index])
+                high = float(block["max"][index])
+                mean = float(block["mean"][index])
+                std = float(block["std"][index])
+            except (IndexError, TypeError, ValueError):
+                continue
+            span = high - low
+            # 注意：判断必须用未取整的 span。极差可能小到 round(, 6) 后变成 0，
+            # 那时再用取整值做除法会除零、或把「有微小变化」误判成常数。
+            # 用「是否变化」的绝对判据更稳：极差极小（< 1e-4，远小于任何有意义关节行程）
+            # 或 标准差相对极差极小，都认为这一维基本不动。两个判据都用未取整的值。
+            is_static = bool(span < 1e-4 or (span > 0 and std / span < STATIC_DIM_RATIO))
+            dims.append(
+                {
+                    "index": index,
+                    "min": round(low, 6),
+                    "max": round(high, 6),
+                    "mean": round(mean, 6),
+                    "std": round(std, 6),
+                    "range": round(span, 6),
+                    # 标准差远小于极差 → 这一维基本是常数
+                    "static": is_static,
+                }
+            )
+        summary[key] = {
+            "dims": dims,
+            "static_dims": [dim["index"] for dim in dims if dim["static"]],
+        }
+    return summary or None
 
 
 def list_dataset_dirs(root: Path) -> list[Path]:

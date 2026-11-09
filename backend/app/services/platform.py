@@ -375,7 +375,9 @@ class PlatformService:
             pending = store.needs_rescan(root)
             if pending:
                 store.scan_many(root, pending)
-        items = [meta.as_dict() for meta in store.list_all()]
+        # 列表页只需要展示用字段：action_names / state_names / stats 这些长数组
+        # 在大数据集上会让响应膨胀十几倍。详情接口再返回完整内容。
+        items = [_slim_dataset(meta.as_dict()) for meta in store.list_all()]
         summary = {
             "total": len(items),
             "ready": sum(1 for item in items if item["status"] == "ready"),
@@ -1290,3 +1292,20 @@ def _spec_image(job: dict[str, Any]) -> str:
         return containers[0].get("image", "")
     except (KeyError, IndexError, TypeError):
         return ""
+
+# 列表接口裁剪掉的字段：详情页才需要
+_DETAIL_ONLY_FIELDS = ("action_names", "state_names", "stats")
+
+
+def _slim_dataset(payload: dict[str, Any]) -> dict[str, Any]:
+    """列表用的数据集摘要。
+
+    保留所有**判断与展示**需要的字段（状态、集数、维度、issue 列表），
+    去掉每维名称与统计数组——那些只在详情页用得上。
+    """
+    slim = {key: value for key, value in payload.items() if key not in _DETAIL_ONLY_FIELDS}
+    # 保留维度的「数量」信息，前端画徽标要用
+    slim["action_dim"] = len(payload.get("action_names") or []) or payload.get("action_dim") or 0
+    slim["state_dim"] = len(payload.get("state_names") or []) or payload.get("state_dim") or 0
+    slim["has_stats"] = payload.get("stats") is not None
+    return slim

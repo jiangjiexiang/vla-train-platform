@@ -182,3 +182,27 @@ def test_dataset_store_survives_single_failure(tmp_path, datasets_root):
     statuses = {meta.id: meta.status for meta in results}
     assert statuses["alpha"] == "error"
     assert statuses["beta"] == "ready"
+
+def test_list_datasets_slims_long_fields(client):
+    """列表接口不返回 action_names/state_names/stats，但保留展示所需字段。"""
+    client.get("/api/v1/datasets?refresh=true")
+
+    item = client.get("/api/v1/datasets").json()["items"][0]
+
+    assert "action_names" not in item
+    assert "state_names" not in item
+    assert "stats" not in item
+    # 前端展示需要字段都在
+    for key in ("id", "status", "format", "episodes", "frames", "cameras", "image_size", "issues"):
+        assert key in item, key
+    assert item["action_dim"] == 7
+    assert item["has_stats"] is False
+
+
+def test_detail_keeps_full_metadata(client):
+    """详情接口必须保留完整字段（前端要展示每维名称）。"""
+    body = client.get("/api/v1/datasets/alpha?deep=true").json()
+
+    assert "action_names" in body
+    assert "state_names" in body
+

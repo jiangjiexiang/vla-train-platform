@@ -51,8 +51,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.backup_stop = stop
 
         def loop() -> None:
-            # 启动后先等一会儿再备第一次，避免和启动时的其它初始化抢 IO
-            while not stop.wait(min(interval, 300)):
+            # 启动后先等一会儿再备第一次，避开启动时的其它初始化 IO。
+            # 但等待时长不能超过正常间隔，否则 interval 设得比 300 秒小时，
+            # 首次备份会被延后到 300 秒——实测 interval=2 时备份间隔变成了 6 秒，
+            # 因为这里 wait(300 的 min) 之后循环内又 wait 了一次。
+            first_delay = min(interval, 300)
+            if stop.wait(first_delay):
+                return
+            while True:
                 try:
                     result = _create(_Path(settings.db_path), _Path(settings.backup_dir))
                     if result.get("ok"):
@@ -61,7 +67,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         print(f"[backup] 备份失败：{result.get('error')}", flush=True)
                 except Exception as exc:  # noqa: BLE001 - 备份失败绝不能影响服务
                     print(f"[backup] 备份异常：{exc}", flush=True)
-                # 第一次之后按完整间隔等
+                # 一次备份做完再等下一轮，间隔就是 interval；
+                # 之前写成 while wait() + 内部再 wait()，等于等了两遍。
                 if stop.wait(interval):
                     return
 

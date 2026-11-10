@@ -53,6 +53,15 @@ def get_recipe(recipe_id: str, service: PlatformService = Depends(get_service)) 
     return _recipe_summary(recipe, service)
 
 
+@router.post("/runs/estimate")
+def estimate_run(
+    payload: dict[str, Any],
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    """预估训练时长。填完参数就能知道要等多久，不用提交后干猜。"""
+    return service.estimate_run(RunRequest(**payload))
+
+
 @router.post("/runs/preflight")
 def preflight_run(
     payload: RunSubmitRequest,

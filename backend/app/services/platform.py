@@ -52,6 +52,24 @@ def _dir_usage(path: Path) -> tuple[int, int]:
             continue
     return total, files
 
+
+def _parse_training_args(command: str) -> dict[str, int] | None:
+    """从任务命令里抠出 steps 和 batch_size。
+
+    命令是平台自己拼的，格式稳定，所以正则足够；找不到就返回 None，
+    让调用方跳过这条样本而不是拿 0 去平均。
+    """
+    import re as _re
+
+    if not command:
+        return None
+    result: dict[str, int] = {}
+    for key in ("steps", "batch_size"):
+        match = _re.search(rf"--{key}[= ](\d+)", command)
+        if match:
+            result[key] = int(match.group(1))
+    return result or None
+
 class PlatformService:
     @property
     def current_actor(self) -> str:
@@ -248,6 +266,52 @@ class PlatformService:
 
         items.sort(key=lambda item: item["bytes"], reverse=True)
         return {"total_bytes": total, "items": items}
+
+    def estimate_run(self, request: Any) -> dict[str, Any]:
+        """按历史实测速度估算这次训练要跑多久。
+
+        用户填 5000 步时最想知道的就是这个。用同 batch 的历史样本算，
+        没有样本就退到一个偏保守的默认值。
+        """
+        from .estimate import estimate_duration
+
+        recipe = self.get_recipe(request.recipe_id)
+        defaults = dict(recipe.defaults or {})
+        defaults.update({k: v for k, v in (request.overrides or {}).items() if v is not None})
+
+        try:
+            steps = int(defaults.get("steps") or 0)
+        except (TypeError, ValueError):
+            steps = 0
+        if steps <= 0:
+            return {"estimated_seconds": None, "estimated_text": "—", "source": "unknown", "samples": 0}
+
+        raw_batch = defaults.get("batch_size")
+        try:
+            batch_size = int(raw_batch) if raw_batch is not None else None
+        except (TypeError, ValueError):
+            batch_size = None
+
+        # 从历史任务里取真实速度：命令里带着 batch_size 和 steps
+        history: list[dict[str, Any]] = []
+        for job in self._list_jobs(self.kubernetes.list_namespace_pods(), limit=None)["items"]:
+            if job.get("status") != "SUCCEEDED":
+                continue
+            parsed = _parse_training_args(str(job.get("command") or ""))
+            if not parsed:
+                continue
+            history.append(
+                {
+                    "steps": parsed.get("steps"),
+                    "batch_size": parsed.get("batch_size"),
+                    "duration_seconds": job.get("duration_seconds"),
+                }
+            )
+
+        result = estimate_duration(steps=steps, batch_size=batch_size, history=history)
+        result["steps"] = steps
+        result["batch_size"] = batch_size
+        return result
 
     def failure_summary(self, *, limit: int = 20) -> dict[str, Any]:
         """失败原因分布。运维用来判断「是不是平台自己在制造失败」。

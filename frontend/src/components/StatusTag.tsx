@@ -3,6 +3,8 @@ import type { JobStatus } from '../types/api';
 
 const STATUS_META: Record<JobStatus, { label: string; color: string }> = {
   QUEUED: { label: '排队中', color: 'gold' },
+  // 和 FAILED 一样用 error 红：都需要人去看一眼，不能等它自己好。
+  STARTING_FAILED: { label: '启动失败', color: 'error' },
   RUNNING: { label: '运行中', color: 'processing' },
   SUCCEEDED: { label: '已成功', color: 'success' },
   FAILED: { label: '已失败', color: 'error' },

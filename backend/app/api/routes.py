@@ -25,6 +25,9 @@ from ..services.platform import PlatformService
 
 class JobStatus(str, Enum):
     QUEUED = "QUEUED"
+    # Pod 建出来了但永远起不来（镜像拉不到等）。和 QUEUED 分开：
+    # 排队值得等，这个不值得。
+    STARTING_FAILED = "STARTING_FAILED"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"

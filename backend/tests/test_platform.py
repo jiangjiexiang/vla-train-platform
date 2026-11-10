@@ -8,7 +8,11 @@ from app.config import Settings
 from app.history import HistoryStore
 from app.models import SubmitSpec
 from app.services.errors import ServiceError
-from app.services.platform import PlatformService
+from app.services.platform import (
+    PlatformService,
+    _is_permanent_start_failure,
+    _pod_waiting_reason,
+)
 
 
 def make_spec(name="exp001", **overrides):
@@ -27,7 +31,16 @@ def make_spec(name="exp001", **overrides):
 
 
 def add_pod(kube, job_name, phase="Running", waiting_reason=None, node_name=None,
-            name=None, created_at="2026-01-01T00:00:05Z", started_at=None):
+            name=None, created_at="2026-01-01T00:00:05Z", started_at=None,
+            init_waiting_reason=None, pod_scheduled=None):
+    """构造一个训练 Pod。
+
+    ``waiting_reason`` 写普通容器的 waiting 状态；
+    ``init_waiting_reason`` 写 initContainer 的 waiting 状态（训练 Pod 带
+    init-permissions 那个 initContainer，卡住时只会体现在
+    initContainerStatuses 里）。``pod_scheduled=None`` 表示不写
+    PodScheduled 条件；``False`` + 原因表示调度不上。
+    """
     pod = {
         "metadata": {
             "name": name or f"{job_name}-master-0",
@@ -47,6 +60,20 @@ def add_pod(kube, job_name, phase="Running", waiting_reason=None, node_name=None
         pod["status"]["container_statuses"] = [
             {"state": {"waiting": {"reason": waiting_reason, "message": "boom"}}}
         ]
+    if init_waiting_reason:
+        pod["status"]["init_container_statuses"] = [
+            {
+                "name": "init-permissions",
+                "state": {"waiting": {"reason": init_waiting_reason, "message": "init boom"}},
+            }
+        ]
+    if pod_scheduled is False:
+        pod["status"]["conditions"].append(
+            {"type": "PodScheduled", "status": "False", "reason": "Unschedulable",
+             "message": '0/3 nodes are available: 3 Insufficient nvidia.com/gpu.'}
+        )
+    elif pod_scheduled is True:
+        pod["status"]["conditions"].append({"type": "PodScheduled", "status": "True"})
     kube.pods.append(pod)
     return pod
 
@@ -160,8 +187,123 @@ def test_message_reports_pod_waiting_reason(service, kube):
     add_workload(kube, "exp001", "Admitted")
     add_pod(kube, "exp001", phase="Pending", waiting_reason="ImagePullBackOff")
     job = service.get_job("exp001")
+    # 镜像拉不回来不会自己好，必须报「启动失败」而不是让用户一直等「排队中」。
+    assert job["status"] == "STARTING_FAILED"
+    # 镜像类失败的消息是给人看的操作指引，不一定含原始 reason 字符串；
+    # 这里断言的是「说清了是什么问题、哪个镜像」。
+    assert "镜像拉取失败" in job["message"]
+    assert "vla-smoke:latest" in job["message"], "已放行但 Pod 未就绪时必须给出真实原因"
+
+
+# --- permanent start failure vs. transient waiting ------------------------
+
+def test_pending_image_pull_backoff_marks_starting_failed(service, kube):
+    service.submit(make_spec(image="vla-smoke:latest"))
+    add_workload(kube, "exp001", "Admitted")
+    add_pod(kube, "exp001", phase="Pending", waiting_reason="ImagePullBackOff")
+    job = service.get_job("exp001")
+    assert job["status"] == "STARTING_FAILED"
+    assert "镜像拉取失败" in job["message"]
+    assert "vla-smoke:latest" in job["message"], "消息里要带镜像名，用户才知道该导入哪个"
+
+
+def test_pending_err_image_pull_marks_starting_failed(service, kube):
+    service.submit(make_spec(image="ghcr.io/acme/train:cache"))
+    add_workload(kube, "exp001", "Admitted")
+    add_pod(kube, "exp001", phase="Pending", waiting_reason="ErrImagePull")
+    job = service.get_job("exp001")
+    assert job["status"] == "STARTING_FAILED"
+    assert "镜像拉取失败" in job["message"]
+    assert "ghcr.io/acme/train:cache" in job["message"]
+
+
+def test_pending_invalid_image_name_marks_starting_failed(service, kube):
+    service.submit(make_spec(image="Not A Valid Image"))
+    add_workload(kube, "exp001", "Admitted")
+    add_pod(kube, "exp001", phase="Pending", waiting_reason="InvalidImageName")
+    job = service.get_job("exp001")
+    assert job["status"] == "STARTING_FAILED"
+    assert "镜像名不合法" in job["message"]
+
+
+def test_pending_container_creating_stays_queued(service, kube):
+    """正在创建容器只是慢，会自己好，不能误报成启动失败。"""
+    service.submit(make_spec())
+    add_workload(kube, "exp001", "Admitted")
+    add_pod(kube, "exp001", phase="Pending", waiting_reason="ContainerCreating")
+    job = service.get_job("exp001")
     assert job["status"] == "QUEUED"
-    assert "ImagePullBackOff" in job["message"], "已放行但 Pod 未就绪时必须给出真实原因"
+    assert "ContainerCreating" in job["message"]
+
+
+def test_pending_unschedulable_stays_queued(service, kube):
+    """调度不上是在等资源，资源一空出来就会起，仍然算排队。"""
+    service.submit(make_spec())
+    add_workload(kube, "exp001", "Admitted")
+    add_pod(kube, "exp001", phase="Pending", pod_scheduled=False)
+    job = service.get_job("exp001")
+    assert job["status"] == "QUEUED"
+    assert "Insufficient nvidia.com/gpu" in job["message"]
+
+
+def test_pending_init_container_image_pull_marks_starting_failed(service, kube):
+    """initContainer 卡在 ImagePullBackOff 时也要报真实原因。
+
+    训练 Pod 的第一个容器是 init-permissions；它拉不到镜像时 Pod 一直
+    Pending，但只有 initContainerStatuses 里有 waiting reason。之前只看
+    containerStatuses，这里会退化成「waiting for container start」，界面
+    显示「排队中」。
+    """
+    service.submit(make_spec(image="vla-smoke:latest"))
+    add_workload(kube, "exp001", "Admitted")
+    add_pod(kube, "exp001", phase="Pending", init_waiting_reason="ImagePullBackOff")
+    job = service.get_job("exp001")
+    assert job["status"] == "STARTING_FAILED"
+    assert "镜像拉取失败" in job["message"]
+    # 关键回归点：如果不是从 initContainerStatuses 读到原因，这里会变成
+    # 「waiting for container start」，也就不会有镜像相关的指引。
+    assert "waiting for container start" not in job["message"]
+    assert "vla-smoke:latest" in job["message"], "initContainer 卡住时要暴露真实原因"
+
+
+def test_pending_init_container_without_reason_stays_queued(service, kube):
+    """initContainer 正常跑着（没有 waiting reason）时不算启动失败。"""
+    service.submit(make_spec())
+    add_workload(kube, "exp001", "Admitted")
+    pod = add_pod(kube, "exp001", phase="Pending")
+    pod["status"]["init_container_statuses"] = [
+        {"name": "init-permissions", "state": {"running": {"startedAt": "2026-01-01T00:00:06Z"}}}
+    ]
+    job = service.get_job("exp001")
+    assert job["status"] == "QUEUED"
+
+
+def test_pod_waiting_reason_reads_init_container_statuses():
+    """直接钉住辅助函数：initContainer 的 waiting reason 优先于兜底文案。"""
+    pod = {
+        "status": {
+            "phase": "Pending",
+            "init_container_statuses": [
+                {"name": "init-permissions",
+                 "state": {"waiting": {"reason": "ImagePullBackOff", "message": "no such image"}}}
+            ],
+            "container_statuses": [],
+        }
+    }
+    assert _pod_waiting_reason(pod) == "ImagePullBackOff: no such image"
+    assert _pod_waiting_reason({"status": {"phase": "Pending"}}) == "waiting for container start"
+    # 没有 Pod 时也要有可读的兜底
+    assert _pod_waiting_reason(None) == "pod has not been created"
+
+
+@pytest.mark.parametrize("reason", ["ImagePullBackOff", "ErrImagePull", "InvalidImageName"])
+def test_permanent_start_failures_are_detected(reason):
+    assert _is_permanent_start_failure(reason) is True
+
+
+@pytest.mark.parametrize("reason", ["ContainerCreating", "NotScheduled", "waiting for container start"])
+def test_transient_waiting_reasons_are_not_permanent(reason):
+    assert _is_permanent_start_failure(reason) is False
 
 
 def test_null_conditions_do_not_crash(service, kube):
@@ -692,4 +834,64 @@ def test_cluster_summary_ttl_zero_disables_cache(service, kube, settings):
     cached_service.cluster_summary()
 
     assert calls["n"] == 2
+
+
+# --- 终态落库：对象被 TTL 回收后仍能说出真实结局 -------------------------
+
+
+def test_succeeded_job_survives_ttl_collection(service, kube):
+    """成功任务的对象被回收后仍显示 SUCCEEDED 而不是 GONE。
+
+    PyTorchJob 带 ttlSecondsAfterFinished，跑完一小时后对象会被彻底删掉。
+    只要平台在对象还在时读到过终态，回收之后就应该还能说出真实结局。
+    """
+    service.submit(make_spec())
+    set_job_condition(kube, "exp001", "Succeeded")
+    # 平台轮询到了终态（这一步负责落库）
+    assert service.get_job("exp001")["status"] == "SUCCEEDED"
+
+    # 模拟 ttl 回收：对象从集群里消失
+    kube.jobs.pop("exp001")
+
+    job = service.get_job("exp001")
+    assert job["status"] == "SUCCEEDED"
+    assert job["status"] != "GONE"
+
+
+def test_failed_job_survives_ttl_collection(service, kube):
+    """失败任务同理：回收后仍显示 FAILED 而不是 GONE。"""
+    service.submit(make_spec())
+    set_job_condition(kube, "exp001", "Failed")
+    assert service.get_job("exp001")["status"] == "FAILED"
+
+    kube.jobs.pop("exp001")
+
+    job = service.get_job("exp001")
+    assert job["status"] == "FAILED"
+    assert job["status"] != "GONE"
+
+
+def test_vanished_job_without_recorded_terminal_stays_gone(service, kube, history):
+    """从没读到过终态的对象消失后必须仍是 GONE，不能编一个结局。
+
+    编造终态比不解释更糟：用户会把「平台猜的」当成「平台知道的」。
+    """
+    service.submit(make_spec())
+    # 平台一次都没读到终态，对象就没了（比如轮询间隔内被删）
+    kube.jobs.pop("exp001")
+
+    job = service.get_job("exp001")
+    assert job["status"] == "GONE"
+    assert history.get_cancellation("exp001") is None, "GONE 不应反写终态记录"
+
+
+def test_vanished_job_keeps_submitted_fields(service, kube):
+    """对象消失后仍能告诉用户当初提交的镜像/命令，方便重跑。"""
+    service.submit(make_spec(image="vla-smoke:latest", command="python /app/train.py --steps 3"))
+    kube.jobs.pop("exp001")
+
+    job = service.get_job("exp001")
+    assert job["status"] == "GONE"
+    assert job["image"] == "vla-smoke:latest"
+    assert job["command"] == "python /app/train.py --steps 3"
 

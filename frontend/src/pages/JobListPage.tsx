@@ -19,6 +19,8 @@ const DEFAULT_PAGE_SIZE = 20;
 const statusOptions: Array<{ value: JobStatus | 'ALL'; label: string }> = [
   { value: 'ALL', label: '全部状态' },
   { value: 'QUEUED', label: '排队中' },
+  // Pod 放行了但永远起不来（镜像拉不到等），不会自己好，单独筛出来好处理
+  { value: 'STARTING_FAILED', label: '启动失败' },
   { value: 'RUNNING', label: '运行中' },
   { value: 'SUCCEEDED', label: '已成功' },
   { value: 'FAILED', label: '已失败' },
@@ -242,6 +244,8 @@ export function describeQuota(
   const empty = { text: '', gpuUsed: 0, activeJobs: 0, exceeded: false };
   if (!quota || (quota.max_gpus === null && quota.max_active_jobs === null)) return empty;
 
+  // STARTING_FAILED 刻意不算「进行中」：它不会自己好，算进去会让活跃任务数虚高，
+  // 用户还会以为配额被这类死任务占着。
   const active = jobs.filter((job) => job.status === 'QUEUED' || job.status === 'RUNNING');
   const gpuUsed = active.reduce((sum, job) => sum + (job.gpus || 0), 0);
   const activeJobs = active.length;

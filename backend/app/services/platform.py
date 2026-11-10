@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import re
 import threading
 import time
@@ -36,6 +37,8 @@ from .queue_block import diagnose_queue_block
 from .queue_est import estimate_durations, queue_info
 from .quotas import ACTIVE_STATUSES, Quota, QuotaStore, Usage, check_quota, effective_quota
 from .sessions import SessionStore
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # 仅类型标注使用，运行时延迟导入以避免循环依赖
     from ..params_templates import ParamsTemplate
@@ -850,14 +853,62 @@ class PlatformService:
             raise ServiceError(404, f"job {name} not found")
         pods = self.kubernetes.list_job_pods(name)
         workload = self._matching_workload(job, self.kubernetes.list_workloads(), pods)
-        return self._job_response(job, workload, pods)
+        response = self._job_response(job, workload, pods)
+        # 读到终态就立刻落库。
+        #
+        # PyTorchJob 带 ttlSecondsAfterFinished，跑完一小时后对象会被彻底删掉。
+        # 到那时平台手里只剩提交记录，说不出任务是成功还是失败——现在就是
+        # 显示 GONE 的原因。趁对象还在，把真正的结局记下来。
+        self._remember_terminal(name, response)
+        return response
+
+    def _remember_terminal(self, name: str, response: dict[str, Any]) -> None:
+        """终态落库，供对象被回收后还原。失败不影响主流程。"""
+        status = response.get("status")
+        if status not in ("SUCCEEDED", "FAILED"):
+            return
+        try:
+            spec = self.history.latest_submission(name)
+            if spec is None:
+                return
+            self.history.mark_cancelled(
+                spec[0],
+                response.get("created_at") or spec[1],
+                response.get("finished_at") or utc_now(),
+                status=status,
+            )
+        except Exception:  # noqa: BLE001 - 缓存写失败不该让读接口挂掉
+            logger.debug("无法记录任务终态: %s", name, exc_info=True)
 
     def _vanished_response(self, name: str, spec: Any, submitted_at: str) -> dict[str, Any]:
         """任务对象已不存在但历史里有提交记录时的响应。
 
-        status 用 ``GONE`` 而不是某个终态：我们并不知道它最后是成功还是失败，
-        编造一个终态比不解释更糟。
+        优先用之前落库的真实终态（`_remember_terminal` 记的）——对象被 ttl
+        回收后，用户最想知道的恰恰是「它到底跑成没跑成」。
+        只有从来没读到过终态时（比如对象在平台轮询到之前就被删了）才退到
+        ``GONE``：那时候确实不知道，编一个终态比不解释更糟。
         """
+        recorded = self.history.get_cancellation(name)
+        recorded_status = (recorded or {}).get("status")
+        if recorded_status in ("SUCCEEDED", "FAILED"):
+            return {
+                "name": name,
+                "status": recorded_status,
+                "image": spec.image,
+                "gpus": spec.gpus,
+                "queue": spec.queue,
+                "priority": spec.priority,
+                "command": spec.command,
+                "env": dict(spec.env),
+                "max_retries": spec.max_retries,
+                "owner": None,
+                "created_at": (recorded or {}).get("created_at") or submitted_at,
+                "finished_at": (recorded or {}).get("cancelled_at"),
+                "message": (
+                    "任务已完成，训练对象已被集群回收；"
+                    "下面是平台记录下的最终状态"
+                ),
+            }
         return {
             "name": name,
             "status": "GONE",
@@ -1418,10 +1469,16 @@ class PlatformService:
         elif status == "RUNNING":
             message = "Training job is running"
         elif status == "QUEUED" and pod_phase == "Pending":
-            # The pod exists but cannot start (image pull failure, unschedulable,
-            # crash loop). Without this the job is indistinguishable from one
-            # still waiting for quota, because both map to QUEUED.
-            message = f"Admitted but pod is not ready: {_pod_waiting_reason(pod)}"
+            # Pod 已经建出来但起不来（镜像拉不到、调度不上、init 容器失败）。
+            # 状态改成 STARTING_FAILED 而不是留在 QUEUED：两者在界面上
+            # 一个显示「排队中」一个显示「启动失败」，混在一起时用户会一直等，
+            # 实际它永远不会自己好起来。
+            waiting_reason = _pod_waiting_reason(pod)
+            if _is_permanent_start_failure(waiting_reason):
+                status = "STARTING_FAILED"
+                message = _start_failure_message(waiting_reason, spec.image)
+            else:
+                message = f"Admitted but pod is not ready: {waiting_reason}"
         elif workload_status == "Admitted":
             message = "Admitted by Kueue; waiting for training pod"
         elif workload and _latest_workload_message(workload):
@@ -1712,11 +1769,54 @@ def _waiting_log_message(waiting: dict[str, str], image: str) -> str:
     return "\n".join(lines)
 
 
+# 这些 waiting reason 不会自己好起来，重试多少次都一样。
+# 用来把「排队中」和「起不来」区分开——前者值得等，后者需要人去修。
+_PERMANENT_START_FAILURES = (
+    "ImagePullBackOff",
+    "ErrImagePull",
+    "InvalidImageName",
+    "CreateContainerConfigError",
+    "CreateContainerError",
+    "RunContainerError",
+)
+
+
+def _is_permanent_start_failure(reason: str) -> bool:
+    return any(code in reason for code in _PERMANENT_START_FAILURES)
+
+
+def _start_failure_message(reason: str, image: str) -> str:
+    """把 K8s 的 waiting reason 翻译成一句能照着做事的话。"""
+    if "ImagePullBackOff" in reason or "ErrImagePull" in reason:
+        return (
+            f"镜像拉取失败：{image} 在训练节点上不存在。"
+            "buildah 里有的镜像 K3s 看不到，需要导出后导入："
+            f"buildah push localhost/{image} "
+            f"docker-archive:/tmp/x.tar:docker.io/library/{image} "
+            "&& k3s ctr -n k8s.io images import /tmp/x.tar"
+        )
+    if "InvalidImageName" in reason:
+        return f"镜像名不合法：{image}"
+    if "CreateContainerConfigError" in reason or "CreateContainerError" in reason:
+        return f"容器配置有误，创建失败：{reason}"
+    return f"训练 Pod 启动失败：{reason}"
+
+
+
 def _pod_waiting_reason(pod: dict[str, Any] | None) -> str:
     if not pod:
         return "pod has not been created"
     status = _dict(pod.get("status"))
-    for container_status in _list(status.get("container_statuses")) + _list(status.get("containerStatuses")):
+    # initContainer 也要看。之前只看 containerStatuses，导致 initContainer
+    # 卡在 ImagePullBackOff 时这里返回「waiting for container start」，
+    # 用户看到的是「排队中」，而真正的原因是镜像没导入。
+    all_statuses = (
+        _list(status.get("init_container_statuses"))
+        + _list(status.get("initContainerStatuses"))
+        + _list(status.get("container_statuses"))
+        + _list(status.get("containerStatuses"))
+    )
+    for container_status in all_statuses:
         waiting = (container_status.get("state") or {}).get("waiting")
         if waiting and waiting.get("reason"):
             detail = f": {waiting['message']}" if waiting.get("message") else ""

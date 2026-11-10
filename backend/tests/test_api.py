@@ -228,6 +228,39 @@ def test_list_jobs_q_is_case_insensitive(api_client, service, kube):
     assert {item["name"] for item in body["items"]} == {"api-alpha", "api-alpine"}
 
 
+def test_list_jobs_status_filter_accepts_starting_failed(api_client, service, kube):
+    """Pod 卡在 ImagePullBackOff 时状态是 STARTING_FAILED，前端要能按它筛。
+
+    ``status`` 是 FastAPI 的 Enum 查询参数，枚举里漏了这个值就会返回 422，
+    前端筛选下拉一点就报错。
+    """
+    create_job(service, "api-broken", image="vla-smoke:latest")
+    add_pod(kube, "api-broken", phase="Pending", waiting_reason="ImagePullBackOff")
+    create_job(service, "api-ok")
+    add_pod(kube, "api-ok", phase="Running")
+
+    response = api_client.get("/api/v1/jobs", params={"status": "STARTING_FAILED"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert [item["name"] for item in body["items"]] == ["api-broken"]
+    assert body["items"][0]["status"] == "STARTING_FAILED"
+
+
+def test_list_jobs_status_filter_starting_failed_empty_returns_empty_list(api_client, service, kube):
+    """没有启动失败的任务时返回空列表，而不是报错或把别的任务混进来。"""
+    create_job(service, "api-fine")
+    add_pod(kube, "api-fine", phase="Running")
+
+    response = api_client.get("/api/v1/jobs", params={"status": "STARTING_FAILED"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 0
+    assert body["items"] == []
+
+
 def test_list_jobs_accepts_boundary_values(api_client):
     response = api_client.get(
         "/api/v1/jobs",

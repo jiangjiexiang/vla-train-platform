@@ -69,6 +69,26 @@ describe('JobListPage', () => {
     expect(await screen.findByText('没有匹配的任务，请调整筛选条件')).toBeInTheDocument();
   });
 
+  it('offers the STARTING_FAILED filter and sends it to the backend', async () => {
+    // 后端在 Pod 卡在 ImagePullBackOff 等永久性失败时给的是 STARTING_FAILED，
+    // 用户要能单独筛出这类任务去修镜像（它不会自己好）。
+    const { container } = renderPage();
+
+    await waitFor(() => expect(getJobsMock).toHaveBeenCalledTimes(1));
+
+    const statusFilter = container.querySelector('.status-filter');
+    expect(statusFilter).not.toBeNull();
+    fireEvent.mouseDown(within(statusFilter as HTMLElement).getByRole('combobox'));
+    fireEvent.click(await screen.findByText('启动失败'));
+
+    await waitFor(() => {
+      expect(getJobsMock).toHaveBeenLastCalledWith(
+        { limit: 20, offset: 0, status: 'STARTING_FAILED' },
+        expect.anything(),
+      );
+    });
+  });
+
   it('debounces the task-name search and resets to page 1', async () => {
     getJobsMock.mockResolvedValue(emptyResponse(45));
     renderPage();

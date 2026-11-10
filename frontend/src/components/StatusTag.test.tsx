@@ -5,6 +5,8 @@ import { PriorityTag, StatusTag } from './StatusTag';
 
 const statusCases: Array<[status: string, label: string, color: string]> = [
   ['QUEUED', '排队中', 'gold'],
+  // 后端在 Pod 卡在 ImagePullBackOff 等永久性失败时给的是这个状态
+  ['STARTING_FAILED', '启动失败', 'error'],
   ['RUNNING', '运行中', 'processing'],
   ['SUCCEEDED', '已成功', 'success'],
   ['FAILED', '已失败', 'error'],

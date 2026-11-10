@@ -1,5 +1,8 @@
 export type JobStatus =
   | 'QUEUED'
+  // Pod 已放行但起不来（镜像拉不到 / 容器配置错），不会自己好，需要人工处理。
+  // 与 QUEUED 分开是为了不让用户一直等。
+  | 'STARTING_FAILED'
   | 'RUNNING'
   | 'SUCCEEDED'
   | 'FAILED'

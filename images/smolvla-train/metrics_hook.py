@@ -110,9 +110,13 @@ def install(output_dir: Path | None = None) -> bool:
         # 但 hook 是从 1 开始自增。不加偏移的话，续训任务在曲线图上
         # 会从 0 重新起一条线，看起来像"又从第一步开始了"。
         offset = int(os.environ.get("VLA_STEP_OFFSET") or 0)
-        record = {"step": offset + int(getattr(self, "_vla_step", 0)) + 1}
+        # _vla_step 必须存**相对计数**，不能存带偏移的值。
+        # 之前存了带偏移的，下一步又加一次偏移，于是步数指数增长
+        # （实测出现 step 150050），曲线彻底成了乱的。
+        local_step = int(getattr(self, "_vla_step", 0)) + 1
+        record = {"step": offset + local_step}
         record.update(buffer)
-        object.__setattr__(self, "_vla_step", record["step"])
+        object.__setattr__(self, "_vla_step", local_step)
         path = self.__dict__.get("_vla_path")
         if path is None:
             return

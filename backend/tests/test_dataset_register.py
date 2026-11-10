@@ -16,6 +16,7 @@ from app.services.dataset_register import (
     UnsafeDatasetPath,
     check_lerobot_format,
     resolve_dataset_dir,
+    to_container_path,
     validate_dataset_id,
 )
 from fastapi.testclient import TestClient
@@ -322,3 +323,47 @@ def test_root_itself_cannot_be_registered(tmp_path, datasets_root):
 def test_invalid_dataset_ids_rejected(bad_id):
     with pytest.raises(UnsafeDatasetPath):
         validate_dataset_id(bad_id)
+
+
+# ---------------------------------------------------------------------------
+# 宿主机路径 → 容器路径的翻译
+#
+# 用户看到的是宿主机上的 /data/vla-platform/datasets/xxx，
+# 而容器把它挂在 /datasets/xxx。让人自己换算挂载点没道理，
+# 所以注册接口两种路径都接受。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("/data/vla-platform/datasets/pick1028", "/datasets/pick1028"),
+        ("/datasets/pick1028", "/datasets/pick1028"),
+        ("/data/vla-platform/datasets", "/datasets"),
+        # 末尾斜杠不该影响判断
+        ("/data/vla-platform/datasets/pick1028/", "/datasets/pick1028"),
+        # 无关的绝对路径原样返回，交给后续校验拒绝
+        ("/etc/passwd", "/etc/passwd"),
+        # 前缀相似但不是子目录，不能被误判成数据集路径
+        ("/data/vla-platform/datasets-backup/x", "/data/vla-platform/datasets-backup/x"),
+        # 相对路径不处理
+        ("datasets/x", "datasets/x"),
+    ],
+)
+def test_host_path_translated_to_container_path(raw, expected):
+    settings = Settings(api_token="t", dataset_host_path="/data/vla-platform/datasets", datasets_mount_path="/datasets")
+
+    assert to_container_path(settings, raw) == expected
+
+
+def test_host_path_translation_is_noop_when_equal():
+    """宿主路径和挂载点相同时不应改动任何东西（比如开发环境直接跑）。"""
+    settings = Settings(api_token="t", dataset_host_path="/datasets", datasets_mount_path="/datasets")
+
+    assert to_container_path(settings, "/datasets/x") == "/datasets/x"
+
+
+def test_host_path_translation_is_noop_without_host_path():
+    settings = Settings(api_token="t", dataset_host_path="", datasets_mount_path="/datasets")
+
+    assert to_container_path(settings, "/data/vla-platform/datasets/x") == "/data/vla-platform/datasets/x"

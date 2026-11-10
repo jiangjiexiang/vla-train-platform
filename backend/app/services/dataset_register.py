@@ -82,6 +82,31 @@ def allowed_roots(settings: Settings) -> list[Path]:
     return roots
 
 
+def to_container_path(settings: Settings, raw: str) -> str:
+    """把宿主机路径翻译成容器内路径。
+
+    为什么需要：用户在宿主机上看到的路径是 /data/vla-platform/datasets/xxx，
+    而容器把它挂在 /datasets/xxx。两者都对，但只有容器路径能被校验。
+    让人去换算挂载点是没道理的，这里自动识别宿主机前缀并做替换。
+    """
+    host_root = Path(settings.dataset_host_path or "").as_posix()
+    mount_root = Path(settings.datasets_mount_path or "").as_posix()
+    if not host_root or not mount_root or host_root == mount_root:
+        return raw
+
+    text = raw.strip()
+    # 只处理绝对路径；相对路径交回原有校验流程报错
+    if not text.startswith("/"):
+        return raw
+    normalized = Path(text).as_posix()
+    if normalized == host_root:
+        return mount_root
+    prefix = host_root.rstrip("/") + "/"
+    if normalized.startswith(prefix):
+        return mount_root.rstrip("/") + "/" + normalized[len(prefix):]
+    return raw
+
+
 def resolve_dataset_dir(
     settings: Settings,
     path: str,
@@ -98,6 +123,7 @@ def resolve_dataset_dir(
     if "\0" in raw:
         raise UnsafeDatasetPath("path 不能包含 NUL 字符")
 
+    path = to_container_path(settings, path)
     root = datasets_root(settings)
     if not root.is_dir():
         # 根目录没挂上时，任何路径都不该被当成合法数据集。

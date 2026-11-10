@@ -14,7 +14,13 @@ WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 # npm 同样用国内源：默认 registry.npmjs.org 在国内经常卡住。
 ARG NPM_REGISTRY=https://registry.npmmirror.com
-RUN npm config set registry ${NPM_REGISTRY} && npm ci --no-audit --no-fund
+# 重试三次：npm 源偶发 504（实测遇到过 postcss 包超时），
+# 一次网络抖动就让整个镜像构建失败代价太大。
+# --fetch-retries 是 npm 自己的重试，外面的循环兜住整个 npm ci 失败的情况。
+RUN npm config set registry ${NPM_REGISTRY} \
+ && npm config set fetch-retries 5 \
+ && npm config set fetch-retry-maxtimeout 120000 \
+ && (npm ci --no-audit --no-fund || npm ci --no-audit --no-fund || npm ci --no-audit --no-fund)
 COPY frontend/ ./
 # package.json 的 build 脚本是 tsc --noEmit && vite build
 RUN npm run build

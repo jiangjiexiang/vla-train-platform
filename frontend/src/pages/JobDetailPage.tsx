@@ -42,6 +42,15 @@ const METRIC_LABELS: Record<string, string> = {
 };
 
 // loss 永远排第一，其余按固定顺序补齐
+/**
+ * TensorBoard 不轮询：给一个足够大的间隔，等价于「只加载一次」。
+ *
+ * 注意 usePolling 的第二个参数是间隔、第三个才是 enabled。
+ * 这里如果传 0，setTimeout(run, 0) 等于「立刻再跑一次」，
+ * 切到 TensorBoard 标签后会疯狂重请求（实测 4 秒 55 次）。
+ */
+const TENSORBOARD_IDLE_INTERVAL = 24 * 60 * 60 * 1000;
+
 const METRIC_ORDER = ['loss', 'grad_norm', 'lr', 'update_s', 'train/loss', 'train/grad_norm', 'train/lr', 'train/update_s'];
 
 function metricOptions(items: MetricPoint[]): Array<{ label: string; value: string }> {
@@ -265,7 +274,12 @@ export function JobDetailPage() {
     } catch (reason) {
       if (!isAbortError(reason)) setTensorboardError(getErrorMessage(reason));
     }
-  }, 0, metricSource === 'tensorboard');
+    // 第三个参数是 enabled，第二个是轮询间隔。
+    // 之前这里传的是 0，usePolling 里 `setTimeout(run, 0)` 等于「立刻再跑一次」，
+    // 于是只要切到这个标签就会疯狂重请求（实测 4 秒 55 次）。
+    // TensorBoard 读的是历史 events，本来就不该轮询，
+    // 给一个很大的间隔当「不轮询」用，真正的新数据由右上角刷新触发。
+  }, TENSORBOARD_IDLE_INTERVAL, metricSource === 'tensorboard');
 
   // 诊断只在任务失败时有内容，接口本身在未失败时返回 diagnosis: null
   const refreshDiagnosis = usePolling(async (signal) => {

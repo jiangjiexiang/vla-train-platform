@@ -327,6 +327,14 @@ export function JobDetailPage() {
               data-testid="metric-switch"
             />
             <LossChart points={metrics.items} metric={metricKey} />
+            {metrics.items.length < 10 ? (
+              // 冒烟测试的配方默认只跑 5 步，曲线自然只有几个点。
+              // 不解释的话，用户看到稀疏的曲线会以为训练出了问题。
+              <Typography.Text type="secondary" className="hint">
+                只有 {metrics.items.length} 个点。冒烟测试默认跑 5 步，这是正常的；
+                想看有意义的曲线请用训练配方（默认 2000 步）。
+              </Typography.Text>
+            ) : null}
           </div>
         ) : (
           <Empty

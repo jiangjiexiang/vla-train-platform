@@ -266,6 +266,19 @@ def build_train_command(
         except OSError as exc:
             print(f"续训：创建 last 链接失败（{exc}），继续", flush=True)
 
+        # 把源 checkpoint 的步数告诉指标 hook，让曲线接着画而不是从 0 重来。
+        # 读不到就算了——曲线从 0 开始不影响训练，只是图上不好看。
+        step_file = step_dir / "training_state" / "training_step.json"
+        try:
+            import json as _json
+
+            start_step = int(_json.loads(step_file.read_text(encoding="utf-8")).get("step") or 0)
+            if start_step > 0:
+                os.environ["VLA_STEP_OFFSET"] = str(start_step)
+                print(f"续训：起点 step {start_step}", flush=True)
+        except (OSError, ValueError, TypeError):
+            pass
+
         print(f"续训：已从 {args.resume_from} 复制 checkpoint {step_dir.name}", flush=True)
 
     if not args.resume and output_dir.exists():

@@ -56,8 +56,14 @@ printf 'wheel 目录：%s\n\n' "$WHEEL_DIR"
   --only-binary=:all: "${TARGET_PLATFORMS[@]}" \
   -r "$REQUIREMENTS"
 
-# 兜底清理：混进来的非 cp312 二进制 wheel 一律删掉（纯 Python 的 py3-none-any 保留）。
-find "$WHEEL_DIR" -name '*-cp3*.whl' ! -name '*-cp312-*' -print -delete 2>/dev/null || true
+# 兜底清理：混进来的错误 ABI wheel 删掉。
+# 注意 abi3 —— protobuf(cp310-abi3)、cryptography(cp311-abi3) 这类轮子带的是
+# 稳定 ABI 标签，在 3.12 上能正常安装，是 pip 针对 cp312 主动选出来的正确结果，
+# 绝不能当成「下错了」删掉。曾经用 ! -name '*-cp312-*' 一刀切，结果删掉了
+# protobuf 和 cryptography，离线安装直接失败。
+find "$WHEEL_DIR" -name '*-cp3*-cp3*.whl' \
+  ! -name '*-abi3-*' ! -name '*-cp312-*' ! -name '*-cp312t-*' \
+  -print -delete 2>/dev/null || true
 
 printf '\n完成。目录：%s (%s)\n' "$WHEEL_DIR" "$(du -sh "$WHEEL_DIR" | cut -f1)"
 printf 'wheel 数量：%s\n' "$(find "$WHEEL_DIR" -name '*.whl' | wc -l)"

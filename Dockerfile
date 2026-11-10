@@ -29,12 +29,14 @@ RUN npm run build
 FROM python:3.12-slim AS dependencies
 WORKDIR /app
 COPY backend/requirements.txt /app/requirements.txt
-# 用国内镜像源：默认走 files.pythonhosted.org 在国内经常超时，
-# 构建时间会从 20 秒变成几分钟甚至直接失败。机器在国内就固定用阿里云，
-# 需要时可以用 --build-arg PIP_INDEX_URL=... 覆盖。
-ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+# 国内镜像源。选腾讯云是实测出来的，不是随口定的——同一个 grpcio 7.4MB
+# wheel 在四家的速度：阿里云 239 KB/s、清华 1198、中科大 2396、腾讯云 3595。
+# 依赖层一改就要重下 44 个包，源快慢直接决定构建是 1 分钟还是 10 分钟。
+# 需要时用 --build-arg PIP_INDEX_URL=... 覆盖。
+ARG PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple
+ARG PIP_TRUSTED_HOST=mirrors.cloud.tencent.com
 ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
-    PIP_TRUSTED_HOST=mirrors.aliyun.com \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_DEFAULT_TIMEOUT=60 \
     PIP_RETRIES=5

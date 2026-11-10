@@ -154,6 +154,24 @@ spec:
             - name: checkpoints
               mountPath: /checkpoints
               readOnly: false
+            # ---- 代码挂载（迭代模式）----
+            #
+            # 代码不再只存在于镜像里，而是从宿主机目录挂进来。改一行 Python 只需
+            # rollout restart（约 10 秒），不用重建镜像 + 导入 K3s（2-10 分钟）。
+            # 之前每修一个 bug 都要走完整构建链路，一天大半时间在等构建。
+            #
+            # 代价：镜像不再自包含，拿去做别的机器跑会缺代码；宿主机和容器里
+            # 的代码必须一致。这是「迭代模式」的配置，发正式版应该打完整镜像。
+            - name: app-code
+              mountPath: /app/app
+              readOnly: true
+            - name: recipes
+              mountPath: /app/recipes
+              readOnly: true
+            # 前端产物。前端改完仍要 npm run build（约 20 秒），但不用重建镜像。
+            - name: static
+              mountPath: /app/static
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -192,6 +210,22 @@ spec:
           hostPath:
             path: /home/jjx/vla-train-platform/data/checkpoints
             type: Directory
+        # ---- 代码挂载（迭代模式）----
+        # 代码从宿主机挂进来，改完 rollout restart 就生效（约 10 秒），
+        # 不用重建镜像 + 导入 K3s。见 volumeMounts 处的说明。
+        - name: app-code
+          hostPath:
+            path: /home/jjx/vla-train-platform/backend/app
+            type: Directory
+        - name: recipes
+          hostPath:
+            path: /home/jjx/vla-train-platform/recipes
+            type: Directory
+        # 前端产物。前端仍要 npm run build（约 20 秒），但不用重建镜像。
+        - name: static
+          hostPath:
+            path: /home/jjx/vla-train-platform/frontend/dist
+            type: DirectoryOrCreate
         - name: history
           persistentVolumeClaim:
             claimName: vla-web-history

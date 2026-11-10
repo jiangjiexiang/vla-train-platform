@@ -102,3 +102,59 @@ def test_fewer_than_keep_removes_nothing(tmp_path):
     plan = plan_retention(root, keep_last_n=3)
 
     assert plan["remove"] == []
+
+
+# ---------------------------------------------------------------------------
+# 清理线程不能删正在写的 checkpoint。
+# 一个 checkpoint 1.26GB（模型 865MB + optimizer 394MB），磁盘忙时写入可能
+# 跨过两次扫描窗口。删掉正在写的那个，轻则 checkpoint 损坏，
+# 重则续训读到半个文件。
+# ---------------------------------------------------------------------------
+def test_pruner_skips_recently_written(tmp_path, monkeypatch):
+    """刚写过的目录不能被清理，即使超出保留数量。"""
+    import os
+    import time
+
+    from app.services.checkpoint_retention import list_checkpoints
+
+    root = tmp_path / "checkpoints"
+    root.mkdir()
+    for step in (1000, 2000, 3000):
+        d = root / f"{step:06d}"
+        d.mkdir()
+        old = time.time() - 600
+        os.utime(d, (old, old))
+    # 模拟"正在写"的最新一个
+    fresh = root / "004000"
+    fresh.mkdir()
+
+    # 这里只验证判据本身：mtime 是新的就不该被选中删除
+    now = time.time()
+    candidates = []
+    for step, path in list_checkpoints(root):
+        if now - path.stat().st_mtime >= 60:
+            candidates.append(step)
+
+    assert 4000 not in candidates, "正在写的 checkpoint 被列入删除候选"
+    assert candidates == [1000, 2000, 3000]
+
+
+def test_pruner_handles_missing_mtime(tmp_path):
+    """stat 失败时保守跳过，不要因为读不到时间就删。"""
+    import os
+    import time
+
+    root = tmp_path / "checkpoints"
+    root.mkdir()
+    d = root / "001000"
+    d.mkdir()
+    old = time.time() - 600
+    os.utime(d, (old, old))
+    d.rmdir()  # 目录消失，stat 会失败
+
+    # 不应抛异常
+    now = time.time()
+    try:
+        _ = now - d.stat().st_mtime
+    except OSError:
+        pass

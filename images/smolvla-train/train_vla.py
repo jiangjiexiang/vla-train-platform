@@ -252,7 +252,22 @@ def _prune_checkpoints_periodically(output_dir: Path, stop: "threading.Event") -
         if len(entries) <= keep:
             return
         entries.sort(key=lambda item: int(item.name))
+        # 只删「最近一分钟没被写过」的目录。
+        #
+        # 一个 checkpoint 有 1.26GB（模型 865MB + optimizer 394MB），
+        # 磁盘忙的时候写入可能跨过两次扫描。如果不检查 mtime，
+        # 正在写的那个会被当成"旧的"删掉——轻则 checkpoint 损坏，
+        # 重则续训读到半个文件。这里用目录 mtime 做低成本保护：
+        # 新写入必然刷新 mtime，静置超过一分钟才算写完。
+        import time as _time
+
+        now = _time.time()
         for item in entries[:-keep]:
+            try:
+                if now - item.stat().st_mtime < 60:
+                    continue
+            except OSError:
+                continue
             try:
                 shutil.rmtree(item)
                 print(f"[vla-platform] 清理旧 checkpoint {item.name}", file=sys.stderr, flush=True)

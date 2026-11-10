@@ -900,9 +900,21 @@ class PlatformService:
         }
 
     def job_metrics(self, name: str, limit: int = 500) -> dict[str, Any]:
-        """训练指标（loss 曲线）。任务不存在返回 404；文件不存在返回空列表。"""
+        """训练指标（loss 曲线）。
+
+        判定「任务是否曾经存在」时不能只看 K8s 对象：ttlSecondsAfterFinished
+        到期回收后对象就没了，但指标文件还老老实实躺在磁盘上。
+        只认 K8s 对象的话，历史训练曲线会在几小时后突然全部 404——
+        而这恰恰是用户想回头看的那些数据。
+
+        所以除了 K8s 对象和取消记录，还要认「历史里有提交记录」。
+        """
         job = self.kubernetes.get_job(name)
-        if job is None and self.history.get_cancellation(name) is None:
+        if (
+            job is None
+            and self.history.get_cancellation(name) is None
+            and self.history.find_submission(name) is None
+        ):
             raise ServiceError(404, f"job {name} not found")
         from .metrics import read_metrics  # 局部导入，保持模块加载轻量
 

@@ -65,6 +65,12 @@ class Settings:
     # 读 metrics / events / 权重清单都必须用这个，而不是宿主机路径——
     # 容器里根本不存在 /home/jjx/... 这个前缀。
     checkpoints_mount_path: str = "/checkpoints"
+    # 训练代码的宿主机目录。非空时把它挂进训练容器，覆盖镜像里的那几份代码。
+    #
+    # 空（默认）= 用镜像自带的代码，镜像自包含，拿到别的机器也能跑。
+    # 设置成 <项目>/images/smolvla-train = 改代码不用重建镜像，适合迭代阶段。
+    # 这是给「一天改十次训练脚本」的场景准备的，正式发布时应该留空。
+    training_code_host_path: str = ""
     db_path: str = "/data/history/platform.db"
     kubeconfig: str | None = None
     log_tail_default: int = 500
@@ -194,6 +200,9 @@ class Settings:
             ),
             checkpoints_mount_path=os.environ.get(
                 "PLATFORM_CHECKPOINTS_MOUNT_PATH", "/checkpoints"
+            ),
+            training_code_host_path=os.environ.get(
+                "PLATFORM_TRAINING_CODE_HOST_PATH", ""
             ),
             db_path=os.environ.get("PLATFORM_DB_PATH", "/data/history/platform.db"),
             kubeconfig=os.environ.get("PLATFORM_KUBECONFIG") or None,

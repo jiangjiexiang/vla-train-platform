@@ -132,6 +132,23 @@ def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) 
                                             "mountPath": settings.checkpoints_mount_path,
                                             "readOnly": False,
                                         },
+                                        # 训练代码从宿主机挂进来（可选）。
+                                        #
+                                        # 默认 compose 用镜像里的代码：镜像自包含，
+                                        # 拿到别的机器上也能直接跑。
+                                        # 但迭代时「改一行 train_vla.py → 重建 10GB 镜像
+                                        # → 导入 k3s」要十几分钟，实在受不了。
+                                        # settings.training_code_host_path 非空时改成挂载，
+                                        # 改完只需重建 PyTorchJob。
+                                        # 训练代码整目录挂载（可选）。settings 为空时
+                                        # 用镜像里的代码，镜像自包含，拿到别的机器也能跑。
+                                        # 迭代阶段把它指到 <项目>/images/smolvla-train，
+                                        # 改 train_vla.py 就不必重建 10GB 镜像。
+                                        *(
+                                            [{"name": "training-code", "mountPath": "/app", "readOnly": True}]
+                                            if settings.training_code_host_path
+                                            else []
+                                        ),
                                     ],
                                 }
                             ],
@@ -154,6 +171,19 @@ def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) 
                                         "type": "Directory",
                                     },
                                 },
+                                *(
+                                    [
+                                        {
+                                            "name": "training-code",
+                                            "hostPath": {
+                                                "path": settings.training_code_host_path,
+                                                "type": "Directory",
+                                            },
+                                        }
+                                    ]
+                                    if settings.training_code_host_path
+                                    else []
+                                ),
                             ],
                         },
                     },

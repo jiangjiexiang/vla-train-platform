@@ -29,6 +29,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.service = service
 
     @app.on_event("startup")
+    def start_auto_backup() -> None:
+        """起一个后台线程定期备份数据库。
+
+        只提供手动接口是不够的——没人会每天点一次。
+        而数据库里是审计和提交历史，真丢了无法重建。
+
+        interval 为 0 时不起线程（测试或不需要备份的部署）。
+        """
+        interval = settings.backup_interval_seconds
+        if interval <= 0:
+            return
+
+        import threading
+        from pathlib import Path as _Path
+
+        from .services.backup import create_backup as _create
+        from .services.backup import prune_backups as _prune
+
+        stop = threading.Event()
+        app.state.backup_stop = stop
+
+        def loop() -> None:
+            # 启动后先等一会儿再备第一次，避免和启动时的其它初始化抢 IO
+            while not stop.wait(min(interval, 300)):
+                try:
+                    result = _create(_Path(settings.db_path), _Path(settings.backup_dir))
+                    if result.get("ok"):
+                        _prune(_Path(settings.backup_dir), settings.backup_keep)
+                    else:
+                        print(f"[backup] 备份失败：{result.get('error')}", flush=True)
+                except Exception as exc:  # noqa: BLE001 - 备份失败绝不能影响服务
+                    print(f"[backup] 备份异常：{exc}", flush=True)
+                # 第一次之后按完整间隔等
+                if stop.wait(interval):
+                    return
+
+        thread = threading.Thread(target=loop, daemon=True, name="db-backup")
+        thread.start()
+        app.state.backup_thread = thread
+
+    @app.on_event("startup")
     def purge_expired_sessions() -> None:
         # 会话持久化在 SQLite 里；重启时顺手清掉过期令牌，避免表无限增长。
         removed = service.sessions.purge_expired()

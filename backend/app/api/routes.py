@@ -82,7 +82,35 @@ def login(
     service: PlatformService = Depends(get_service),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    """LDAP 登录换平台会话令牌；token/off 模式不支持账号密码登录。"""
+    """账号密码登录换平台会话令牌。
+
+    支持两种账号来源：
+    - ldap：公司目录账号
+    - local：平台自己维护的账号（配置在 PLATFORM_LOCAL_USERS 里）
+
+    token/off 模式不支持账号密码登录——token 模式本来就是给机器用的。
+    """
+    if settings.auth_mode == "local":
+        from ..local_users import LocalUserRegistry, parse_local_users
+
+        registry: LocalUserRegistry = parse_local_users(settings.local_users)
+        user = registry.verify(request_model.username, request_model.password)
+        if user is None:
+            # 与 LDAP 分支统一：不区分「用户不存在」和「密码错误」
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        session = service.sessions.issue(
+            user.username, user.role, settings.session_ttl_hours, source="local", verified=False
+        )
+        return {
+            "token": session["token"],
+            "expires_at": session["expires_at"],
+            "user": {"username": user.username, "role": user.role, "source": "local"},
+        }
+
     if settings.auth_mode != "ldap":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

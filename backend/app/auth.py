@@ -130,6 +130,11 @@ def _context_for_session(
 
     username = session["username"]
     role = session["role"]
+    # local 模式的账号存在平台自己这里，没有外部目录可复查，
+    # 直接按会话里存的角色放行。会话过期由 SessionStore 负责。
+    if settings.auth_mode == "local":
+        return AuthContext(username=username, role=role, source="local")
+
     if settings.auth_mode == "ldap" and settings.ldap_url:
         try:
             user = ldap_auth.verify(username, settings)

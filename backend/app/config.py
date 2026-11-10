@@ -4,7 +4,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-AUTH_MODES = ("off", "token", "ldap")
+# 四种模式：
+#   off   免登录（内网自用）
+#   token 静态令牌（机器调用）
+#   ldap  目录账号
+#   local 平台自己维护的账号密码（配置在 PLATFORM_LOCAL_USERS）
+AUTH_MODES = ("off", "token", "ldap", "local")
 ROLE_ADMIN = "admin"
 ROLE_USER = "user"
 
@@ -58,6 +63,9 @@ class Settings:
     # 为空时退回单一 PLATFORM_API_TOKEN（等价于一个 admin），
     # 保证老部署升级后行为不变。
     user_tokens: str = ""
+    # 本地账号（auth_mode="local"）："用户名:角色:密码哈希,..."
+    # 密码用 PBKDF2 哈希，配置里不出现明文。
+    local_users: str = ""
     # 训练容器的 /dev/shm 大小。PyTorch DataLoader 通过共享内存传 batch，
     # 容器默认只有 64MB，num_workers 稍大就会
     # "DataLoader worker is killed by signal: Bus error"。
@@ -140,6 +148,7 @@ class Settings:
             log_tail_default=log_tail,
             gpu_metrics_url=os.environ.get("PLATFORM_GPU_METRICS_URL", "http://vla-gpu-metrics:8080/"),
             user_tokens=os.environ.get("PLATFORM_USER_TOKENS", ""),
+            local_users=os.environ.get("PLATFORM_LOCAL_USERS", ""),
             shm_size=os.environ.get("PLATFORM_SHM_SIZE", "4Gi"),
             backup_dir=os.environ.get("PLATFORM_BACKUP_DIR", "/data/history/backups"),
             backup_keep=_parse_nonnegative_int(

@@ -38,6 +38,20 @@ if TYPE_CHECKING:  # 仅类型标注使用，运行时延迟导入以避免循�
     from ..params_templates import ParamsTemplate
     from .runs import RunRequest
 
+
+def _dir_usage(path: Path) -> tuple[int, int]:
+    """返回 (字节数, 文件数)。单个文件统计失败就跳过，不因一块坏数据整页报错。"""
+    total = 0
+    files = 0
+    for entry in path.rglob("*"):
+        try:
+            if entry.is_file() and not entry.is_symlink():
+                total += entry.stat().st_size
+                files += 1
+        except OSError:
+            continue
+    return total, files
+
 class PlatformService:
     @property
     def current_actor(self) -> str:
@@ -209,6 +223,31 @@ class PlatformService:
             for info in sorted(names.values(), key=lambda item: item["username"])
         ]
         return {"items": items}
+
+    def checkpoint_usage(self) -> dict[str, Any]:
+        """每个任务的产物占用，用来判断磁盘都花在哪了。
+
+        清理前最想知道的是「哪些任务占了大头」，而不是挨个 du。
+        查不到的任务（已被清理或从没跑过）不出现在结果里，
+        避免列表里塞满 0 字节条目。
+        """
+        root = Path(self.settings.checkpoint_host_path)
+        items: list[dict[str, Any]] = []
+        total = 0
+
+        if root.is_dir():
+            for entry in root.iterdir():
+                if not entry.is_dir() or entry.is_symlink():
+                    continue
+                try:
+                    size, files = _dir_usage(entry)
+                except OSError:
+                    continue
+                items.append({"job": entry.name, "bytes": size, "files": files})
+                total += size
+
+        items.sort(key=lambda item: item["bytes"], reverse=True)
+        return {"total_bytes": total, "items": items}
 
     def failure_summary(self, *, limit: int = 20) -> dict[str, Any]:
         """失败原因分布。运维用来判断「是不是平台自己在制造失败」。

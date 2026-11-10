@@ -395,6 +395,15 @@ def failure_summary(
     return service.failure_summary(limit=limit)
 
 
+@router.get("/maintenance/checkpoints", dependencies=[Depends(require_admin)])
+def checkpoint_usage(service: PlatformService = Depends(get_service)) -> dict[str, Any]:
+    """每个任务的产物占用，按大小倒序。
+
+    清理前先看这个，比挨个 du 快得多；也能一眼看出哪些任务吃掉了磁盘。
+    """
+    return service.checkpoint_usage()
+
+
 @router.get("/audit")
 def list_audit(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,

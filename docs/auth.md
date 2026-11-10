@@ -15,13 +15,16 @@
 
 打开 `http://172.16.122.37:30080`，在登录页输入：
 
-| 账号 | 密码 | 角色 | 能做什么 |
-|---|---|---|---|
-| `admin` | `VlaPlatform2026` | admin | 全部操作：提交、取消、改配额、清理历史、看审计 |
-| `viewer` | `Viewer2026` | user | 只能看和操作自己的任务 |
+| 账号 | 角色 | 能做什么 |
+|---|---|---|
+| `admin` | admin | 全部操作：提交、取消、改配额、清理历史、看审计 |
+| `viewer` | user | 只能看和操作自己的任务 |
 
-**这两个密码是初始值，建议改掉。** 改密码不需要重启服务以外的东西，
-见下面「增改账号」。
+**密码不写在文档里**：这个仓库可能被多人访问，把在用的密码写进版本历史，
+等于把它公开。初始密码请向部署者索取，首次登录后立刻改掉（见下面「增改账号」）。
+
+账号本身由 Secret `vla-web-auth` 的 `PLATFORM_LOCAL_USERS` 提供，
+格式是 `用户名:角色:密码哈希`，存的是 PBKDF2 哈希而不是明文。
 
 ## 增改账号
 
@@ -75,7 +78,7 @@ kubectl -n vla-platform rollout restart deploy/vla-web
 # 用账号密码换令牌
 curl -X POST http://172.16.122.37:30080/api/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"VlaPlatform2026"}'
+  -d '{"username":"admin","password":"<你的密码>"}'
 
 # 返回 {"token": "...", "expires_at": "...", "user": {...}}
 # 之后带上：

@@ -72,7 +72,7 @@ PLATFORM_AUTH_REQUIRED              default true; current 4090 overlay sets fals
 PLATFORM_NAMESPACE                  default vla-training
 PLATFORM_QUEUE                      default default
 PLATFORM_ALLOWED_GPUS               4090: "1"; A100: "1,2,4,8"
-PLATFORM_DEFAULT_IMAGE              default vla-smoke:latest
+PLATFORM_DEFAULT_IMAGE              default vla-smolvla:latest
 PLATFORM_DEFAULT_COMMAND            default python /app/train.py
 PLATFORM_DATASET_HOST_PATH          default /data/vla-platform/datasets
 PLATFORM_CHECKPOINT_HOST_PATH       default /data/vla-platform/checkpoints
@@ -114,7 +114,7 @@ When authentication is enabled, the browser uses `Authorization: Bearer <token>`
 ```json
 {
   "name": "exp001",
-  "image": "vla-smoke:latest",
+  "image": "vla-smolvla:latest",
   "gpus": 1,
   "queue": "default",
   "priority": "normal",
@@ -147,7 +147,7 @@ Rules:
 {
   "name": "exp001",
   "status": "QUEUED",
-  "image": "vla-smoke:latest",
+  "image": "vla-smolvla:latest",
   "gpus": 1,
   "queue": "default",
   "priority": "normal",
@@ -194,7 +194,7 @@ returns the same record without error.
 ```json
 {
   "allowed_gpus": [1],
-  "default_image": "vla-smoke:latest",
+  "default_image": "vla-smolvla:latest",
   "default_command": "python /app/train.py",
   "default_queue": "default",
   "priorities": ["low", "normal", "high"],
@@ -232,7 +232,7 @@ utilisation and memory that Kubernetes cannot see. If that service is unreachabl
     {
       "type": "Warning",
       "reason": "Failed",
-      "message": "Failed to pull image \"vla-smoke:latest\": ErrImagePull",
+      "message": "Failed to pull image \"vla-smolvla:latest\": ErrImagePull",
       "count": 3,
       "object_kind": "Pod",
       "object_name": "exp001-master-0",
@@ -255,7 +255,7 @@ Commands:
 
 ```text
 vla-train config --server http://HOST:30080 --token TOKEN
-vla-train submit --name exp001 --gpus 1 --image vla-smoke:latest --priority normal --command 'python /app/train.py' [--termination-grace-period 30]
+vla-train submit --name exp001 --gpus 1 --image vla-smolvla:latest --priority normal --command 'python /app/train.py' [--termination-grace-period 30]
 vla-train list
 vla-train status
 vla-train logs exp001
@@ -270,7 +270,7 @@ CLI talks to the REST API, not directly to Kubernetes. Use Python standard libra
 
 ## Smoke training assets
 
-- Image name: `vla-smoke:latest`.
+- Image name: `vla-smolvla:latest`.
 - Container entry training path: `/app/train.py`.
 - Default single-GPU command: `python /app/train.py`.
 - A100 8-GPU example command: `torchrun --standalone --nproc_per_node=8 /app/train.py --distributed`.

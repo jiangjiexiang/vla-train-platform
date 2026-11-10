@@ -199,3 +199,56 @@ describe('LoginPage', () => {
     });
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// local 模式（平台本地账号）。
+// 之前这类测试只有 ldap/token/off，所以 readTokenForMode 少了 local 分支时
+// 没有任何测试能拦住——线上表现是「登录成功却一直停在登录页」。
+// ---------------------------------------------------------------------------
+describe('local 模式', () => {
+  it('默认展示账号密码表单，而不是令牌输入框', async () => {
+    getHealthMock.mockImplementation(() =>
+      Promise.resolve({ ...HEALTH_OK, auth_required: true, auth_mode: 'local' }),
+    );
+
+    renderLogin();
+
+    expect(await screen.findByLabelText('用户名')).toBeTruthy();
+    expect(screen.queryByLabelText('访问令牌')).toBeNull();
+  });
+
+  it('说明这是平台账号，且不误显示 LDAP 文案', async () => {
+    getHealthMock.mockImplementation(() =>
+      Promise.resolve({ ...HEALTH_OK, auth_required: true, auth_mode: 'local' }),
+    );
+
+    renderLogin();
+
+    expect(await screen.findByText(/请输入平台账号与密码/)).toBeTruthy();
+    expect(screen.queryByText(/公司 LDAP/)).toBeNull();
+  });
+
+  it('登录成功后保存会话令牌并跳走（回归：token 读不到会卡在登录页）', async () => {
+    getHealthMock.mockImplementation(() =>
+      Promise.resolve({ ...HEALTH_OK, auth_required: true, auth_mode: 'local' }),
+    );
+    loginMock.mockImplementation(() =>
+      Promise.resolve({
+        token: 'local-session-1',
+        expires_at: '2026-01-01T00:00:00Z',
+        user: { username: 'admin', role: 'admin', source: 'local' },
+      }),
+    );
+
+    renderLogin();
+
+    fireEvent.change(await screen.findByLabelText('用户名'), { target: { value: 'admin' } });
+    fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'VlaPlatform2026' } });
+    fireEvent.click(screen.getByRole('button', { name: /^登\s*录$/ }));
+
+    // 登录被调用，且没有停在错误提示上
+    await waitFor(() => expect(loginMock).toHaveBeenCalledWith('admin', 'VlaPlatform2026'));
+    expect(screen.queryByText(/Invalid username or password/)).toBeNull();
+  });
+});

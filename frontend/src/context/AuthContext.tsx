@@ -50,13 +50,17 @@ function resolveAuthMode(authRequired: boolean | undefined, authMode: AuthMode |
 }
 
 function readTokenForMode(mode: AuthMode | null): string | null {
-  // local 和 ldap 一样：账号密码登录后拿到的是会话令牌。
-  // 之前只写了 ldap，local 模式返回 null —— 登录接口明明返回了 token，
-  // 前端却读不到，于是 isAuthenticated 一直为 false，
-  // 表现就是「点登录没反应/被送回登录页」。
-  if (mode === 'local' || mode === 'ldap') return getSessionToken();
-  if (mode === 'token') return getStaticToken() ?? getSessionToken();
-  return null;
+  // 不按 mode 分支，直接「会话令牌优先、静态令牌兜底」。
+  //
+  // 原来写的是 if (ldap) ... if (token) ... return null，加 local 模式时
+  // 忘了在这个函数里加分支，于是 local 下恒返回 null：登录接口明明返回了
+  // token 也存进了浏览器，前端却读不到，isAuthenticated 一直是 false，
+  // 表现就是「登录了没反应 / 一刷新又回登录页」。
+  //
+  // 这种「新增模式漏改某个 switch」的 bug 靠补分支只能修一次，
+  // 改成不依赖具体模式，以后再加认证方式也不会再踩。
+  if (mode === null || mode === 'off') return null;
+  return getSessionToken() ?? getStaticToken();
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {

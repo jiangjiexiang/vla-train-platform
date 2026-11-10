@@ -99,7 +99,21 @@ RUN set -eux; \
         "dill" \
         "multiprocess" \
         "xxhash" \
-        "aiohttp"
+        "aiohttp" \
+        "tensorboard"
+
+# tensorboard 单独说明为什么在这里装：
+#   metrics_hook.py 会在训练进程里开 SummaryWriter，把 loss/grad_norm/lr/update_s
+#   同步写到 <CHECKPOINT_DIR>/tensorboard。torch 2.6 不再自带 tensorboard
+#   （只有 torch.utils.tensorboard 这层门面），不显式装的话 hook 会降级成
+#   「只写 metrics.jsonl」——训练不受影响，但 TensorBoard 目录是空的。
+#   这里用不需要额外参数的 tensorboard 本体，走 Dockerfile 顶部的 PIP_INDEX_URL（国内源）。
+#   装完立刻验证，避免又出现「构建成功、运行到第一次写 events 才报 ImportError」。
+RUN set -eux; \
+    python -c "\
+from torch.utils.tensorboard import SummaryWriter; \
+import tensorboard; \
+print('tensorboard', tensorboard.__version__, 'SummaryWriter 可用')"
 
 # ---------- 第三步：lerobot 本体（不解析依赖）----------
 RUN set -eux; \
@@ -171,3 +185,4 @@ ENV NCCL_DEBUG=WARN
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["--help"]
+ 

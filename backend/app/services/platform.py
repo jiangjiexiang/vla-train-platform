@@ -1635,7 +1635,17 @@ class PlatformService:
         created_at = record["created_at"]
         cancelled_at = record["cancelled_at"]
         status = record.get("status") or "CANCELLED"
-        message = "Cancelled by user" if status == "CANCELLED" else f"Deleted after the job finished with {status}"
+        # 这张表不只存「用户取消」：任务跑完被 TTL 回收时，平台也会把终态
+        # 记进来，好让对象消失后仍能说出成败。所以提示语要按 status 分开，
+        # 不能一律说「已删除」——对一个正常完成的任务，那样讲是误导。
+        if status == "CANCELLED":
+            message = "Cancelled by user"
+        elif status == "SUCCEEDED":
+            message = "任务已成功完成（训练对象已被集群回收）"
+        elif status == "FAILED":
+            message = "任务已失败（训练对象已被集群回收）"
+        else:
+            message = f"Deleted after the job finished with {status}"
         return {
             "name": spec.name,
             "status": status,

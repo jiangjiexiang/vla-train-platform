@@ -356,7 +356,10 @@ def test_cancel_finished_job_preserves_success(service, kube):
     set_job_condition(kube, "exp001", "Succeeded")
     result = service.cancel("exp001")
     assert result["status"] == "SUCCEEDED", "删除已成功的任务不能改写成 CANCELLED"
-    assert "Deleted after" in result["message"]
+    # 提示语按 status 分行：对一个正常完成的任务说「已删除」是误导，
+    # 它其实是被 TTL 回收的，用户也没取消过它。
+    assert "成功完成" in result["message"]
+    assert "Deleted after" not in result["message"]
 
 
 def test_cancel_unknown_job_raises_404(service):

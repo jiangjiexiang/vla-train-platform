@@ -104,10 +104,14 @@ spec:
               value: vla-smolvla:latest
             - name: PLATFORM_DEFAULT_COMMAND
               value: python /app/train.py
+            # 宿主机路径：训练 Pod 的 hostPath 用它。所有产出都在项目 data/ 下。
+            # 注意这里踩过一次坑：这些环境变量会**覆盖** config.py 的默认值，
+            # 改了代码默认值但忘了改这里，训练 Job 仍然挂到旧路径上，
+            # 表现是「数据集明明修好了，训练还是报 KeyError」。
             - name: PLATFORM_DATASET_HOST_PATH
-              value: /data/vla-platform/datasets
+              value: /home/jjx/vla-train-platform/data/datasets
             - name: PLATFORM_CHECKPOINT_HOST_PATH
-              value: /data/vla-platform/checkpoints
+              value: /home/jjx/vla-train-platform/data/checkpoints
             - name: PLATFORM_DB_PATH
               value: /data/history/platform.db
             - name: PLATFORM_LOG_TAIL_DEFAULT

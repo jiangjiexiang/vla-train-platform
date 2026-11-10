@@ -80,8 +80,20 @@ spec:
                   name: vla-web-auth
                   key: PLATFORM_USER_TOKENS
                   optional: true
+            # 本地账号（auth_mode=local）。同样必须显式引用：
+            # Secret 里加了 key 不等于 Deployment 会自动注入——
+            # 之前就是因为漏了这一行，本地账号配了却登不上，
+            # 而服务看起来一切正常。
+            - name: PLATFORM_LOCAL_USERS
+              valueFrom:
+                secretKeyRef:
+                  name: vla-web-auth
+                  key: PLATFORM_LOCAL_USERS
+                  optional: true
+            # 默认不要求登录（单机自用的最省事配置）。
+            # 正式部署请用 overlay 或 set env 覆盖成 local/token/ldap。
             - name: PLATFORM_AUTH_MODE
-              value: token
+              value: off
             - name: PLATFORM_NAMESPACE
               value: vla-training
             - name: PLATFORM_QUEUE

@@ -9,17 +9,20 @@ spec:
       containers:
         - name: web
           env:
-            # 4090 内网单机默认免登录。PLATFORM_AUTH_MODE 优先于
-            # PLATFORM_AUTH_REQUIRED，两者都写是为了让老版本镜像回退时行为一致。
+            # 本地账号密码登录。账号配置在 secret/vla-web-auth 的
+            # PLATFORM_LOCAL_USERS（PBKDF2 哈希，不含明文密码），
+            # 账号怎么建、密码怎么改见 docs/auth.md。
             #
-            # 免登录的代价必须说清楚：此时**所有访问者都是 admin**，
-            # 能提交任务、取消他人的任务、改配额；审计里只能记到来源 IP。
-            # NodePort 让局域网任何机器都能访问，所以它只适合完全可信的内网。
-            #
-            # 需要多人共用或有外网暴露时，把覆盖清单里的值改成 token：
-            #   kubectl -n vla-platform set env deploy/vla-web PLATFORM_AUTH_MODE=token
-            # 然后按 docs/auth.md 分发访问令牌。
+            # 这里必须写死，不能依赖 `kubectl set env` 临时改：
+            # 只要有人重新 apply 这个清单，临时改的值就会被覆盖回去，
+            # 而服务看起来一切正常——登录却悄悄失效了。
             - name: PLATFORM_AUTH_MODE
-              value: "off"
+              value: "local"
             - name: PLATFORM_AUTH_REQUIRED
-              value: "false"
+              value: "true"
+
+            # 三种模式的区别（改这里之前先想清楚代价）：
+            #   off   免登录，**所有访问者都是 admin**，能取消他人任务、改配额，
+            #         审计里只能记到来源 IP。只适合完全可信的内网。
+            #   local 账号密码，本文件当前的选择。
+            #   token 静态令牌，适合机器调用。

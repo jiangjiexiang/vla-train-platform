@@ -1,4 +1,4 @@
-# 高性能分布系统
+# 训练平台
 
 面向 VLA（Vision-Language-Action）模型训练的 GPU 训练平台。
 

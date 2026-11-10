@@ -672,3 +672,17 @@ body {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+
+/* TensorBoard iframe。
+ * 浏览器给 iframe 的默认尺寸是 300x150，不设样式的话官方界面会被挤成
+ * 一个几乎看不见的小方块——侧栏占满、曲线区没空间。
+ * 高度给足 720px，TensorBoard 的图表区本身是可滚动的。 */
+.tensorboard-frame {
+  display: block;
+  width: 100%;
+  height: 720px;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  background: #fff;
+  margin-bottom: 8px;
+}

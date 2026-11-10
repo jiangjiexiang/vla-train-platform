@@ -92,7 +92,7 @@ export function LoginPage() {
       <Card className="login-card">
         <div className="login-brand">
           <span className="login-logo"><ApiOutlined /></span>
-          <Typography.Title level={2}>高性能分布系统</Typography.Title>
+          <Typography.Title level={2}>训练平台</Typography.Title>
           <Typography.Paragraph type="secondary">GPU 训练任务提交、排队与日志管理</Typography.Paragraph>
         </div>
         {alertMessage && (

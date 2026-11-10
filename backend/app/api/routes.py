@@ -4,6 +4,7 @@ from enum import Enum
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 
 from ..auth import (
     AuthContext,
@@ -105,11 +106,17 @@ def login(
         session = service.sessions.issue(
             user.username, user.role, settings.session_ttl_hours, source="local", verified=False
         )
-        return {
-            "token": session["token"],
-            "expires_at": session["expires_at"],
-            "user": {"username": user.username, "role": user.role, "source": "local"},
-        }
+        response = JSONResponse(
+            {
+                "token": session["token"],
+                "expires_at": session["expires_at"],
+                "user": {"username": user.username, "role": user.role, "source": "local"},
+            }
+        )
+        # 额外种一个 Cookie：TensorBoard 的 iframe 带不了 Authorization 头，
+        # 只能靠 Cookie 过反代的鉴权。值就是会话令牌本身，revoke 后立即失效。
+        _set_tensorboard_cookie(response, session["token"], settings)
+        return response
 
     if settings.auth_mode != "ldap":
         raise HTTPException(
@@ -135,11 +142,15 @@ def login(
     session = service.sessions.issue(
         user.username, user.role, settings.session_ttl_hours, source="ldap", verified=False
     )
-    return {
-        "token": session["token"],
-        "expires_at": session["expires_at"],
-        "user": {"username": user.username, "role": user.role, "source": "ldap"},
-    }
+    response = JSONResponse(
+        {
+            "token": session["token"],
+            "expires_at": session["expires_at"],
+            "user": {"username": user.username, "role": user.role, "source": "ldap"},
+        }
+    )
+    _set_tensorboard_cookie(response, session["token"], settings)
+    return response
 
 
 @router.post("/auth/logout", status_code=204)
@@ -509,3 +520,23 @@ def queues(service: PlatformService = Depends(get_service)) -> dict[str, Any]:
 def _ensure_visible(user: AuthContext, job: dict[str, Any]) -> None:
     if not may_access_job(user, str(job.get("owner") or "")):
         raise job_access_denied(f"job {job.get('name')} not found")
+
+
+def _set_tensorboard_cookie(response, token: str, settings) -> None:
+    """种下 TensorBoard 反代用的 Cookie。
+
+    iframe 发出的请求不会带 Authorization 头（那是 fetch/XHR 的机制），
+    所以 TensorBoard 的鉴权只能走 Cookie。
+
+    HttpOnly：脚本读不到，降低 XSS 窃取风险。
+    SameSite=Lax：同站导航会带上，跨站请求不带。
+    path=/tensorboard：只有访问 TensorBoard 时才携带，不污染其他请求。
+    """
+    response.set_cookie(
+        key="vla_tb_session",
+        value=token,
+        max_age=settings.session_ttl_hours * 3600,
+        httponly=True,
+        samesite="lax",
+        path="/tensorboard",
+    )

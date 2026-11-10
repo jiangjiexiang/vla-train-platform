@@ -17,13 +17,20 @@ from .services.job_watcher import start_job_watcher
 from .services.kubernetes import KubernetesClient
 from .services.notifier import Notifier
 from .services.platform import PlatformService
+from .services.tensorboard_proxy import PATH_PREFIX as TB_PATH_PREFIX
+from .services.tensorboard_proxy import TensorboardProcess, proxy_request
 
 logger = logging.getLogger("vla-platform")
+
+# TensorBoard 反代用 Cookie 鉴权。值就是现有的会话令牌本身——
+# 不引入新的签名密钥，会话被 revoke 后 Cookie 立刻失效。
+# 前端登录成功后把它种上，iframe 会自动携带。
+TENSORBOARD_COOKIE = "vla_tb_session"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
-    app = FastAPI(title="高性能分布系统", version="1.0.0")
+    app = FastAPI(title="训练平台", version="1.0.0")
     app.state.settings = settings
     history = HistoryStore(settings.db_path)
     kubernetes = KubernetesClient(settings)
@@ -134,6 +141,123 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(datasets_router)
     app.include_router(runs_router)
 
+    # --- TensorBoard 原生界面 -------------------------------------------
+    # 起一个 tensorboard 子进程，用反代暴露到 /tensorboard/。
+    # 一个进程服务所有任务：--logdir 指向 checkpoints 根目录，
+    # 每个任务子目录自动成为一个 run。
+    tensorboard = TensorboardProcess(
+        logdir=settings.checkpoint_host_path,
+        port=settings.tensorboard_port,
+    )
+    app.state.tensorboard = tensorboard
+
+    if settings.tensorboard_enabled:
+
+        @app.on_event("startup")
+        def start_tensorboard() -> None:
+            # 失败不抛异常：这是附加功能，挂掉不该让平台起不来。
+            tensorboard.start()
+
+        @app.on_event("shutdown")
+        def stop_tensorboard() -> None:
+            tensorboard.stop()
+
+    @app.api_route(
+        TB_PATH_PREFIX,
+        methods=["GET", "POST", "HEAD", "OPTIONS"],
+        include_in_schema=False,
+    )
+    # TensorBoard 的静态资源里有一部分走绝对路径 /font-roboto/*，
+    # 不在 /tensorboard/ 前缀下，会被 SPA 兜底返回 index.html，
+    # 浏览器解析字体时就会报 invalid sfntVersion。单独转一道。
+    @app.api_route("/font-roboto/{rest:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    async def tensorboard_fonts(rest: str, request: Request):
+        from fastapi.responses import Response
+
+        current_settings = app.state.settings
+        if current_settings.auth_mode != "off":
+            if not request.cookies.get(TENSORBOARD_COOKIE):
+                return Response(status_code=401)
+        status, headers, payload = proxy_request(
+            base_url=app.state.tensorboard.base_url,
+            path="font-roboto/" + rest,
+            method=request.method,
+            headers={k: v for k, v in request.headers.items() if k.lower() != "accept-encoding"},
+            body=None,
+        )
+        keep = {"content-type", "cache-control"}
+        return Response(
+            content=payload,
+            status_code=status,
+            headers={k: v for k, v in headers if k.lower() in keep},
+        )
+
+    @app.api_route(
+        TB_PATH_PREFIX + "/{rest:path}",
+        methods=["GET", "POST", "HEAD", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def tensorboard_proxy(rest: str = "", request: Request = None):  # type: ignore[assignment]
+        """TensorBoard 反向代理。
+
+        **必须注册在 spa_fallback 之前**：SPA 兜底会把任何未匹配路径都返回
+        index.html 并带上 200，那样未登录访问 /tensorboard/ 看起来是成功的，
+        实际拿到的是平台自己的首页——既骗用户也骗测试。
+
+        鉴权只能靠 Cookie：iframe 发出的请求不会带 Authorization 头。
+        这里明确不接受 Authorization，避免出现两套并存的认证路径。
+        """
+        from fastapi.responses import Response
+
+        service = app.state.service
+        current_settings = app.state.settings
+
+        if current_settings.auth_mode == "off":
+            pass  # 免登录部署，不校验
+        else:
+            cookie = request.cookies.get(TENSORBOARD_COOKIE)
+            if not cookie:
+                return Response(
+                    content="需要登录后访问 TensorBoard",
+                    status_code=401,
+                    media_type="text/plain; charset=utf-8",
+                )
+            session = service.sessions.lookup(cookie)
+            if session is None:
+                return Response(
+                    content="登录已失效，请重新登录",
+                    status_code=401,
+                    media_type="text/plain; charset=utf-8",
+                )
+
+        body = await request.body()
+        # 关键：不要把客户端的 Accept-Encoding 传下去。
+        # TensorBoard 看到 gzip 会压缩响应，urllib 又自动解压，
+        # 结果是我们拿到的是解压后的内容、却顶着 gzip 的头往下发，
+        # 顺便 content-length 也对不上——浏览器拿到截断的 JS，
+        # 报 "Invalid or unexpected token"，页面一片空白。
+        # 我们自己不做压缩，让器自己协商就好，这里统一要求明文。
+        forward_headers = {
+            k: v for k, v in request.headers.items() if k.lower() != "accept-encoding"
+        }
+        status, headers, payload = proxy_request(
+            base_url=app.state.tensorboard.base_url,
+            path=rest,
+            method=request.method,
+            headers=forward_headers,
+            body=body if body else None,
+        )
+        # 只保留安全的白名单头。
+        # content-length 必须丢掉：Response 会按实际 payload 重新算，
+        # 照抄上游的值只会写出错误的长度。
+        keep = {"content-type", "cache-control", "expires", "etag", "last-modified"}
+        passthrough = {k: v for k, v in headers if k.lower() in keep}
+        return Response(
+            content=payload,
+            status_code=status,
+            headers=passthrough,
+        )
+
     static_root = Path(settings.static_dir).resolve()
     assets = static_root / "assets"
     if assets.is_dir():
@@ -156,4 +280,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-app = create_app()
+# 模块级实例供 `uvicorn app.main:app` 使用。
+# 但它会在导入时就读环境变量——测试里 import 这个模块会连带执行 create_app()，
+# 没配 PLATFORM_API_TOKEN 就直接炸，整个测试文件收集失败。
+# 改成惰性构造：真正需要时（ASGI 服务器访问 app 对象）才创建。
+_app: FastAPI | None = None
+
+
+def __getattr__(name: str):
+    global _app
+    if name == "app":
+        if _app is None:
+            _app = create_app()
+        return _app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

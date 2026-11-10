@@ -72,7 +72,7 @@ export function AppLayout() {
       <Header className="app-header">
         <div className="brand" onClick={() => navigate('/')} role="button" tabIndex={0}>
           <span className="brand-mark"><ApiOutlined /></span>
-          <span>高性能分布系统</span>
+          <span>训练平台</span>
         </div>
         <Menu
           theme="dark"

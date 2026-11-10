@@ -800,6 +800,29 @@ class PlatformService:
             key=lambda item: (item["image"] != self.settings.default_image, item["image"]),
         )
 
+    def _job_existed(self, name: str) -> bool:
+        """这个任务是否曾经存在过（不管 K8s 对象还在不在）。
+
+        为什么要单独抽一个方法：每个读接口都各自写一遍「K8s 有没有、取消记录
+        有没有」，很容易漏。实测就漏过——任务被 ttlSecondsAfterFinished 回收后，
+        /metrics 能读（那里改过一次），/logs、/events、/timeline 却坚持 404。
+        同一个任务一半接口说存在、一半说不存在，用户只会觉得平台坏了。
+
+        判据有三个，任一成立就算存在过：
+          - K8s 对象还在（正在跑或还没被回收）
+          - 有取消记录
+          - 有提交记录（最常见：跑完了，对象被 TTL 回收了）
+        """
+        if self.kubernetes.get_job(name) is not None:
+            return True
+        if self.history.get_cancellation(name) is not None:
+            return True
+        return self.history.find_submission(name) is not None
+
+    def _require_job_existed(self, name: str) -> None:
+        if not self._job_existed(name):
+            raise ServiceError(404, f"job {name} not found")
+
     def get_job(self, name: str) -> dict[str, Any]:
         job = self.kubernetes.get_job(name)
         if job is None:
@@ -893,18 +916,25 @@ class PlatformService:
     def logs(self, name: str, tail_lines: int) -> dict[str, Any]:
         job = self.kubernetes.get_job(name)
         if job is None:
-            if self.history.get_cancellation(name) is None:
-                raise ServiceError(404, f"job {name} not found")
-            return {"name": name, "pod_name": None, "logs": ""}
+            # 任务跑完被回收后日志就读不到了（Pod 已经不存在），
+            # 但它确实存在过，不该报 404——返回空日志并说清楚原因。
+            self._require_job_existed(name)
+            return {
+                "name": name,
+                "pod_name": None,
+                "logs": "任务已经结束，训练 Pod 已被回收，日志不再可取。\n"
+                "需要排查历史问题时可以看「事件」和「时间线」，那里保留了任务的生命周期记录。",
+            }
         pods = self.kubernetes.list_job_pods(name)
         pod = self._select_pod(pods)
         if pod is None:
             return {"name": name, "pod_name": None, "logs": ""}
         pod_name = pod.get("metadata", {}).get("name")
+        raw = self.kubernetes.read_pod_log(pod_name, tail_lines)
         return {
             "name": name,
             "pod_name": pod_name,
-            "logs": self.kubernetes.read_pod_log(pod_name, tail_lines),
+            "logs": normalize_log_newlines(raw),
         }
 
     def job_checkpoints(self, name: str, spec_owner: str | None = None) -> dict[str, Any]:
@@ -921,8 +951,7 @@ class PlatformService:
 
         job = self.kubernetes.get_job(name)
         if job is None:
-            if self.history.get_cancellation(name) is None:
-                raise ServiceError(404, f"job {name} not found")
+            self._require_job_existed(name)
             return {"name": name, "current_stage": "finished", "items": []}
         pods = self.kubernetes.list_job_pods(name)
         workload = self._matching_workload(job, self.kubernetes.list_workloads(), pods)
@@ -1004,8 +1033,7 @@ class PlatformService:
     def events(self, name: str) -> dict[str, Any]:
         job = self.kubernetes.get_job(name)
         if job is None:
-            if self.history.get_cancellation(name) is None:
-                raise ServiceError(404, f"job {name} not found")
+            self._require_job_existed(name)
             return {"name": name, "items": []}
         pod_names = [
             pod.get("metadata", {}).get("name", "")
@@ -1743,3 +1771,21 @@ def _slim_dataset(payload: dict[str, Any]) -> dict[str, Any]:
     slim["state_dim"] = len(payload.get("state_names") or []) or payload.get("state_dim") or 0
     slim["has_stats"] = payload.get("stats") is not None
     return slim
+
+
+def normalize_log_newlines(raw: str) -> str:
+    """把日志里的回车符规整成换行。
+
+    为什么要这么做：训练用的进度条（tqdm 那套）靠 `\r` 回车覆盖同一行
+    来做原地刷新，终端里看着是动态进度条。但网页的 <pre> 里 `\r` 不换行，
+    于是几十次进度刷新被拼成一条几万字符的超长行，
+    真的 INFO 行全被挤到后面看不清。
+
+    这里只做一件事：`\r\n` 和单独的 `\r` 都当成行结束。
+    结果会比终端里看到的"长"——每个进度刷新各占一行——
+    但至少能读，而且保留了完整信息（没有丢日志）。
+    """
+    if not raw:
+        return raw
+    return raw.replace("\r\n", "\n").replace("\r", "\n")
+

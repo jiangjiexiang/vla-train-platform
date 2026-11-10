@@ -123,13 +123,16 @@ def resolve_dataset_dir(
     if "\0" in raw:
         raise UnsafeDatasetPath("path 不能包含 NUL 字符")
 
-    path = to_container_path(settings, path)
+    # 先翻译成容器内路径，之后的校验都必须基于翻译结果。
+    # 这里踩过一次坑：翻译结果赋给了 path，下面却继续用 raw，
+    # 于是翻译逻辑写了却完全没生效——用宿主机路径注册永远报「不在根目录之下」。
+    translated = to_container_path(settings, raw)
     root = datasets_root(settings)
     if not root.is_dir():
         # 根目录没挂上时，任何路径都不该被当成合法数据集。
         raise UnsafeDatasetPath(f"数据集根目录不存在：{root}")
     # resolve() 会消掉 .. 与软链接；不存在也没关系，后面单独判断存在性。
-    target = Path(raw).resolve()
+    target = Path(translated).resolve()
 
     # --- 越界检查（防 ../../etc、防软链接跳出去） -------------------------
     granted = [item for item in allowed_roots(settings) if item != root]

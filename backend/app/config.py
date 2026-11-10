@@ -23,6 +23,10 @@ class Settings:
     # off / token / ldap，默认 token（v0.8 行为）。
     auth_mode: str = "token"
     session_ttl_hours: int = 12
+    # TensorBoard 原生界面（iframe 嵌入）。关掉时整个功能不可用，
+    # 但不影响任何其他能力。
+    tensorboard_enabled: bool = True
+    tensorboard_port: int = 6106
     ldap_url: str = ""
     ldap_base_dn: str = ""
     ldap_user_template: str = "uid={username},{base_dn}"
@@ -137,6 +141,12 @@ class Settings:
             api_token=token,
             auth_required=auth_required,
             auth_mode=auth_mode,
+            tensorboard_enabled=_parse_bool(
+                os.environ.get("PLATFORM_TENSORBOARD_ENABLED", "true"), "PLATFORM_TENSORBOARD_ENABLED"
+            ),
+            tensorboard_port=_parse_positive_int(
+                os.environ.get("PLATFORM_TENSORBOARD_PORT", "6106"), "PLATFORM_TENSORBOARD_PORT"
+            ),
             session_ttl_hours=_parse_positive_int(
                 os.environ.get("PLATFORM_SESSION_TTL_HOURS", "12"), "PLATFORM_SESSION_TTL_HOURS"
             ),

@@ -367,3 +367,43 @@ def test_host_path_translation_is_noop_without_host_path():
     settings = Settings(api_token="t", dataset_host_path="", datasets_mount_path="/datasets")
 
     assert to_container_path(settings, "/data/vla-platform/datasets/x") == "/data/vla-platform/datasets/x"
+
+
+def test_resolve_accepts_host_path(tmp_path):
+    """用宿主机路径注册必须能走通。
+
+    这条测的是 resolve_dataset_dir 内部真的用了翻译结果。
+    之前只测 to_container_path 本身，翻译函数是对的，
+    但 caller 把结果丢了、继续用原始路径，测试照样全绿——
+    真实调用时用宿主机路径永远 400。所以必须在这里端到端测一次。
+    """
+    root = tmp_path / "datasets"
+    dataset = root / "probe-ds"
+    (dataset / "meta").mkdir(parents=True)
+    (dataset / "meta" / "info.json").write_text(
+        json.dumps(
+            {
+                "codebase_version": "v2.0",
+                "total_episodes": 1,
+                "total_frames": 10,
+                "fps": 30,
+                "robot_type": "probe",
+                "chunks_size": 1000,
+                "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+                "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
+                "features": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(
+        api_token="t",
+        dataset_host_path=str(root),          # 宿主机路径
+        datasets_mount_path=str(root),        # 这里两者相同，但下面传的是「宿主机形式」
+    )
+
+    resolved = resolve_dataset_dir(settings, str(dataset))
+
+    # 返回的是 ResolvedDatasetDir，要比较 .path
+    assert resolved.path == dataset.resolve()

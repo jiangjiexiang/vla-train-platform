@@ -112,6 +112,14 @@ spec:
               value: /home/jjx/vla-train-platform/data/datasets
             - name: PLATFORM_CHECKPOINT_HOST_PATH
               value: /home/jjx/vla-train-platform/data/checkpoints
+            # 训练代码从宿主机挂载，覆盖镜像里的 train_vla.py 等。
+            #
+            # 改一行训练脚本要不要重建 10GB 镜像？开了这个就不用：
+            # 挂载目录到容器的 /app，改完重新提交任务即可生效。
+            # 不设（或设为空）= 用镜像自带的代码，镜像自包含，
+            # 拿到别的机器也能直接跑。正式发布时应该留空。
+            - name: PLATFORM_TRAINING_CODE_HOST_PATH
+              value: /home/jjx/vla-train-platform/images/smolvla-train
             - name: PLATFORM_DB_PATH
               value: /data/history/platform.db
             - name: PLATFORM_LOG_TAIL_DEFAULT

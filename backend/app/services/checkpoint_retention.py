@@ -115,3 +115,35 @@ def _dir_size(path: Path) -> int:
     except OSError:
         return 0
     return total
+
+
+class UnsafePath(ValueError):
+    """目标路径不安全，拒绝删除。"""
+
+
+def safe_job_dir(root: Path, name: str) -> Path:
+    """把任务名解析成 root 下的绝对路径，越界就拒绝。
+
+    我们真的因为一条 `rm -rf` 丢过全部训练产物：一个脚本里 `$JOB` 展开为空，
+    `rm -rf "/checkpoints/checkpoints"` 在容器内以 root 跑掉了。
+    所以这里不做"尽力而为"，而是任何可疑输入都直接拒绝：
+
+    * 空值、带空白、含通配符或路径分隔符 → 拒绝
+    * resolve() 之后必须在 root 之下 → 防 `..` 与软链接逃逸
+    * 解析结果等于 root 本身 → 拒绝（那正是上次的事故）
+    """
+    if not name or not name.strip():
+        raise UnsafePath("任务名不能为空")
+    if name != name.strip():
+        raise UnsafePath(f"任务名两端有空白：{name!r}")
+    for bad in ("*", "?", "[", "]", "/", "\\"):
+        if bad in name:
+            raise UnsafePath(f"任务名不能包含 {bad!r}：{name!r}")
+
+    root_resolved = root.resolve()
+    target = (root_resolved / name).resolve()
+    if target == root_resolved:
+        raise UnsafePath(f"拒绝操作产物根目录本身：{target}")
+    if not target.is_relative_to(root_resolved):
+        raise UnsafePath(f"目标不在 {root_resolved} 之下：{target}")
+    return target

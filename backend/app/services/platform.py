@@ -26,6 +26,7 @@ from ..params_templates import (
 from ..recipes.loader import Recipe, RecipeStore
 from ..templates.pytorchjob import render_pytorch_job
 from .audit import AuditStore
+from .checkpoint_retention import UnsafePath, safe_job_dir
 from .errors import ServiceError
 from .kubernetes import KubernetesClient
 from .queue_block import diagnose_queue_block
@@ -292,7 +293,13 @@ class PlatformService:
 
         removed_checkpoints: list[str] = []
         for name in plan.checkpoints:
-            path = Path(self.settings.checkpoint_host_path) / name
+            # 路径必须先校验：直接字符串拼接 + rmtree 是删库级别的风险，
+            # 我们已经因为一次变量展开为空丢掉过全部产物。
+            try:
+                path = safe_job_dir(Path(self.settings.checkpoint_host_path), name)
+            except UnsafePath as exc:
+                failed.append({"job": name, "stage": "path_check", "error": str(exc)})
+                continue
             try:
                 if path.is_dir():
                     import shutil

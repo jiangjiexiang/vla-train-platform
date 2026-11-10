@@ -158,3 +158,89 @@ def test_pruner_handles_missing_mtime(tmp_path):
         _ = now - d.stat().st_mtime
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# 路径安全：我们真的因为一条 rm -rf 丢过全部训练产物。
+# 一个脚本里 $JOB 展开为空，rm -rf "/checkpoints/checkpoints" 在容器内以 root 跑掉了。
+# 所以这里测试的重点不是"能删"，而是"什么绝对不能删"。
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "name",
+    [
+        "",                     # 空值——正是上次事故的形式
+        "   ",                  # 纯空白
+        " smolvla-001",         # 前导空白，shell 展开出错时的典型残留
+        "smolvla-001 ",         # 尾随空白
+        "*",                    # 通配符
+        "smolvla-*",
+        "?",                    # 单字符通配
+        "[abc]",
+        "../other",             # 路径穿越
+        "a/b",
+        "/checkpoints",         # 绝对路径
+        "/data/vla-platform/checkpoints",
+        "smolvla-001/../..",
+    ],
+)
+def test_rejects_dangerous_names(tmp_path, name):
+    from app.services.checkpoint_retention import UnsafePath, safe_job_dir
+
+    with pytest.raises(UnsafePath):
+        safe_job_dir(tmp_path, name)
+
+
+def test_accepts_normal_name(tmp_path):
+    from app.services.checkpoint_retention import safe_job_dir
+
+    root = tmp_path / "checkpoints"
+    root.mkdir()
+
+    target = safe_job_dir(root, "smolvla-pick1028-003")
+
+    assert target == (root / "smolvla-pick1028-003").resolve()
+
+
+def test_rejects_root_itself(tmp_path):
+    """解析结果等于根目录时必须拒绝——那正是上次删库的形式。"""
+    from app.services.checkpoint_retention import UnsafePath, safe_job_dir
+
+    root = tmp_path / "checkpoints"
+    root.mkdir()
+
+    with pytest.raises(UnsafePath):
+        safe_job_dir(root, ".")
+
+
+def test_symlink_escape_rejected(tmp_path):
+    """软链接指到外面也要拒绝：resolve() 之后再比较前缀就露馅了。"""
+    from app.services.checkpoint_retention import UnsafePath, safe_job_dir
+
+    root = tmp_path / "checkpoints"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "evil").symlink_to(outside)
+
+    with pytest.raises(UnsafePath):
+        safe_job_dir(root, "evil")
+
+
+def test_cleanup_does_not_delete_outside_root(tmp_path):
+    """即使传入越界的名字，cleanup 也只记录失败，不真的删。"""
+    from app.services.checkpoint_retention import UnsafePath, safe_job_dir
+
+    root = tmp_path / "checkpoints"
+    root.mkdir()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "important.txt").write_text("keep me")
+
+    # 模拟 cleanup_jobs 的路径校验环节
+    try:
+        safe_job_dir(root, "../victim")
+        raise AssertionError("应当拒绝")
+    except UnsafePath:
+        pass
+
+    assert (victim / "important.txt").exists(), "越界目标被删掉了"

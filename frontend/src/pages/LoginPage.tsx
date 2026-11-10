@@ -45,7 +45,12 @@ export function LoginPage() {
   if (isAuthenticated) return <Navigate to="/dashboard" replace />;
 
   // 默认模式由 /health 的 auth_mode 决定；用户仍可手动切换（兼容后端尚未部署 /auth/login 的情况）
-  const activeTab: LoginTab = tab ?? (authMode === 'ldap' ? 'ldap' : 'token');
+  // local 和 ldap 都是「用户名 + 密码」，默认就落到那个 tab。
+  // 早先的判断只认 ldap，于是 local 模式默认停在「令牌登录」——
+  // 用户看到的是一个要粘贴 64 位令牌的框，账号密码根本没地方输，
+  // 只能自己去点第二个 tab。这就是「账号密码登不上」的直接原因。
+  const defaultTab: LoginTab = authMode === 'local' || authMode === 'ldap' ? 'ldap' : 'token';
+  const activeTab: LoginTab = tab ?? defaultTab;
 
   const goNext = () => {
     const from = (location.state as { from?: string } | null)?.from || '/dashboard';
@@ -105,6 +110,14 @@ export function LoginPage() {
             showIcon
             className="login-error"
             message="本平台使用公司 LDAP/AD 账号登录，请输入域账号的用户名与密码。"
+          />
+        )}
+        {authMode === 'local' && (
+          <Alert
+            type="info"
+            showIcon
+            className="login-error"
+            message="请输入平台账号与密码。忘记密码请联系管理员重置。"
           />
         )}
         <Segmented<LoginTab>

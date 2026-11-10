@@ -9,7 +9,9 @@ export type JobStatus =
 export type Priority = 'low' | 'normal' | 'high';
 
 // v0.9：鉴权模式（PLATFORM_AUTH_MODE），off 等价于旧版 PLATFORM_AUTH_REQUIRED=false
-export type AuthMode = 'off' | 'token' | 'ldap';
+// 与后端 config.AUTH_MODES 保持一致。
+// local = 平台自己维护的账号密码（docs/auth.md）
+export type AuthMode = 'off' | 'token' | 'ldap' | 'local';
 
 // v0.9：角色。admin 可管理用户与配额、查看所有用户的任务；user 只能操作自己的任务
 export type UserRole = 'admin' | 'user';

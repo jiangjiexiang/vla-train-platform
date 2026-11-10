@@ -63,6 +63,12 @@ class Settings:
     # "DataLoader worker is killed by signal: Bus error"。
     # 这是容器训练最经典的坑，平台必须默认给够。
     shm_size: str = "4Gi"
+    # 数据库备份。审计日志、提交历史全在这一个 SQLite 文件里，
+    # 损坏就全没了。默认每周目录下留 14 份。
+    backup_dir: str = "/data/history/backups"
+    backup_keep: int = 14
+    # 自动备份间隔（秒）。0 表示不做自动备份，只能手动触发。
+    backup_interval_seconds: int = 86400
     static_dir: str = str(Path(__file__).resolve().parent.parent / "static")
 
     def __post_init__(self) -> None:
@@ -135,6 +141,14 @@ class Settings:
             gpu_metrics_url=os.environ.get("PLATFORM_GPU_METRICS_URL", "http://vla-gpu-metrics:8080/"),
             user_tokens=os.environ.get("PLATFORM_USER_TOKENS", ""),
             shm_size=os.environ.get("PLATFORM_SHM_SIZE", "4Gi"),
+            backup_dir=os.environ.get("PLATFORM_BACKUP_DIR", "/data/history/backups"),
+            backup_keep=_parse_nonnegative_int(
+                os.environ.get("PLATFORM_BACKUP_KEEP", "14"), "PLATFORM_BACKUP_KEEP"
+            ),
+            backup_interval_seconds=_parse_nonnegative_int(
+                os.environ.get("PLATFORM_BACKUP_INTERVAL_SECONDS", "86400"),
+                "PLATFORM_BACKUP_INTERVAL_SECONDS",
+            ),
             job_ttl_seconds=_parse_nonnegative_int(
                 os.environ.get("PLATFORM_JOB_TTL_SECONDS", "3600"), "PLATFORM_JOB_TTL_SECONDS"
             ),

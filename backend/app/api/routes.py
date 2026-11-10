@@ -404,6 +404,35 @@ def checkpoint_usage(service: PlatformService = Depends(get_service)) -> dict[st
     return service.checkpoint_usage()
 
 
+@router.get("/maintenance/backups", dependencies=[Depends(require_admin)])
+def list_backups(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    """已有备份列表。"""
+    from pathlib import Path as _Path
+
+    from ..services.backup import list_backups as _list
+
+    items = _list(_Path(settings.backup_dir))
+    return {"items": items, "total": len(items), "dir": settings.backup_dir}
+
+
+@router.post("/maintenance/backups", dependencies=[Depends(require_admin)])
+def create_backup(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    """立刻做一次备份。
+
+    用 sqlite3 的在线备份 API，不停服务、不需要锁库；
+    直接 cp 文件在并发写入时可能拿到半个事务，那样的备份看着有、实际打不开。
+    """
+    from pathlib import Path as _Path
+
+    from ..services.backup import create_backup as _create
+    from ..services.backup import prune_backups as _prune
+
+    result = _create(_Path(settings.db_path), _Path(settings.backup_dir))
+    if result.get("ok"):
+        _prune(_Path(settings.backup_dir), settings.backup_keep)
+    return result
+
+
 @router.get("/audit")
 def list_audit(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,

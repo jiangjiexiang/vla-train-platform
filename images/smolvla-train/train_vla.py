@@ -189,7 +189,7 @@ def build_train_command(
     # DecodingError: Missing required field(s) repo_id，且报错完全看不出该填什么。
     command = [
         "lerobot-train",
-        f"--policy.path={args.policy_path}",
+        # --policy.path 不在这里传：见下方 resume 分支的说明
         # policy.repo_id / dataset.repo_id 都是 draccus 的必填项：
         # 前者是「训练完把模型推到 Hub 的哪个仓库」，后者是数据集标识。
         # 我们产物落在本地 checkpoint 目录，不需要推 Hub，但要填一个占位值，
@@ -266,6 +266,38 @@ def build_train_command(
         legacy = output_dir.parent / f".attempt-{index}"
         output_dir.rename(legacy)
         print(f"输出目录已存在，历史内容移动到 {legacy.name}", flush=True)
+
+    if args.resume:
+        # lerobot 0.4.4 的续训协议（train.py validate 里那段 if/elif）：
+        #
+        #   if policy_path:            <- 传了 --policy.path 就走这里
+        #       self.policy = from_pretrained(policy_path)
+        #   elif self.resume:          <- 只有不传 policy.path 才会到这里
+        #       self.checkpoint_path = policy_dir.parent
+        #
+        # 也就是说 --policy.path 和 --resume 同时传时，**续训分支根本不会执行**，
+        # checkpoint_path 保持 None，optimizer 也就不会被创建（因为
+        # `elif ... and not self.resume` 会跳过），最后崩在
+        # "Optimizer config is required but not provided"。
+        #
+        # 之前平台就是一直传 --policy.path 的，所以续训必然失败。
+        # 正确做法是续训时不传 policy.path，改用 --config_path 指向
+        # checkpoint 里的 train_config.json，让 lerobot 自己从那里恢复配置。
+        config_candidates = sorted(
+            output_dir.glob("checkpoints/*/pretrained_model/train_config.json"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        if not config_candidates:
+            raise SystemExit(
+                f"续训失败：{output_dir}/checkpoints/*/pretrained_model/train_config.json 不存在。"
+                "没有配置文件就无法恢复优化器与学习率，请确认 checkpoint 完整。"
+            )
+        command.append(f"--config_path={config_candidates[-1]}")
+        print(f"续训：使用配置 {config_candidates[-1]}", flush=True)
+        # resume=true 时命令行上的 steps/lr 会被 checkpoint 里的配置覆盖，
+        # 这是 lerobot 的既定行为（train.py 顶部注释有说明），不是平台丢参数。
+    else:
+        command.append(f"--policy.path={args.policy_path}")
 
     command.append(f"--resume={'true' if args.resume else 'false'}")
     return command

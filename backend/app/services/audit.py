@@ -34,6 +34,7 @@ ACTIONS = {
     "run.create",
     "jobs.cleanup",
     "dataset.scan",
+    "dataset.register",
     "user.quota.update",
     "image.params.put",
     "image.params.delete",

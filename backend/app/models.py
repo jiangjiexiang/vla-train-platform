@@ -185,6 +185,21 @@ def spec_from_stored_json(payload: str) -> SubmitSpec:
     return SubmitSpec.model_validate({key: value for key, value in data.items() if key in known})
 
 
+class DatasetRegisterRequest(BaseModel):
+    """注册一个已存在的数据集目录（仅 admin）。
+
+    路径是否合法（在允许的根目录内、是 LeRobot 数据集）由服务层校验，
+    这里只拦明显非法的输入形状。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 宿主机路径和容器内路径都行：Web 容器与宿主机挂的是同一个 /data/vla-platform。
+    path: str = Field(min_length=1, max_length=1024)
+    # 不给就用目录名，与启动扫描得到的结果保持一致。
+    id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
 class DatasetScanRequest(BaseModel):
     """触发数据集扫描。id 为空表示扫描全部。"""
 

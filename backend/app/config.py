@@ -45,6 +45,9 @@ class Settings:
     # Web 容器内看到数据集的路径。Web Pod 挂载了同一个 hostPath，
     # 扫描器在这里读 meta/info.json（见 deploy/web 的 volumeMounts）。
     datasets_mount_path: str = "/datasets"
+    # 注册数据集时额外允许的根目录（逗号分隔）。为空时只接受数据集根的直接子目录，
+    # 见 services/dataset_register.py。
+    dataset_allowed_roots: tuple[str, ...] = ()
     checkpoint_host_path: str = "/data/vla-platform/checkpoints"
     db_path: str = "/data/history/platform.db"
     kubeconfig: str | None = None
@@ -77,6 +80,17 @@ class Settings:
     backup_keep: int = 14
     # 自动备份间隔（秒）。0 表示不做自动备份，只能手动触发。
     backup_interval_seconds: int = 86400
+    # 任务终态通知。三个 webhook 都是可选的：全空时完全不启用通知
+    # （不起后台线程、不建表、不发任何请求），行为与加这个功能之前完全一致。
+    # 钉钉/企微的机器人 webhook；通用 webhook 是任意的 JSON POST 接收端。
+    dingtalk_webhook: str = ""
+    wecom_webhook: str = ""
+    generic_webhook: str = ""
+    # 轮询间隔（秒）：多久扫一次 K8s 里有没有任务到达终态。
+    notify_interval_seconds: float = 30.0
+    # 单个 webhook 请求的超时（秒）。不设超时的话，一个卡住的接收端
+    # 会让整轮轮询一直挂在那里，后面的任务也通知不出去。
+    notify_timeout_seconds: float = 5.0
     static_dir: str = str(Path(__file__).resolve().parent.parent / "static")
 
     def __post_init__(self) -> None:
@@ -88,6 +102,14 @@ class Settings:
     @property
     def auth_enabled(self) -> bool:
         return self.auth_mode != "off"
+
+    @property
+    def notify_enabled(self) -> bool:
+        """至少配了一个 webhook 才启用通知。
+
+        这个判断是「零副作用」的唯一入口：没配就不起线程、不碰数据库。
+        """
+        return bool(self.dingtalk_webhook or self.wecom_webhook or self.generic_webhook)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -142,6 +164,7 @@ class Settings:
             default_command=os.environ.get("PLATFORM_DEFAULT_COMMAND", "python /app/train.py"),
             dataset_host_path=os.environ.get("PLATFORM_DATASET_HOST_PATH", "/data/vla-platform/datasets"),
             datasets_mount_path=os.environ.get("PLATFORM_DATASETS_MOUNT_PATH", "/datasets"),
+            dataset_allowed_roots=_parse_csv(os.environ.get("PLATFORM_DATASET_ALLOWED_ROOTS", "")),
             checkpoint_host_path=os.environ.get("PLATFORM_CHECKPOINT_HOST_PATH", "/data/vla-platform/checkpoints"),
             db_path=os.environ.get("PLATFORM_DB_PATH", "/data/history/platform.db"),
             kubeconfig=os.environ.get("PLATFORM_KUBECONFIG") or None,
@@ -166,6 +189,15 @@ class Settings:
             ),
             gpu_metrics_ttl=_parse_nonnegative_float(
                 os.environ.get("PLATFORM_GPU_METRICS_TTL", "2.0"), "PLATFORM_GPU_METRICS_TTL"
+            ),
+            dingtalk_webhook=os.environ.get("PLATFORM_DINGTALK_WEBHOOK", "").strip(),
+            wecom_webhook=os.environ.get("PLATFORM_WECOM_WEBHOOK", "").strip(),
+            generic_webhook=os.environ.get("PLATFORM_GENERIC_WEBHOOK", "").strip(),
+            notify_interval_seconds=_parse_positive_float(
+                os.environ.get("PLATFORM_NOTIFY_INTERVAL_SECONDS", "30"), "PLATFORM_NOTIFY_INTERVAL_SECONDS"
+            ),
+            notify_timeout_seconds=_parse_positive_float(
+                os.environ.get("PLATFORM_NOTIFY_TIMEOUT_SECONDS", "5"), "PLATFORM_NOTIFY_TIMEOUT_SECONDS"
             ),
             static_dir=os.environ.get("PLATFORM_STATIC_DIR", str(Path(__file__).resolve().parent.parent / "static")),
         )

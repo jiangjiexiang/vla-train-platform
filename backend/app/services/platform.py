@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from ..config import ROLE_ADMIN, ROLE_USER, Settings
+from ..datasets.scanner import DatasetMeta
 from ..datasets.store import DatasetStore
 from ..history import HistoryStore, utc_now
 from ..models import SubmitSpec, check_labels, check_payload_size
@@ -27,6 +28,7 @@ from ..recipes.loader import Recipe, RecipeStore
 from ..templates.pytorchjob import render_pytorch_job
 from .audit import AuditStore
 from .checkpoint_retention import UnsafePath, safe_job_dir
+from .dataset_register import UnsafeDatasetPath, check_lerobot_format, resolve_dataset_dir
 from .errors import ServiceError
 from .kubernetes import KubernetesClient
 from .queue_block import diagnose_queue_block
@@ -611,8 +613,11 @@ class PlatformService:
     # ------------------------------------------------------------------
     # 数据集
     # ------------------------------------------------------------------
-    def _dataset_store(self) -> DatasetStore:
-        """惰性创建，避免每次启动都建表（表本身是幂等的）。"""
+    def dataset_store(self) -> DatasetStore:
+        """惰性创建，避免每次启动都建表（表本身是幂等的）。
+
+        API 层判断「这个 id 是否已注册」也用它，所以是公开方法。
+        """
         store = getattr(self, "_datasets", None)
         if store is None:
             store = DatasetStore(self.settings.db_path)
@@ -624,7 +629,7 @@ class PlatformService:
 
     def list_datasets(self, refresh: bool = False) -> dict[str, Any]:
         """列出数据集。缓存为准，refresh 时先重扫有变化的目录。"""
-        store = self._dataset_store()
+        store = self.dataset_store()
         root = self._datasets_root()
         if refresh:
             pending = store.needs_rescan(root)
@@ -643,28 +648,87 @@ class PlatformService:
         return {"items": items, "summary": summary, "root": str(root)}
 
     def get_dataset(self, dataset_id: str, deep: bool = False) -> dict[str, Any]:
-        store = self._dataset_store()
-        root = self._datasets_root()
+        store = self.dataset_store()
         meta = store.get(dataset_id)
         # 缓存没有、或要求深扫描而现有记录还是浅扫描时，补扫一次
         if meta is None or (deep and meta.scan_depth != "deep"):
             try:
-                meta = store.scan_one(root, dataset_id, deep=deep)
+                meta = self._rescan(store, dataset_id, deep=deep)
             except FileNotFoundError as exc:
                 raise ServiceError(404, f"dataset {dataset_id} not found") from exc
         return meta.as_dict()
 
     def scan_datasets(self, dataset_id: str | None = None, deep: bool = False) -> dict[str, Any]:
-        store = self._dataset_store()
+        store = self.dataset_store()
         root = self._datasets_root()
-        targets = [dataset_id] if dataset_id else None
-        if targets is not None and not (root / dataset_id).is_dir():  # type: ignore[operator]
-            raise ServiceError(404, f"dataset {dataset_id} not found")
-        results = store.scan_many(root, targets, deep=deep)
+        if dataset_id:
+            if store.get(dataset_id) is None and not (root / dataset_id).is_dir():
+                raise ServiceError(404, f"dataset {dataset_id} not found")
+            try:
+                results = [self._rescan(store, dataset_id, deep=deep)]
+            except FileNotFoundError as exc:
+                # 目录被删了：扫描器会把它从库里清掉，但要告诉调用方扫不到。
+                store.delete(dataset_id)
+                raise ServiceError(404, f"dataset {dataset_id} not found") from exc
+        else:
+            results = store.scan_many(root, None, deep=deep)
         return {
             "scanned": len(results),
             "items": [meta.as_dict() for meta in results],
         }
+
+    def scan_dataset(self, dataset_id: str, deep: bool = False) -> DatasetMeta:
+        """重扫单个已注册数据集并返回元数据。未注册返回 404，目录不在返回 404。"""
+        store = self.dataset_store()
+        if store.get(dataset_id) is None:
+            raise ServiceError(404, f"dataset {dataset_id} not found")
+        try:
+            return self._rescan(store, dataset_id, deep=deep)
+        except FileNotFoundError as exc:
+            store.delete(dataset_id)
+            raise ServiceError(404, f"dataset {dataset_id} not found") from exc
+
+    def _rescan(self, store: DatasetStore, dataset_id: str, deep: bool = False) -> DatasetMeta:
+        """按数据集的**实际路径**重扫。
+
+        启动扫描发现的数据集都在数据集根下，``store.scan_one(root, id)`` 就够；
+        但通过注册接口登记的目录可能位于 ``PLATFORM_DATASET_ALLOWED_ROOTS``
+        指定的其它根下，所以优先用库里记下的路径。路径缺失时退回扫描根，
+        兼容早期版本写入的记录。
+        """
+        meta = store.get(dataset_id)
+        if meta is not None and meta.path and (Path(meta.path) / "meta" / "info.json").is_file():
+            return store.scan_path(Path(meta.path), dataset_id, deep=deep)
+        return store.scan_one(self._datasets_root(), dataset_id, deep=deep)
+
+    def register_dataset(self, path: str, dataset_id: str | None = None) -> DatasetMeta:
+        """注册一个已存在的数据集目录（仅 admin 可达，鉴权在 API 层）。
+
+        不做任何文件系统写入：验证通过后按实际路径浅扫描一次并落库即可。
+        重复 id 返回 409——不覆盖已有记录，避免用户「注册」一个 id 就把别人的
+        数据集从列表里顶掉。
+        """
+        try:
+            target = resolve_dataset_dir(self.settings, path, dataset_id)
+            check_lerobot_format(target.path)
+        except UnsafeDatasetPath as exc:
+            raise ServiceError(400, str(exc)) from exc
+
+        store = self.dataset_store()
+        if store.get(target.dataset_id) is not None:
+            raise ServiceError(409, f"dataset {target.dataset_id} already registered")
+
+        # 校验阶段已经确认 info.json 合法；扫描器若仍判 unusable（例如 features 缺
+        # observation.state / action），照样落库——让用户在列表里看到具体 issue，
+        # 比返回一个含糊的 400 有用得多。
+        meta = store.scan_path(target.path, target.dataset_id)
+        self.audit.record(
+            "dataset.register",
+            actor=self._current_actor,
+            target=target.dataset_id,
+            detail={"path": str(target.path), "format": meta.format, "status": meta.status},
+        )
+        return meta
 
     def get_params_template(self, image: str) -> dict[str, Any]:
         """返回镜像的参数模板；未登记时回退内置通用模板。"""
@@ -1215,6 +1279,24 @@ class PlatformService:
                 if owner.get("name") == name:
                     return workload
         return None
+
+    def describe_job(self, job: dict[str, Any]) -> dict[str, Any]:
+        """把一个 PyTorchJob 对象整理成与列表/详情接口一致的响应。
+
+        供通知等「只有一个 job 对象、不想为此再拉一遍全命名空间」的调用方
+        使用。Pod 用单任务标签查询，Workload 找不到时按 None 处理——
+        Kueue 尚未创建 Workload 是常态，不是错误。
+        """
+        name = str(job.get("metadata", {}).get("name") or "")
+        try:
+            pods = self.kubernetes.list_job_pods(name) if name else []
+        except Exception:  # noqa: BLE001 - 拿不到 Pod 也要能给出状态
+            pods = []
+        try:
+            workload = self._matching_workload(job, self.kubernetes.list_workloads(), pods)
+        except Exception:  # noqa: BLE001 - 没有 Workload 是常态，不是错误
+            workload = None
+        return self._job_response(job, workload, pods)
 
     def _job_response(
         self,

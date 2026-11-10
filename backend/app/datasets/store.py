@@ -113,8 +113,15 @@ class DatasetStore:
         return pending
 
     def scan_one(self, root: Path, dataset_id: str, deep: bool = False) -> DatasetMeta:
-        """扫描单个数据集并落库。路径不存在时抛 FileNotFoundError。"""
-        directory = root / dataset_id
+        """扫描 root 下名为 dataset_id 的目录并落库。路径不存在时抛 FileNotFoundError。"""
+        return self.scan_path(root / dataset_id, dataset_id, deep=deep)
+
+    def scan_path(self, directory: Path, dataset_id: str, deep: bool = False) -> DatasetMeta:
+        """扫描**任意已知路径**并落库。
+
+        注册接口登记的目录不一定在扫描根下（见 PLATFORM_DATASET_ALLOWED_ROOTS），
+        所以这里不把路径拼成 ``root / id``，而是直接用调用方校验过的绝对路径。
+        """
         if not directory.is_dir():
             raise FileNotFoundError(f"dataset directory not found: {directory}")
         meta = scan_deep(directory, dataset_id) if deep else scan_shallow(directory, dataset_id)

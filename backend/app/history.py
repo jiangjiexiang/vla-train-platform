@@ -156,6 +156,29 @@ class HistoryStore:
             for row in rows
         ]
 
+    def find_submission(self, name: str) -> tuple[SubmitSpec, str] | None:
+        """按任务名取最近一次提交记录。
+
+        用于 K8s 对象已经消失、但用户还想知道「这个任务当初提交了什么」的场景：
+        ttlSecondsAfterFinished 到期回收、节点重启、或有人手工删除都会让对象消失，
+        而 history 里的提交记录还在。不给用户一个 404 就完事，
+        否则任务凭空不见、没有任何解释，排障无从下手。
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT spec_json, submitted_at FROM submissions WHERE name = ? ORDER BY id DESC LIMIT 1",
+                (name,),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            import json as _json
+
+            spec = SubmitSpec(**_json.loads(row["spec_json"]))
+        except Exception:  # noqa: BLE001 - 坏记录当作不存在，不要让整页报错
+            return None
+        return spec, row["submitted_at"]
+
     def iter_submissions(self) -> list[tuple[SubmitSpec, str]]:
         """Every submission record, newest first, de-duplicated by job name.
 

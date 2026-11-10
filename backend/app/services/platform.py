@@ -632,10 +632,41 @@ class PlatformService:
             cancellation = self.history.get_cancellation(name)
             if cancellation is not None:
                 return self._cancelled_response(cancellation)
+            # K8s 对象没了但历史里有提交记录：说明它曾经存在过。
+            # 常见原因是 ttlSecondsAfterFinished 到期回收、节点重启或手工删除。
+            # 直接报 404 会让用户看到任务"凭空消失"且没有任何解释——
+            # 至少要把当初提交了什么、什么时候提交的告诉他。
+            submission = self.history.find_submission(name)
+            if submission is not None:
+                return self._vanished_response(name, *submission)
             raise ServiceError(404, f"job {name} not found")
         pods = self.kubernetes.list_job_pods(name)
         workload = self._matching_workload(job, self.kubernetes.list_workloads(), pods)
         return self._job_response(job, workload, pods)
+
+    def _vanished_response(self, name: str, spec: Any, submitted_at: str) -> dict[str, Any]:
+        """任务对象已不存在但历史里有提交记录时的响应。
+
+        status 用 ``GONE`` 而不是某个终态：我们并不知道它最后是成功还是失败，
+        编造一个终态比不解释更糟。
+        """
+        return {
+            "name": name,
+            "status": "GONE",
+            "image": spec.image,
+            "gpus": spec.gpus,
+            "queue": spec.queue,
+            "priority": spec.priority,
+            "command": spec.command,
+            "env": dict(spec.env),
+            "max_retries": spec.max_retries,
+            "owner": None,
+            "created_at": submitted_at,
+            "message": (
+                "任务对象已从集群中清理（通常是完成后自动回收，或被手工删除），"
+                "平台保留了你当初的提交内容"
+            ),
+        }
 
     def cancel(self, name: str) -> dict[str, Any]:
         job = self.kubernetes.get_job(name)

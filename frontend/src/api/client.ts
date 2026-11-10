@@ -120,6 +120,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
 export const api = {
   // 失败原因分布（仅管理员）。运维用它判断是不是平台在制造失败
+  // 预估训练时长。按同 batch 的历史实测速度算，没有历史时用保守兜底值
+  estimateRun: (payload: { recipe_id: string; dataset_id: string; overrides?: Record<string, unknown> }) =>
+    request<{ estimated_seconds: number | null; estimated_text: string; range_text?: string; source: string; samples: number }>(
+      '/runs/estimate',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
   getFailureSummary: (signal?: AbortSignal) =>
     request<FailureSummary>('/jobs/failures/summary', { signal }),
   getHealth: (signal?: AbortSignal) => request<HealthResponse>('/health', { signal, token: null, ignoreUnauthorized: true }),

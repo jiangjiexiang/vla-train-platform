@@ -12,7 +12,9 @@
 FROM node:20-slim AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --no-audit --no-fund
+# npm 同样用国内源：默认 registry.npmjs.org 在国内经常卡住。
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+RUN npm config set registry ${NPM_REGISTRY} && npm ci --no-audit --no-fund
 COPY frontend/ ./
 # package.json 的 build 脚本是 tsc --noEmit && vite build
 RUN npm run build
@@ -21,6 +23,15 @@ RUN npm run build
 FROM python:3.12-slim AS dependencies
 WORKDIR /app
 COPY backend/requirements.txt /app/requirements.txt
+# 用国内镜像源：默认走 files.pythonhosted.org 在国内经常超时，
+# 构建时间会从 20 秒变成几分钟甚至直接失败。机器在国内就固定用阿里云，
+# 需要时可以用 --build-arg PIP_INDEX_URL=... 覆盖。
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=mirrors.aliyun.com \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=60 \
+    PIP_RETRIES=5
 RUN pip install --no-cache-dir --prefix=/install -r /app/requirements.txt
 
 # ---------- 3. 运行时镜像 ----------

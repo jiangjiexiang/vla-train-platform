@@ -7,7 +7,7 @@ import { ErrorAlert } from '../components/ErrorAlert';
 import { JobActions } from '../components/JobActions';
 import { CheckpointList } from '../components/CheckpointList';
 import { JobTimeline } from '../components/JobTimeline';
-import { LossChart } from '../components/LossChart';
+import { LossChart, downsample } from '../components/LossChart';
 import { PriorityTag, StatusTag } from '../components/StatusTag';
 import { usePolling } from '../hooks/usePolling';
 import type {
@@ -19,6 +19,7 @@ import type {
   JobTimelineResponse,
   JobCheckpointsResponse,
   MetricPoint,
+  TensorboardResponse,
 } from '../types/api';
 import { formatDateTime, formatDuration, formatQueueEta } from '../utils/format';
 
@@ -33,7 +34,15 @@ const METRIC_LABELS: Record<string, string> = {
   grad_norm: '梯度范数',
   lr: '学习率',
   update_s: '每步耗时',
+  // 第三方脚本常带 train/ 前缀，与裸键值相同，所以标签重复，靠 value（tag 本身）区分
+  'train/loss': 'loss',
+  'train/grad_norm': '梯度范数',
+  'train/lr': '学习率',
+  'train/update_s': '每步耗时',
 };
+
+// loss 永远排第一，其余按固定顺序补齐
+const METRIC_ORDER = ['loss', 'grad_norm', 'lr', 'update_s', 'train/loss', 'train/grad_norm', 'train/lr', 'train/update_s'];
 
 function metricOptions(items: MetricPoint[]): Array<{ label: string; value: string }> {
   const keys = new Set<string>();
@@ -43,10 +52,116 @@ function metricOptions(items: MetricPoint[]): Array<{ label: string; value: stri
       if (typeof value === 'number' && Number.isFinite(value)) keys.add(key);
     }
   }
-  // loss 永远排第一，其余按固定顺序补齐
-  return ['loss', 'grad_norm', 'lr', 'update_s']
+  return METRIC_ORDER
     .filter((key) => keys.has(key))
     .map((key) => ({ label: METRIC_LABELS[key] ?? key, value: key }));
+}
+
+/** TensorBoard 的 tag 切换器。
+
+ * 后端只返回真正有数据的 tag，但空数组的 tag 仍可能出现（events 文件存在、
+ * 某个 tag 一个点都没写），这类 tag 画不出来，直接不给入口，避免点进去看到空图。
+ * 裸键与 train/* 同时存在时两个入口都会保留：名称看起来一样，但数据来源不同，
+ * 后端返回的 tag 列表就是事实，前端不替用户做取舍。
+ */
+function tensorboardOptions(data: TensorboardResponse): Array<{ label: string; value: string }> {
+  const tags = data.tags.filter((tag) => (data.series[tag]?.length ?? 0) > 0);
+  const order = (tag: string) => {
+    const index = METRIC_ORDER.indexOf(tag);
+    return index === -1 ? METRIC_ORDER.length : index;
+  };
+  return [...tags]
+    .sort((a, b) => order(a) - order(b) || a.localeCompare(b))
+    .map((tag) => ({ label: METRIC_LABELS[tag] ?? tag, value: tag }));
+}
+
+/** TensorBoard 区块。
+
+ * 独立成组件而不是塞进页面：页面里已经有 job/logs/events/metrics/diagnosis 五路轮询，
+ * 再多一段 JSX 会让本来就长的 render 更难读。
+ */
+function TensorboardPanel({
+  data,
+  error,
+  tag,
+  onTagChange,
+  onRetry,
+}: {
+  data: TensorboardResponse | null;
+  error: string | null;
+  tag: string | null;
+  onTagChange: (tag: string) => void;
+  onRetry: () => void;
+}) {
+  const options = data ? tensorboardOptions(data) : [];
+  const activeTag = tag ?? options[0]?.value ?? null;
+  const points = data && activeTag ? data.series[activeTag] ?? [] : [];
+
+  return (
+    <div data-testid="tensorboard-panel">
+      <ErrorAlert error={error} onRetry={onRetry} title="TensorBoard 数据加载失败" />
+      {error ? null : data === null ? (
+        <div className="event-placeholder" />
+      ) : !data.path_exists ? (
+        // 老任务、老镜像都没有 events 文件。只说「暂无数据」用户会以为平台坏了，
+        // 所以要说清这是镜像版本问题，以及怎么才能看到。
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          data-testid="tensorboard-empty"
+          description={(
+            <Space direction="vertical" size={4}>
+              <Typography.Text>
+                该任务还没生成 TensorBoard 数据。用新镜像（2026-11-10 之后构建的 vla-smolvla）提交的任务才会有。
+              </Typography.Text>
+              <Typography.Text type="secondary">{`扫描目录：${data.dir}`}</Typography.Text>
+            </Space>
+          )}
+        />
+      ) : options.length === 0 ? (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          data-testid="tensorboard-empty"
+          description={`${data.dir} 里有 events 文件，但其中没有平台支持的标量（loss / grad_norm / lr / update_s）。`}
+        />
+      ) : (
+        <div>
+          <Space size={8} wrap>
+            {options.length > 1 && (
+              <Segmented
+                size="small"
+                value={activeTag ?? undefined}
+                onChange={(value) => onTagChange(String(value))}
+                options={options}
+                data-testid="tensorboard-tag-switch"
+              />
+            )}
+            <Tag color="blue" data-testid="tensorboard-point-count">
+              {`${points.length} 个点`}
+            </Tag>
+            {data.truncated && (
+              // 抽稀后的点数和真实步数对不上，不说明的话会有人拿「点数」当「训练步数」
+              <Tag color="orange" data-testid="tensorboard-truncated">数据点较多，已抽稀显示</Tag>
+            )}
+          </Space>
+          {/*
+            LossChart 的入参是 MetricPoint[]（按 metric 字段取值），
+            而 TensorBoard 的 series[tag] 是 {step, value}。
+            在调用处把 value 映射成当前 tag 字段名即可，不需要为这点差异改动 LossChart 的公共接口；
+            在调用处转换即可，不需要为这点差异改动 LossChart 的公共接口。
+          */}
+          <LossChart
+            points={downsample(points).map((point) => ({ step: point.step, [activeTag as string]: point.value }))}
+            metric={activeTag ?? 'loss'}
+          />
+          {data.truncated && (
+            <Typography.Text type="secondary" className="hint">
+              后端最多返回 2000 个点，超出部分按等间隔抽稀（保留首尾），曲线形状仍然可参考；需要精确数值请下载 events 文件用 TensorBoard 查看。
+            </Typography.Text>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function JobDetailPage() {
@@ -71,6 +186,14 @@ export function JobDetailPage() {
   // 用户排查训练问题时最常看的是 grad_norm 有没有爆炸，
   // 只看 loss 会漏掉「loss 平稳但梯度已经发散」这类情况。
   const [metricKey, setMetricKey] = useState('loss');
+  // 训练曲线数据源。默认仍是平台指标（metrics.jsonl）：它随任务实时轮询，
+  // 老任务也都有；TensorBoard 只在用户主动切过去时才请求（见下面 usePolling 的 enabled）
+  const [metricSource, setMetricSource] = useState<'platform' | 'tensorboard'>('platform');
+  const [tensorboard, setTensorboard] = useState<TensorboardResponse | null>(null);
+  const [tensorboardError, setTensorboardError] = useState<string | null>(null);
+  // TensorBoard 的 tag 与 metrics.jsonl 的字段名不完全重合（还可能是 train/*），
+  // 两边共用 metricKey 会切出「当前 tag 不存在」的空图，所以各记一份
+  const [tensorboardTag, setTensorboardTag] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
 
@@ -121,6 +244,28 @@ export function JobDetailPage() {
       if (!isAbortError(reason)) setMetricsError(getErrorMessage(reason));
     }
   }, 10000);
+
+  // TensorBoard 按需加载：解析 events 文件要读宿主机上的二进制文件，
+  // 比读 metrics.jsonl 重得多。绝大多数用户只看平台指标，
+  // 如果在详情页加载时无条件请求，会把首屏拖慢且浪费一次解析。
+  // 因此只在用户切到 TensorBoard 时才发请求；解析结果直接复用现有 LossChart 画图，
+  // 这不改变后端「一个请求返回全部 tag」的接口形态，也不需要再引入一个前端图表库。
+  // 不轮询：events 文件由训练进程追加写，TensorBoard 是「查历史」而不是盯实时，
+  // 用户要最新数据时可以点右上角「刷新」（refreshAll 同理会触发）。
+  const refreshTensorboard = usePolling(async (signal) => {
+    try {
+      const data = await api.getJobTensorboard(name, 2000, signal);
+      setTensorboard(data);
+      setTensorboardError(null);
+      // 默认落到第一个可画的 tag，并保证当前选中的 tag 仍然存在
+      setTensorboardTag((current) => {
+        const usable = data.tags.filter((tag) => (data.series[tag]?.length ?? 0) > 0);
+        return current && usable.includes(current) ? current : usable[0] ?? null;
+      });
+    } catch (reason) {
+      if (!isAbortError(reason)) setTensorboardError(getErrorMessage(reason));
+    }
+  }, 0, metricSource === 'tensorboard');
 
   // 诊断只在任务失败时有内容，接口本身在未失败时返回 diagnosis: null
   const refreshDiagnosis = usePolling(async (signal) => {
@@ -179,6 +324,9 @@ export function JobDetailPage() {
     refreshLogs();
     refreshEvents();
     refreshMetrics();
+    // 只在 TensorBoard 标签下才真的刷新它，否则「刷新」会顺手解析一次 events，
+    // 又回到「不切标签也会请求」的老问题
+    if (metricSource === 'tensorboard') refreshTensorboard();
     refreshDiagnosis();
   };
 
@@ -310,43 +458,64 @@ export function JobDetailPage() {
       <Card
         title="训练 Loss 曲线"
         className="section-card"
-        extra={metrics && (
-          <Tag color={metrics.path_exists ? 'blue' : 'default'}>
-            {metrics.path_exists ? `${metrics.total_points} 个点${metrics.truncated ? '（仅显示最近部分）' : ''}` : '暂无数据'}
-          </Tag>
-        )}
-      >
-        <ErrorAlert error={metricsError} onRetry={refreshMetrics} title="训练指标加载失败" />
-        {metrics && metrics.items.length > 0 ? (
-          <div>
-            <Segmented
-              size="small"
-              value={metricKey}
-              onChange={(value) => setMetricKey(String(value))}
-              options={metricOptions(metrics.items)}
-              data-testid="metric-switch"
-            />
-            <LossChart points={metrics.items} metric={metricKey} />
-            {metrics.items.length < 10 ? (
-              // 冒烟测试的配方默认只跑 5 步，曲线自然只有几个点。
-              // 不解释的话，用户看到稀疏的曲线会以为训练出了问题。
-              <Typography.Text type="secondary" className="hint">
-                只有 {metrics.items.length} 个点。冒烟测试默认跑 5 步，这是正常的；
-                想看有意义的曲线请用训练配方（默认 2000 步）。
-              </Typography.Text>
-            ) : null}
-          </div>
-        ) : (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={metrics && !metrics.path_exists
-              ? '暂无训练指标（训练脚本还没有写出 metrics.jsonl）'
-              : '正在加载训练指标…'}
+        extra={(
+          <Segmented
+            size="small"
+            value={metricSource}
+            onChange={(value) => setMetricSource(value === 'tensorboard' ? 'tensorboard' : 'platform')}
+            options={[
+              { label: '平台指标', value: 'platform' },
+              { label: 'TensorBoard', value: 'tensorboard' },
+            ]}
+            data-testid="metric-source-switch"
           />
         )}
-        <Typography.Paragraph type="secondary" className="chart-hint">
-          训练脚本把每步指标写入 /checkpoints/&lt;任务名&gt;/metrics.jsonl，平台从宿主机读取，任务结束后仍可查看。
-        </Typography.Paragraph>
+      >
+        {metricSource === 'platform' ? (
+          <>
+            <ErrorAlert error={metricsError} onRetry={refreshMetrics} title="训练指标加载失败" />
+            {metrics && metrics.items.length > 0 ? (
+              <div>
+                {metricOptions(metrics.items).length > 0 && (
+                  <Segmented
+                    size="small"
+                    value={metricKey}
+                    onChange={(value) => setMetricKey(String(value))}
+                    options={metricOptions(metrics.items)}
+                    data-testid="metric-switch"
+                  />
+                )}
+                <LossChart points={metrics.items} metric={metricKey} />
+                {metrics.items.length < 10 ? (
+                  // 冒烟测试的配方默认只跑 5 步，曲线自然只有几个点。
+                  // 不解释的话，用户看到稀疏的曲线会以为训练出了问题。
+                  <Typography.Text type="secondary" className="hint">
+                    只有 {metrics.items.length} 个点。冒烟测试默认跑 5 步，这是正常的；
+                    想看有意义的曲线请用训练配方（默认 2000 步）。
+                  </Typography.Text>
+                ) : null}
+              </div>
+            ) : (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={metrics && !metrics.path_exists
+                  ? '暂无训练指标（训练脚本还没有写出 metrics.jsonl）'
+                  : '正在加载训练指标…'}
+              />
+            )}
+            <Typography.Paragraph type="secondary" className="chart-hint">
+              训练脚本把每步指标写入 /checkpoints/&lt;任务名&gt;/metrics.jsonl，平台从宿主机读取，任务结束后仍可查看。
+            </Typography.Paragraph>
+          </>
+        ) : (
+          <TensorboardPanel
+            data={tensorboard}
+            error={tensorboardError}
+            tag={tensorboardTag}
+            onTagChange={setTensorboardTag}
+            onRetry={refreshTensorboard}
+          />
+        )}
       </Card>
 
       <Card

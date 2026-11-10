@@ -1,4 +1,5 @@
 import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, HealthResponse, Job, JobDiagnosisResponse, JobEventsResponse, JobListResponse, JobLogs, JobMetricsResponse, JobStatus, JobTimelineResponse, JobCheckpointsResponse, LoginResponse, PlatformConfig, PreflightResponse, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, Recipe, RecipeListResponse, RunRequest, SubmitJobRequest, UserListResponse, ImageListResponse, ImageParamsResponse,
+  TensorboardResponse,
   FailureSummary,
 } from '../types/api';
 
@@ -202,6 +203,13 @@ export const api = {
   getJobMetrics: (name: string, limit = 500, signal?: AbortSignal) =>
     request<JobMetricsResponse>(
       `/jobs/${encodeURIComponent(name)}/metrics?limit=${limit}`,
+      { signal },
+    ),
+  // TensorBoard 曲线。events 文件不存在时返回 200 + path_exists=false；
+  // 镜像里没装 tensorboard 时返回 503。详情页只在用户切到 TensorBoard 时才调用
+  getJobTensorboard: (name: string, limit = 2000, signal?: AbortSignal) =>
+    request<TensorboardResponse>(
+      `/jobs/${encodeURIComponent(name)}/tensorboard?limit=${limit}`,
       { signal },
     ),
   // 失败诊断；任务没失败时 diagnosis 为 null

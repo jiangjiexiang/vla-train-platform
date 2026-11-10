@@ -421,6 +421,33 @@ export interface JobMetricsResponse {
   path_exists: boolean;
 }
 
+// ---- v1.0：TensorBoard 曲线（backend/app/services/tensorboard.py）----
+
+// 一个标量点。step 从 1 开始：step 0 被 SummaryWriter 的元数据占用，别拿它当「第一步」。
+export interface TensorboardPoint {
+  step: number;
+  value: number;
+  wall_time: number;
+}
+
+export interface TensorboardResponse {
+  name: string;
+  // 只包含真正有数据的 tag（后端按白名单 loss/grad_norm/lr/update_s 读取），
+  // 前端直接用它生成指标切换器，不用自己猜哪些能画。
+  tags: string[];
+  // 键是 tag 的裸键（loss 而不是 train/loss），按 step 升序
+  series: Record<string, TensorboardPoint[]>;
+  // false = 还没生成 events 文件（老镜像、老任务、刚开始跑），不是错误
+  path_exists: boolean;
+  files: string[];
+  // 各 tag 点数之和，不是单条曲线的点数
+  total_points: number;
+  // true = 某条曲线点数超过 limit，被后端等间隔抽稀（保留首尾）
+  truncated: boolean;
+  // 实际扫描的目录，排查「为什么没数据」时有用
+  dir: string;
+}
+
 export interface JobDiagnosis {
   code: string;
   summary: string;

@@ -26,8 +26,15 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_DB = Path("/data/history/platform.db")
-DEFAULT_BACKUP_DIR = Path("/data/history/backups")
+# 这两个是**宿主机**路径，不是容器内路径。
+#
+# 容器里 /data/history 挂的是宿主机的 /data/vla-platform/history，
+# 容器内看到的 /data/history/platform.db 对应宿主机的
+# /data/vla-platform/history/platform.db。运维在宿主机上跑这个脚本时
+# 必须用宿主机的真实路径，否则会报"文件不存在"——我第一次跑的时候就
+# 拿容器路径查了宿主机，白紧张了一下。
+DEFAULT_DB = Path("/data/vla-platform/history/platform.db")
+DEFAULT_BACKUP_DIR = Path("/data/vla-platform/history/backups")
 # 需要检查的关键表：缺了这些说明备份不完整
 REQUIRED_TABLES = ("submissions", "audit_log", "cancellations")
 

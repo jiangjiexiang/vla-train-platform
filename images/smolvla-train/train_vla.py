@@ -230,42 +230,74 @@ def build_train_command(
         target = output_dir / "checkpoints"
         target.mkdir(parents=True, exist_ok=True)
         # lerobot 读的是 last 指向的那份，优先复制它以节省时间与磁盘
+        # last 是软链接。直接 copytree 会复制成断链——目标端没有
+        # 那个相对目标可以指向，续训就读不到 train_config 了。
+        # 所以要解析出它真正指向的步数目录，再按目录名复制。
         last_link = source / "last"
-        candidates = []
-        if last_link.exists():
-            candidates = [last_link]
+        if last_link.exists() or last_link.is_symlink():
+            resolved = last_link.resolve()
+            step_dir = source / resolved.name
         else:
-            candidates = sorted(
+            digits = sorted(
                 (item for item in source.iterdir() if item.is_dir() and item.name.isdigit()),
                 key=lambda p: int(p.name),
-            )[-1:]
-        if not candidates:
+            )
+            step_dir = digits[-1] if digits else None
+
+        if step_dir is None or not step_dir.is_dir():
             raise SystemExit(f"续训失败：{source} 下没有可用的 checkpoint")
-        for item in candidates:
-            dest = target / item.name
-            if dest.exists():
-                continue
-            if item.is_dir():
-                import shutil as _shutil
 
-                _shutil.copytree(item, dest)
-            else:
-                import shutil as _shutil
+        dest = target / step_dir.name
+        if not dest.exists():
+            import shutil as _shutil
 
-                _shutil.copy2(item, dest)
-        print(f"续训：已从 {args.resume_from} 复制 checkpoint {candidates[0].name}", flush=True)
+            _shutil.copytree(step_dir, dest)
+
+        # 目标端也建一个 last 软链接，指向刚复制的那个目录，
+        # 让 lerobot 的「从 output_dir/checkpoints/last 续训」语义成立。
+        dest_last = target / "last"
+        if dest_last.is_symlink() or dest_last.exists():
+            try:
+                dest_last.unlink()
+            except OSError:
+                pass
+        try:
+            dest_last.symlink_to(step_dir.name)
+        except OSError as exc:
+            print(f"续训：创建 last 链接失败（{exc}），继续", flush=True)
+
+        print(f"续训：已从 {args.resume_from} 复制 checkpoint {step_dir.name}", flush=True)
 
     if not args.resume and output_dir.exists():
         # lerobot 要求 output_dir 不存在或为空（除非 resume）。
         # 平台预创建了这个目录作为任务产物根，里面可能已经有 metrics.jsonl
         # （指标 hook 会往里写），所以不能简单删掉——把已有内容挪到 .attempt-N，
         # 既不丢指标文件也不阻塞重跑。
+        #
+        # 这一步在「pod 被抢占后 operator 重建」时特别关键：
+        # 重建的容器会看到上一次留下的目录，直接 FileExistsError 崩掉。
+        # 实测过这种情况——任务既不会续训也不会从头跑，确定性失败，
+        # 前面几分钟算力全白费。
         index = 1
         while (output_dir.parent / f".attempt-{index}").exists():
             index += 1
         legacy = output_dir.parent / f".attempt-{index}"
-        output_dir.rename(legacy)
-        print(f"输出目录已存在，历史内容移动到 {legacy.name}", flush=True)
+        try:
+            output_dir.rename(legacy)
+            print(f"输出目录已存在，历史内容移动到 {legacy.name}", flush=True)
+        except OSError as exc:
+            # rename 失败时（例如目录是挂载点、或跨设备）退而求其次：
+            # 逐项移走。留一个能继续训练的路径，比让任务直接失败强。
+            print(f"目录重命名失败（{exc}），改为逐项移动", flush=True)
+            legacy.mkdir(parents=True, exist_ok=True)
+            for entry in list(output_dir.iterdir()):
+                if entry.name == "metrics.jsonl":
+                    # 指标是跨 attempt 的连续记录，不跟着搬
+                    continue
+                try:
+                    entry.rename(legacy / entry.name)
+                except OSError as inner:
+                    print(f"  移动 {entry.name} 失败：{inner}", flush=True)
 
     if args.resume:
         # lerobot 0.4.4 的续训协议（train.py validate 里那段 if/elif）：

@@ -53,6 +53,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy.device", dest="device", default="cuda", help="训练设备")
     parser.add_argument("--policy.path", dest="policy_path", default=DEFAULT_POLICY, help="基座权重")
     parser.add_argument("--resume", action="store_true", help="从最新 checkpoint 续训")
+    parser.add_argument(
+        "--resume_from",
+        default=None,
+        help=(
+            "从指定任务的产物目录续训，例如 smolvla-pick1028-003。"
+            "平台每次提交都用新的任务名，输出目录也是新的——"
+            "只传 --resume 会去一个空目录里找 checkpoint，什么也找不到。"
+            "所以续训必须指明源任务，这里把它的 checkpoints/last 拷过来。"
+        ),
+    )
     # ---- 平台注入 ----
     parser.add_argument("--dataset_root", default=os.environ.get("DATASET_ROOT", ""), help="数据集根目录")
     parser.add_argument("--output_dir", default="", help="产物目录，默认 /checkpoints/<任务名>")
@@ -206,6 +216,45 @@ def build_train_command(
     # 传了不支持的会被当未知参数报错，所以只在大于 1 时尝试。
     if args.gradient_accumulation_steps and args.gradient_accumulation_steps > 1:
         command.append(f"--policy.gradient_accumulation_steps={args.gradient_accumulation_steps}")
+    if args.resume and args.resume_from:
+        # 把源任务的最近 checkpoint 复制到本次输出目录，让 lerobot 的
+        # "从 output_dir/checkpoints/last 续训" 语义能对上。
+        # CHECKPOINT_DIR 是 /checkpoints/<本次任务名>，父目录就是所有任务的产物根
+        checkpoint_root = Path(os.environ.get("CHECKPOINT_DIR") or "/checkpoints").parent
+        source = checkpoint_root / args.resume_from / "run" / "checkpoints"
+        if not source.is_dir():
+            raise SystemExit(
+                f"续训失败：{args.resume_from} 没有产物目录（{source}）。"
+                "请确认该任务真的训练过，且产物没有被清理。"
+            )
+        target = output_dir / "checkpoints"
+        target.mkdir(parents=True, exist_ok=True)
+        # lerobot 读的是 last 指向的那份，优先复制它以节省时间与磁盘
+        last_link = source / "last"
+        candidates = []
+        if last_link.exists():
+            candidates = [last_link]
+        else:
+            candidates = sorted(
+                (item for item in source.iterdir() if item.is_dir() and item.name.isdigit()),
+                key=lambda p: int(p.name),
+            )[-1:]
+        if not candidates:
+            raise SystemExit(f"续训失败：{source} 下没有可用的 checkpoint")
+        for item in candidates:
+            dest = target / item.name
+            if dest.exists():
+                continue
+            if item.is_dir():
+                import shutil as _shutil
+
+                _shutil.copytree(item, dest)
+            else:
+                import shutil as _shutil
+
+                _shutil.copy2(item, dest)
+        print(f"续训：已从 {args.resume_from} 复制 checkpoint {candidates[0].name}", flush=True)
+
     if not args.resume and output_dir.exists():
         # lerobot 要求 output_dir 不存在或为空（除非 resume）。
         # 平台预创建了这个目录作为任务产物根，里面可能已经有 metrics.jsonl

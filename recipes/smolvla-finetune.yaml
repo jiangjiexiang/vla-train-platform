@@ -73,7 +73,13 @@ template:
       label: 从 checkpoint 续训
       type: bool
       default: false
-      help: 开启后读取 <输出目录>/checkpoints/last
+      help: 配合「续训来源任务」使用；只开这个而没有来源任务时找不到 checkpoint
+    - key: resume_from
+      flag: --resume_from
+      label: 续训来源任务
+      type: str
+      default: ""
+      help: 填入要接着训练的任务名（如 smolvla-pick1028-003）。平台每次提交都会新建目录，所以必须指明来源
 defaults:
   steps: 2000
   batch_size: 16

@@ -142,7 +142,7 @@ export function LoginPage() {
             >
               <Input
                 prefix={<UserOutlined />}
-                placeholder="请输入 LDAP/AD 用户名"
+                placeholder={authMode === 'local' ? '请输入用户名' : '请输入 LDAP/AD 用户名'}
                 autoComplete="username"
                 size="large"
                 autoFocus
@@ -155,7 +155,7 @@ export function LoginPage() {
             >
               <Input.Password
                 prefix={<LockOutlined />}
-                placeholder="请输入 LDAP/AD 密码"
+                placeholder={authMode === 'local' ? '请输入密码' : '请输入 LDAP/AD 密码'}
                 autoComplete="current-password"
                 size="large"
               />

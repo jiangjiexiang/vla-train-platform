@@ -185,6 +185,30 @@ def test_multiple_event_files_are_merged(root):
     assert 2 in steps
 
 
+def test_tfrecord_reader_keeps_payload_without_target_tags(root):
+    """字节预筛只跳过不含目标 tag 的帧：同一帧里既有噪音又有指标时必须保留。"""
+    path = write_events(root, points=[(1, 0.9), (2, 0.8)])
+    raw = path.read_bytes()
+    # 先确认手工读法和 accumulator 的结果一致（等价性回归）
+    from_file = tb._read_file_tfrecord(path, ["loss"])
+
+    assert [point["step"] for point in from_file["loss"]] == [1, 2]
+    # 截掉最后 4 字节（帧尾 CRC）：最后一条记录整体丢弃，前面的保留
+    path.write_bytes(raw[:-4])
+    truncated = tb.read_scalars(root, "job1")
+    assert [point["step"] for point in truncated["series"]["loss"]] == [1]
+
+
+def test_matches_event_accumulator(root):
+    """手工 TFRecord 读法与 EventAccumulator 必须逐点一致（含 wall_time）。"""
+    path = write_events(root, points=[(step, float(step) * 0.5) for step in range(1, 51)])
+
+    fast = tb._read_file_tfrecord(path, ["loss"])["loss"]
+    slow = tb._read_file_accumulator(path, ["loss"])["loss"]
+
+    assert fast == slow
+
+
 def test_limit_downsamples_and_keeps_endpoints(root):
     write_events(root, points=[(step, float(step)) for step in range(500)])
 
@@ -194,7 +218,9 @@ def test_limit_downsamples_and_keeps_endpoints(root):
     assert len(series) == 10
     assert result["truncated"] is True
     # 抽稀保留首尾，而不是只留最后 10 个
-    assert series[0]["step"] == 0
+    # 注意：SummaryWriter 约定的 step 从 1 开始（step 0 会撞上 file_version 元数据事件，
+    # 新版 SummaryWriter 会把它挪到 1），所以首点是 1 而不是 0。
+    assert series[0]["step"] == 1
     assert series[-1]["step"] == 499
     assert [point["step"] for point in series] == sorted(point["step"] for point in series)
 

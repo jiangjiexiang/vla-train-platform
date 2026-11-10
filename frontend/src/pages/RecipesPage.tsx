@@ -134,7 +134,7 @@ export function RecipesPage() {
                   <ExperimentOutlined />
                   <Typography.Text strong>{recipe.name}</Typography.Text>
                   {recipe.estimated_vram_gb !== null && recipe.estimated_vram_gb !== undefined && (
-                    <Tag icon={<ThunderboltOutlined />} bordered={false}>{recipe.estimated_vram_gb} GB 显存</Tag>
+                    <Tag icon={<ThunderboltOutlined />} bordered={false}>约 {recipe.estimated_vram_gb} GB 显存</Tag>
                   )}
                   <Tag bordered={false}>{recipe.gpu_count} × GPU</Tag>
                   {recipe.dataset_formats.map((format) => <Tag key={format} color="blue">{format}</Tag>)}

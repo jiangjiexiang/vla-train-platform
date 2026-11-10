@@ -338,7 +338,7 @@ function RecipeCard({
         <Space size={6} wrap>
           <Typography.Text strong>{recipe.name}</Typography.Text>
           {recipe.estimated_vram_gb !== null && recipe.estimated_vram_gb !== undefined && (
-            <Tag bordered={false} icon={<ThunderboltOutlined />}>{recipe.estimated_vram_gb} GB 显存</Tag>
+            <Tag bordered={false} icon={<ThunderboltOutlined />}>约 {recipe.estimated_vram_gb} GB 显存</Tag>
           )}
           <Tag bordered={false}>{recipe.gpu_count} × GPU</Tag>
         </Space>

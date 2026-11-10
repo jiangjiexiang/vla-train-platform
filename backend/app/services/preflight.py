@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from typing import Any
 
 # 显存估算的安全系数：4090 48G，但留一部分给 dataloader 与 CUDA context
-VRAM_SAFETY_RATIO = 0.8
 
 
 @dataclass

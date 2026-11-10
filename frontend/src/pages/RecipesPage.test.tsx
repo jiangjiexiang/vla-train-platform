@@ -55,7 +55,8 @@ describe('RecipesPage', () => {
     renderPage();
 
     const title = await screen.findByText('SmolVLA 微调');
-    expect(screen.getByText('12 GB 显存')).toBeInTheDocument();
+    // 标签带「约」字：这是规划值不是实测占用，数字本身说明不了精确度
+    expect(screen.getByText('约 12 GB 显存')).toBeInTheDocument();
 
     fireEvent.click(title);
 

@@ -1,6 +1,6 @@
 id: smolvla-finetune
 name: SmolVLA 微调
-description: 从 SmolVLA 基座权重微调，适合单卡 4090 的抓取类任务。默认 batch 16（4090 实测约 5.6 GiB）。
+description: 从 SmolVLA 基座权重微调，适合单卡 4090 的抓取类任务。默认 batch 16：实测前向反向 5.6 GiB，整链路（含 dataloader）约 8–10 GiB。
 image: vla-smolvla:latest
 entrypoint: python /app/train_vla.py
 dataset_formats:
@@ -86,6 +86,9 @@ defaults:
   save_freq: 500
   num_workers: 8
 gpu_count: 1
-estimated_vram_gb: 12
+# 规划值取 10：bs=16 实测前向+反向 5.58 GiB，加 dataloader 与 CUDA context
+# 余量后整链路约 8~10 GiB（见 docs/smolvla-training-params.md 的实测表）。
+# 这个字段只用于界面展示和 preflight 的 info 提示，不参与调度。
+estimated_vram_gb: 10
 order: 10
 public: true

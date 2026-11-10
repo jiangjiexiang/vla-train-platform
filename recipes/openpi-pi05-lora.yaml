@@ -78,6 +78,10 @@ defaults:
   batch_size: 8
   peak_lr: 0.00005
 gpu_count: 1
-estimated_vram_gb: 24
+# 官方 README 给的是「LoRA 微调 > 22.5 GB」，那是**下界且不含 batch 增量**。
+# 本配方默认 batch 8，实际会更高；取 30 作为规划值，宁可高估也不要让用户
+# 以为 24 GB 够用。pi05 对 XLA_PYTHON_CLIENT_MEM_FRACTION 很敏感，
+# 静态单值天然偏保守才安全。注意：这些数字未经实测（手上没有空闲 GPU）。
+estimated_vram_gb: 30
 order: 20
 public: true

@@ -13,7 +13,9 @@ from .api.routes_runs import router as runs_router
 from .config import Settings
 from .history import HistoryStore
 from .services.errors import ServiceError
+from .services.job_watcher import start_job_watcher
 from .services.kubernetes import KubernetesClient
+from .services.notifier import Notifier
 from .services.platform import PlatformService
 
 logger = logging.getLogger("vla-platform")
@@ -77,11 +79,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.backup_thread = thread
 
     @app.on_event("startup")
+    def start_job_notifications() -> None:
+        """任务跑到终态时推送到钉钉/企微/通用 webhook。
+
+        没配任何 webhook 时这里什么都不做：不起线程、不建表、不碰 K8s，
+        与加这个功能之前的启动流程完全一致。
+        """
+        notifier = Notifier(settings)
+        app.state.notifier = notifier
+        if not notifier.enabled:
+            return
+        watcher = start_job_watcher(app, service, notifier, settings)
+        if watcher is not None:
+            logger.info(
+                "job notifications enabled (interval=%ss, channels=%s)",
+                settings.notify_interval_seconds,
+                ", ".join(
+                    name
+                    for name, url in (
+                        ("dingtalk", notifier.dingtalk_webhook),
+                        ("wecom", notifier.wecom_webhook),
+                        ("generic", notifier.generic_webhook),
+                    )
+                    if url
+                ),
+            )
+
+    @app.on_event("startup")
     def purge_expired_sessions() -> None:
         # 会话持久化在 SQLite 里；重启时顺手清掉过期令牌，避免表无限增长。
         removed = service.sessions.purge_expired()
         if removed:
             logger.info("purged %s expired sessions", removed)
+
+    @app.on_event("shutdown")
+    def stop_job_notifications() -> None:
+        # 与备份线程一致的停止方式：set 事件，线程在下一轮等待时退出。
+        stop = getattr(app.state, "notify_stop", None)
+        if stop is not None:
+            stop.set()
 
     @app.exception_handler(ServiceError)
     async def service_error_handler(_request: Request, exc: ServiceError) -> JSONResponse:

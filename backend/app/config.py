@@ -39,7 +39,7 @@ class Settings:
     queue: str = "default"
     cluster_queue: str = "vla-cluster-queue"
     allowed_gpus: tuple[int, ...] = (1,)
-    default_image: str = "vla-smoke:latest"
+    default_image: str = "vla-smolvla:latest"
     default_command: str = "python /app/train.py"
     dataset_host_path: str = "/data/vla-platform/datasets"
     # Web 容器内看到数据集的路径。Web Pod 挂载了同一个 hostPath，
@@ -138,7 +138,7 @@ class Settings:
             namespace=os.environ.get("PLATFORM_NAMESPACE", "vla-training"),
             queue=os.environ.get("PLATFORM_QUEUE", "default"),
             allowed_gpus=allowed_gpus,
-            default_image=os.environ.get("PLATFORM_DEFAULT_IMAGE", "vla-smoke:latest"),
+            default_image=os.environ.get("PLATFORM_DEFAULT_IMAGE", "vla-smolvla:latest"),
             default_command=os.environ.get("PLATFORM_DEFAULT_COMMAND", "python /app/train.py"),
             dataset_host_path=os.environ.get("PLATFORM_DATASET_HOST_PATH", "/data/vla-platform/datasets"),
             datasets_mount_path=os.environ.get("PLATFORM_DATASETS_MOUNT_PATH", "/datasets"),

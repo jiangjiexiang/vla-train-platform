@@ -101,7 +101,7 @@ spec:
             - name: PLATFORM_ALLOWED_GPUS
               value: "1"
             - name: PLATFORM_DEFAULT_IMAGE
-              value: vla-smoke:latest
+              value: vla-smolvla:latest
             - name: PLATFORM_DEFAULT_COMMAND
               value: python /app/train.py
             - name: PLATFORM_DATASET_HOST_PATH

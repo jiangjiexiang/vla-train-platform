@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from app.models import SubmitSpec
 
-DEFAULT_IMAGE = "vla-smoke:latest"
+DEFAULT_IMAGE = "vla-smolvla:latest"
 DEFAULT_COMMAND = "python /app/train.py"
 MAX_COMMAND_BYTES = 64 * 1024
 
@@ -598,9 +598,9 @@ def test_images_lists_default_and_history_images(api_client, service, kube):
     assert response.status_code == 200, response.text
     images = [item["image"] for item in response.json()["items"]]
     # 默认镜像必须排第一，历史用过的镜像也要在列表里
-    assert images[0] == "vla-smoke:latest"
+    assert images[0] == "vla-smolvla:latest"
     assert "my-train:v1" in images
-    assert images.count("vla-smoke:latest") == 1
+    assert images.count("vla-smolvla:latest") == 1
 
 
 def test_images_dedupes_repeated_uses(api_client, service):

@@ -4,3 +4,6 @@ kubernetes==32.0.1
 uvicorn==0.34.2
 # LDAP / AD 登录（PLATFORM_AUTH_MODE=ldap）；off/token 模式不加载。
 ldap3==2.9.1
+# TensorBoard events 解析（直接读 events 文件，不起常驻 tensorboard 服务）。
+# 2.21 依赖 protobuf>=4（与 kubernetes 的 protobuf<3 旧约束不冲突，已实测）。
+tensorboard==2.21.0

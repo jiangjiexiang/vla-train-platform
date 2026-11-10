@@ -920,6 +920,23 @@ class PlatformService:
 
         return read_metrics(self.settings.checkpoint_host_path, name, limit=limit)
 
+    def job_tensorboard(self, name: str, limit: int = 2000) -> dict[str, Any]:
+        """TensorBoard 曲线（任意 tag）。
+
+        与 ``job_metrics`` 同样的判定：K8s 对象被 TTL 回收后，events 文件仍在磁盘上，
+        因此也要认取消记录和历史提交记录，否则历史曲线会突然 404。
+        """
+        from . import tensorboard as tensorboard_service  # 局部导入：tensorboard 是重依赖
+
+        job = self.kubernetes.get_job(name)
+        if job is None and self.history.get_cancellation(name) is None and self.history.find_submission(name) is None:
+            raise ServiceError(404, f"job {name} not found")
+        try:
+            return tensorboard_service.read_scalars(self.settings.checkpoint_host_path, name, limit=limit)
+        except tensorboard_service.TensorboardUnavailable as exc:
+            # 镜像里漏装 tensorboard 时，返回明确的 503 而不是 500 + traceback
+            raise ServiceError(503, str(exc)) from exc
+
     def events(self, name: str) -> dict[str, Any]:
         job = self.kubernetes.get_job(name)
         if job is None:

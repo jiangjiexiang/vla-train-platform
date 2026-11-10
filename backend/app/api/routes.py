@@ -364,6 +364,23 @@ def job_metrics(
     return service.job_metrics(name, limit=limit)
 
 
+@router.get("/jobs/{name}/tensorboard")
+def job_tensorboard(
+    name: JobName,
+    limit: Annotated[int, Query(ge=1, le=100000)] = 2000,
+    user: AuthContext = Depends(require_user),
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    """TensorBoard 曲线。数据来自 /checkpoints/<job>/tensorboard/events.out.tfevents.*。
+
+    不另起常驻的 tensorboard 服务：这里直接解析 events 文件，按需返回 JSON。
+    只读取白名单里的 tag；文件不存在时返回 ``path_exists: false`` 而不是 404。
+    """
+    # 与 metrics / events / logs 一致：普通用户不能看别人任务的训练曲线
+    _ensure_visible(user, service.get_job(name))
+    return service.job_tensorboard(name, limit=limit)
+
+
 @router.get("/jobs/{name}/events")
 def job_events(
     name: JobName,

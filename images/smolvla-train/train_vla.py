@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import subprocess
+import threading
 import sys
 from pathlib import Path
 
@@ -221,6 +222,53 @@ def build_train_command(
     return command
 
 
+
+def _prune_checkpoints_periodically(output_dir: Path, stop: "threading.Event") -> None:
+    """每 60 秒扫一次 checkpoints/，只留最近 N 个。
+
+    N 来自 VLA_KEEP_LAST_CHECKPOINTS，默认 3：
+    续训只需要最近一个，最终产物需要一个，再多留一个做备份。
+    配置写 0 或负数会被当成 1——把刚训出来的结果删掉是最坏的情况。
+    """
+    import shutil
+
+    try:
+        keep = int(os.environ.get("VLA_KEEP_LAST_CHECKPOINTS", "3"))
+    except ValueError:
+        keep = 3
+    keep = max(1, keep)
+
+    root = output_dir / "checkpoints"
+
+    def sweep() -> None:
+        try:
+            entries = [
+                item
+                for item in root.iterdir()
+                if item.is_dir() and not item.is_symlink() and item.name.isdigit()
+            ]
+        except OSError:
+            return
+        if len(entries) <= keep:
+            return
+        entries.sort(key=lambda item: int(item.name))
+        for item in entries[:-keep]:
+            try:
+                shutil.rmtree(item)
+                print(f"[vla-platform] 清理旧 checkpoint {item.name}", file=sys.stderr, flush=True)
+            except OSError as exc:
+                print(
+                    f"[vla-platform] 清理 checkpoint {item.name} 失败：{exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+    # 先扫一次再进入循环：进程刚起来时目录里可能已经有上次遗留的存档，
+    # 等 60 秒再清就晚了——那 60 秒的写入可能正好把盘压到临界点。
+    sweep()
+    while not stop.wait(60):
+        sweep()
+    return
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     dataset_root, output_dir = resolve_paths(args)
@@ -260,7 +308,27 @@ def main(argv: list[str] | None = None) -> int:
         env["PYTHONPATH"] = f"{boot_dir}{os.pathsep}{existing}" if existing else str(boot_dir)
 
     child = subprocess.Popen(command, env=env)
-    child.wait()
+
+    # checkpoint 清理线程：训练中定期淘汰旧存档。
+    #
+    # 为什么必须放在训练过程中：一个 12 小时的任务按 save_freq=1000 会写出
+    # 约 40 个 checkpoint，每个 1.3GB，合计 52GB。只在训练结束后清理的话，
+    # 中途就会把磁盘打满——那时训练直接崩，前面几小时全白跑。
+    #
+    # 用线程而不是 hook lerobot：lerobot 的保存路径随版本变，线程只观察
+    # checkpoints/ 目录，版本无关，也不会干扰训练。
+    stop_prune = threading.Event()
+    pruner = threading.Thread(
+        target=_prune_checkpoints_periodically,
+        args=(output_dir, stop_prune),
+        daemon=True,
+    )
+    pruner.start()
+    try:
+        child.wait()
+    finally:
+        stop_prune.set()
+        pruner.join(timeout=5)
     return child.returncode
 
 

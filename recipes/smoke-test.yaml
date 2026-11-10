@@ -1,8 +1,8 @@
 id: smoke-test
 name: 环境冒烟测试
-description: 用 vla-smoke 镜像跑几步小训练，只验证 CUDA、数据挂载与 checkpoint 写入，几秒完成。新环境上线前建议先跑一次。
-image: vla-smoke:latest
-entrypoint: python /app/train.py
+description: 用已部署的 SmolVLA 镜像跑几步小训练，只验证 CUDA、数据挂载与 checkpoint 写入，约半分钟。新环境上线前建议先跑一次。
+image: vla-smolvla:latest
+entrypoint: python /app/train_vla.py
 dataset_formats:
   - lerobot-v3.0
   - lerobot-v2.1

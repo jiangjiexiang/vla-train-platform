@@ -106,9 +106,6 @@ export function RecipesPage() {
       <div className="page-heading">
         <div>
           <Typography.Title level={2}>训练配方</Typography.Title>
-          <Typography.Text type="secondary">
-            配方把镜像、参数和默认值打包成一键可用的训练方案；这里只能浏览，修改请联系管理员。
-          </Typography.Text>
         </div>
         <Button type="primary" icon={<RocketOutlined />} onClick={() => navigate('/')}>
           去快速开始

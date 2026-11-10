@@ -197,9 +197,6 @@ export function DatasetsPage() {
       <div className="page-heading">
         <div>
           <Typography.Title level={2}>数据集</Typography.Title>
-          <Typography.Text type="secondary">
-            扫描自 {data?.root || '/datasets'}，不可用的数据集不会出现在一键训练的候选里。
-          </Typography.Text>
         </div>
         <Space size={8}>
           <Input

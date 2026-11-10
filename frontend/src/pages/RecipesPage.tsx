@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Collapse, Empty, Space, Spin, Table, Tag, Typography } from 'antd';
+import { Button, Card, Collapse, Empty, Space, Spin, Table, Tag, Typography } from 'antd';
 import { ExperimentOutlined, RocketOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -149,15 +149,6 @@ export function RecipesPage() {
         )}
       </Spin>
 
-      {recipes.length > 0 && (
-        <Alert
-          type="info"
-          showIcon
-          className="section-card recipe-footnote"
-          message="怎么用？"
-          description="在「快速开始」里选一个数据集，平台会列出所有格式兼容的配方，选中后点「加入训练队列」即可。"
-        />
-      )}
     </div>
   );
 }

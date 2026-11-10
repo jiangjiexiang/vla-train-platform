@@ -125,6 +125,10 @@ spec:
                   key: PLATFORM_LDAP_BIND_PASSWORD
                   optional: true
           volumeMounts:
+            # 历史库（SQLite）。宿主机落在 <项目>/data/history，经 PV
+            # vla-web-history 挂进来——平台的所有产出都在项目目录下，
+            # 主机上不再留 /data/vla-platform。容器内路径保持不变，
+            # 所以 PLATFORM_DB_PATH 与 config 默认值都不用改。
             - name: history
               mountPath: /data/history
             - name: tmp
@@ -134,11 +138,22 @@ spec:
             - name: datasets
               mountPath: /datasets
               readOnly: true
-            # checkpoint 目录：Web 从这里读 metrics.jsonl 画 loss 曲线。
-            # 只读挂载——Web 不需要也不应该修改训练产物。
+            # checkpoint 目录：Web 从这里读 metrics.jsonl、events、权重清单，
+            # **并且**要能删——平台自带「清理历史 checkpoint」
+            # （POST /api/v1/maintenance/cleanup?include_checkpoints=true），
+            # 实现在 Web 容器内对 /checkpoints/<任务名> 做 rmtree。
+            # 挂载点与训练 Pod 保持一致（/checkpoints），这样同一份配置
+            # 在两边都成立，不用记「宿主机路径和容器路径同名」这种别扭的约定。
+            #
+            # 为什么不是只读：只读会让清理**静默失败**——K8s 对象和历史记录已删，
+            # checkpoint 却 rmtree 不了，用户以为删干净了，磁盘还在涨。
+            # 这比不提供该功能更糟（与 0.9 的「只读保护」相反，是有意为之）。
+            # 风险由代码侧兜住：删除路径一律过 safe_job_dir()——空值、通配符、
+            # 路径分隔符、`..` 与软链接逃逸、以及根目录本身全部拒绝。
+            # 数据集仍然只读：Web 从不需要写数据集。
             - name: checkpoints
-              mountPath: /data/vla-platform/checkpoints
-              readOnly: true
+              mountPath: /checkpoints
+              readOnly: false
           resources:
             requests:
               cpu: 100m
@@ -171,11 +186,11 @@ spec:
       volumes:
         - name: datasets
           hostPath:
-            path: /data/vla-platform/datasets
+            path: /home/jjx/vla-train-platform/data/datasets
             type: Directory
         - name: checkpoints
           hostPath:
-            path: /data/vla-platform/checkpoints
+            path: /home/jjx/vla-train-platform/data/checkpoints
             type: Directory
         - name: history
           persistentVolumeClaim:

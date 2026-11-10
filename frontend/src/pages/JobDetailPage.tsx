@@ -42,6 +42,44 @@ const METRIC_LABELS: Record<string, string> = {
 
 // loss 永远排第一，其余按固定顺序补齐
 
+/**
+ * Kubernetes 事件的通俗解释。
+ *
+ * 原始事件长这样：「Normal ExitedWithCode PyTorchJob/xxx Pod: xxx exited with code 0」。
+ * 懂 K8s 的人一眼看明白，不懂的人只能猜。企业里用平台的不都是运维，
+ * 训练的同学看到一串英文 reason 大概率不知道这意味着"成功了"还是"出问题了"。
+ *
+ * 这里只翻译常见的那十几个，翻译不了的照原样显示——瞎猜比不翻更糟。
+ */
+const EVENT_HINTS: Record<string, string> = {
+  // —— 成功路径 ——
+  PyTorchJobSucceeded: '训练任务正常结束',
+  FinishedWorkload: '队列确认任务结束',
+  Completed: '容器正常退出',
+  // —— 失败路径 ——
+  Failed: '任务失败',
+  BackoffLimitExceeded: '重试次数用尽，任务判定失败',
+  OOMKilled: '显存或内存不足，进程被系统强制终止',
+  Evicted: '资源紧张，Pod 被驱逐',
+  FailedScheduling: '调度失败：集群没有满足要求的 GPU 或资源',
+  ErrImagePull: '镜像拉取失败：检查镜像名是否正确、镜像是否已导入',
+  ImagePullBackOff: '镜像拉取失败后重试中',
+  CrashLoopBackOff: '容器反复崩溃重启',
+  FailedMount: '挂载失败：检查数据集或存储路径是否存在',
+  // —— 中间过程 ——
+  Scheduled: '已调度到节点',
+  Pulled: '镜像已拉取',
+  Created: '容器已创建',
+  Started: '容器已启动',
+  Killing: '正在停止容器',
+  SuccessfulCreate: '创建了训练 Pod',
+};
+
+/** 事件是不是"坏消息"。只有 Warning 才算，Normal 一律按正常流程处理。 */
+function isBadEvent(type: string | null): boolean {
+  return (type ?? '').toLowerCase() === 'warning';
+}
+
 const METRIC_ORDER = ['loss', 'grad_norm', 'lr', 'update_s', 'train/loss', 'train/grad_norm', 'train/lr', 'train/update_s'];
 
 function metricOptions(items: MetricPoint[]): Array<{ label: string; value: string }> {
@@ -121,6 +159,14 @@ export function JobDetailPage() {
   // 「平台指标」作为兜底保留：老任务没有 events 文件（镜像改之前跑的），
   // 这时候还要能看 loss。用户点一下就切过去，不影响。
   const [metricSource, setMetricSource] = useState<'platform' | 'tensorboard'>('tensorboard');
+  // 事件区默认折叠，除非有 Warning。
+  // 任务正常结束时 Kubernetes 会发三四个 Normal 事件说同一件事（成功了），
+  // 全展开等于白占一屏；真出问题时才需要立刻看到。
+  const warningCount = events
+    ? events.items.filter((item) => isBadEvent(item.type)).length
+    : 0;
+  const hasWarning = warningCount > 0;
+
   const logRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
 
@@ -420,9 +466,33 @@ export function JobDetailPage() {
       <Card
         title="事件"
         className="section-card"
-        extra={events && <Tag color={events.items.length ? 'blue' : 'default'}>{`${events.items.length} 条`}</Tag>}
+        extra={events && (
+          <Space>
+            <Tag color={hasWarning ? 'error' : 'default'}>
+              {hasWarning ? `${warningCount} 条告警` : `${events.items.length} 条`}
+            </Tag>
+            {/* 任务正常结束时事件区只是三行「成功」的重复说明，
+                一直展开会白占一屏。有告警时才默认展开（见下方 Collapse）。 */}
+            <Typography.Text type="secondary">
+              {hasWarning ? '发现异常，已展开' : '一切正常'}
+            </Typography.Text>
+          </Space>
+        )}
       >
         <ErrorAlert error={eventsError} onRetry={refreshEvents} title="事件加载失败" />
+        {/* 有 Warning 才默认展开；否则全 Normal 的事件不占版面 */}
+        <Collapse
+        ghost
+        size="small"
+        defaultActiveKey={hasWarning ? ['events'] : []}
+        items={[{
+          key: 'events',
+          label: hasWarning
+            ? `${warningCount} 条告警，${events ? events.items.length - warningCount : 0} 条正常流程事件`
+            : '查看事件详情',
+          children: (
+        <>
+        
         <Spin spinning={eventsLoading && !events}>
           {events && events.items.length > 0 ? (
             <List
@@ -435,10 +505,11 @@ export function JobDetailPage() {
                       <Space size={[8, 4]} wrap>
                         <Tag color={warning ? 'error' : 'default'}>{event.type || '提示'}</Tag>
                         <Typography.Text strong type={warning ? 'danger' : undefined}>
-                          {event.reason || '未知原因'}
+                          {EVENT_HINTS[event.reason ?? ''] ?? event.reason ?? '未知原因'}
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          {event.object_kind ? `${event.object_kind}/${event.object_name || '—'}` : '—'}
+                          {event.reason && EVENT_HINTS[event.reason] ? `（${event.reason}）` : ''}
+                          {event.object_kind ? ` ${event.object_kind}/${event.object_name || '—'}` : ''}
                         </Typography.Text>
                       </Space>
                       <Typography.Paragraph className="event-message" type={warning ? 'danger' : undefined}>
@@ -459,6 +530,10 @@ export function JobDetailPage() {
             <div className="event-placeholder" />
           )}
         </Spin>
+        </>
+          ),
+        }]}
+        />
       </Card>
 
       <Card

@@ -38,7 +38,10 @@ def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) 
         for name, value in sorted(spec.env.items())
         if name != "CHECKPOINT_DIR"
     ]
-    environment.append({"name": "CHECKPOINT_DIR", "value": f"/checkpoints/{spec.name}"})
+    # 容器内路径一律取 checkpoints_mount_path：实战中用户会把产物挂到别的前缀，
+    # 写死 "/checkpoints" 会让训练进程写到容器临时层里，任务一结束产物就没了。
+    checkpoint_dir = f"{settings.checkpoints_mount_path.rstrip('/')}/{spec.name}"
+    environment.append({"name": "CHECKPOINT_DIR", "value": checkpoint_dir})
     # 指标 hook 用 JOB_NAME 拼出 metrics.jsonl 的路径。此前没注入，hook 拿不到任务名
     # 就只能放弃写指标——这也是真实训练一直看不到 loss 曲线的原因之一。
     environment.append({"name": "JOB_NAME", "value": spec.name})
@@ -92,7 +95,7 @@ def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) 
                                         },
                                         {
                                             "name": "checkpoints",
-                                            "mountPath": "/checkpoints",
+                                            "mountPath": settings.checkpoints_mount_path,
                                             "readOnly": False,
                                         },
                                     ],

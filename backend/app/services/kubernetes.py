@@ -14,6 +14,8 @@ T = TypeVar("T")
 JOB_GROUP = "kubeflow.org"
 JOB_VERSION = "v1"
 JOB_PLURAL = "pytorchjobs"
+# 模板给训练容器起的名字（见 templates/pytorchjob.py）。读日志时默认用它。
+POD_CONTAINER = "pytorch"
 KUEUE_GROUP = "kueue.x-k8s.io"
 KUEUE_VERSION = "v1beta2"
 
@@ -137,6 +139,56 @@ class KubernetesClient:
             lambda: self._core_api().list_namespaced_pod(self.settings.namespace)
         )
         return [item.to_dict() for item in response.items]
+
+    def get_pod(self, pod_name: str) -> dict[str, Any] | None:
+        """读单个 Pod；不存在返回 None。
+
+        比 ``list_job_pods`` 便宜（一次 GET，不是一次 LIST），而且能在两个
+        请求之间拿到「此刻」的容器状态。
+        """
+        try:
+            pod = self._call(
+                lambda: self._core_api().read_namespaced_pod(
+                    pod_name, self.settings.namespace
+                )
+            )
+        except ServiceError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        return pod.to_dict()
+
+    def read_container_log(
+        self, pod_name: str, tail_lines: int, container: str | None = None
+    ) -> str:
+        """按容器名读日志；容器在 Pod 里不存在时返回空串而不是抛错。
+
+        为什么要单独一个方法：Pod 里的容器叫做 ``pytorch`` 只是我们自己的
+        模板约定。真正决定某个 Pod 有哪几个容器的，是容器运行时——比如
+        kubelet 在 Init 容器阶段、或者注入的 sidecar。名字对不上时 API server
+        回的是 400 ``a container name must be specified``，被 ``_call`` 包成
+        「Kubernetes rejected the request」之后，用户完全看不出这是"没日志"。
+        """
+        name = container or POD_CONTAINER
+        for previous in (False, True):
+            try:
+                text = self._call(
+                    lambda prev=previous: self._core_api().read_namespaced_pod_log(
+                        pod_name,
+                        self.settings.namespace,
+                        container=name,
+                        tail_lines=tail_lines,
+                        timestamps=False,
+                        previous=prev,
+                    )
+                )
+            except ServiceError as exc:
+                if exc.status_code not in (400, 404):
+                    raise
+                continue
+            if text and "unable to retrieve container logs" not in text:
+                return text
+        return ""
 
     def read_pod_log(self, pod_name: str, tail_lines: int) -> str:
         """读取容器日志。

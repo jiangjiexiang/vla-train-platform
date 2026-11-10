@@ -246,7 +246,8 @@ def test_logs_empty_when_pod_absent(service, kube):
     service.submit(make_spec())
     result = service.logs("exp001", 100)
     assert result["pod_name"] is None
-    assert result["logs"] == ""
+    # 不是 K8s 报错，而是一句解释：Pod 还没创建。
+    assert result["logs"].startswith("训练 Pod 还没有创建")
 
 
 def test_logs_returned_when_pod_exists(service, kube):

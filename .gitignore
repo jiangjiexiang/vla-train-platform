@@ -21,8 +21,34 @@ frontend/.cache/
 # smoke 镜像构建用的预下载 wheel（908MB），不进版本库
 images/smoke-train/wheels/
 images/smolvla-train/wheels/
+# web 镜像依赖层的预下载 wheel（几十 MB，由 fetch-wheels.sh 生成）
+images/web-image/wheels/
 
 # 远端仓库遗留的 Gatsby 模板（历史保留，但不再使用）
 .gitignore.gatsby-backup
 public/
 .cache/
+
+# 运行期数据目录：数据集（742M）、checkpoint、SQLite 历史库
+# 属主是运行平台的用户，不是版本库内容——进了 git 会把仓库撑到 GB 级，
+# 而且训练产物每天都在变。备份见 docs/operations.md。
+/data/
+
+# 临时调试脚本：贴补丁、探测路径、批量改文件时随手写的，没有长期价值。
+# 这些不该进版本库——别人 clone 下来一堆 .probe.py 只会困惑。
+*.probe.py
+.probe*/
+scratch/
+tmp/
+*.tmp
+
+# 本地验证产物：截图、导出文件、一次性分析结果
+/*.png
+/*.json
+!frontend/package.json
+!frontend/package-lock.json
+
+# 编辑器与系统杂项
+.idea/
+*.swp
+*~

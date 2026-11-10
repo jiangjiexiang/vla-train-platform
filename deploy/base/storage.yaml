@@ -13,8 +13,11 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: manual
   volumeMode: Filesystem
+  # 平台的所有产出都在项目目录下，主机上不留 /data/vla-platform。
+  # 数据库属主是容器里的 10001（Deployment 的 runAsUser/fsGroup），
+  # 迁目录时要 chown 过去，否则容器启动时建不了 WAL 文件。
   hostPath:
-    path: /data/vla-platform/history
+    path: /home/jjx/vla-train-platform/data/history
     type: DirectoryOrCreate
 ---
 apiVersion: v1

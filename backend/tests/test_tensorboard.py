@@ -252,11 +252,14 @@ def test_live_writer_partial_flush_is_readable(root):
 
 
 def _settings(tmp_path, checkpoint_dir, **overrides) -> Settings:
+    # 读 events 走容器内路径（checkpoints_mount_path）；checkpoint_host_path 是
+    # 宿主机路径，容器里读不到，这里刻意指到一个不存在的目录上，防止有人改回去。
     values = {
         "api_token": "test-token",
         "db_path": str(tmp_path / "tb.db"),
         "gpu_metrics_url": "",
-        "checkpoint_host_path": str(checkpoint_dir),
+        "checkpoints_mount_path": str(checkpoint_dir),
+        "checkpoint_host_path": str(tmp_path / "host-only" / "checkpoints"),
     }
     values.update(overrides)
     return Settings(**values)

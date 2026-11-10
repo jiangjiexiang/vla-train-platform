@@ -391,7 +391,11 @@ def test_logs_empty_when_job_has_no_pod(api_client, service):
     response = api_client.get("/api/v1/jobs/api-logs-empty/logs")
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"name": "api-logs-empty", "pod_name": None, "logs": ""}
+    body = response.json()
+    # 没有 Pod 不是错误，但也不能是一片空白：用户至少要看到"为什么没日志"。
+    assert body["name"] == "api-logs-empty"
+    assert body["pod_name"] is None
+    assert body["logs"].startswith("训练 Pod 还没有创建")
 
 
 def test_logs_returns_pod_output(api_client, service, kube):

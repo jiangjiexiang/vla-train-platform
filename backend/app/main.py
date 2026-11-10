@@ -145,8 +145,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 起一个 tensorboard 子进程，用反代暴露到 /tensorboard/。
     # 一个进程服务所有任务：--logdir 指向 checkpoints 根目录，
     # 每个任务子目录自动成为一个 run。
+    # 必须用容器内路径：tensorboard 是 Web 容器里的子进程，
+    # checkpoint_host_path（/home/jjx/...）在容器里根本不存在。
     tensorboard = TensorboardProcess(
-        logdir=settings.checkpoint_host_path,
+        logdir=settings.checkpoints_mount_path,
         port=settings.tensorboard_port,
     )
     app.state.tensorboard = tensorboard

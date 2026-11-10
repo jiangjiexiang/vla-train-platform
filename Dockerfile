@@ -38,7 +38,23 @@ ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_DEFAULT_TIMEOUT=60 \
     PIP_RETRIES=5
-RUN pip install --no-cache-dir --prefix=/install -r /app/requirements.txt
+# 优先用预下载的 wheel：国内网络下 pip 每次改 requirements 都要重下全部包，
+# 7MB 的 grpcio 加上 tensorboard 一整套，构建时间从 1 分钟变成 10 分钟。
+# wheels/ 由 fetch-wheels.sh 生成，不进版本库（见 .gitignore）。
+# 目录为空（只有 .gitkeep / 没有 wheel）时自动降级为在线安装，不会让构建失败。
+COPY images/web-image/wheels/ /tmp/wheels/
+# --no-cache-dir 去掉：走本地 wheel 时本来就缓存不到什么，而在线降级路径下
+# 保留 pip 缓存对同一层内的重试有好处；临时 wheel 目录在同一个 RUN 里清掉。
+RUN if ls /tmp/wheels/*.whl >/dev/null 2>&1; then \
+        echo "使用预下载 wheel 离线安装（$(ls /tmp/wheels/*.whl | wc -l) 个）"; \
+        pip install --prefix=/install --no-index --find-links=/tmp/wheels -r /app/requirements.txt \
+        || { echo "离线安装失败，降级为在线安装"; \
+             pip install --prefix=/install -r /app/requirements.txt; }; \
+    else \
+        echo "未找到预下载 wheel，在线安装（建议先跑 images/web-image/fetch-wheels.sh）"; \
+        pip install --prefix=/install -r /app/requirements.txt; \
+    fi \
+ && rm -rf /tmp/wheels
 
 # ---------- 3. 运行时镜像 ----------
 FROM python:3.12-slim

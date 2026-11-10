@@ -121,7 +121,19 @@ def preflight(
 def _check_dataset(dataset: dict[str, Any]) -> list[Check]:
     checks: list[Check] = []
     status = dataset.get("status")
-    if status in ("unusable", "error"):
+    if status == "missing":
+        # 缓存里是 ready、磁盘上目录已经没了。不拦住的话任务会正常调度、
+        # 占住 GPU，然后在容器里报 "No such file or directory: /datasets/<id>"。
+        checks.append(
+            Check(
+                "error",
+                "dataset_missing",
+                f"数据集 {dataset.get('id')} 的目录已不存在：{dataset.get('path')}",
+                "把目录放回原处后重新扫描数据集；如果数据集本来就作废了，请在数据集页删除它，"
+                "以免以后误选",
+            )
+        )
+    elif status in ("unusable", "error"):
         errors = [
             issue for issue in dataset.get("issues", [])
             if issue.get("level") == "error"

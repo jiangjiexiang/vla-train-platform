@@ -66,8 +66,10 @@ def platform_config(settings: Settings = Depends(get_settings)) -> dict[str, Any
         "default_command": settings.default_command,
         "default_queue": settings.queue,
         "priorities": ["low", "normal", "high"],
-        "dataset_path": "/datasets",
-        "checkpoint_root": "/checkpoints",
+        # 这两个是「容器内路径」，前端拿它拼展示用的产物目录；
+        # 宿主机路径不该出现在任何接口里。
+        "dataset_path": settings.datasets_mount_path,
+        "checkpoint_root": settings.checkpoints_mount_path,
         # v0.9：前端据此决定是否显示多机选项（契约 3.5）。
         "auth_mode": settings.auth_mode,
         "max_nodes": settings.max_nodes,

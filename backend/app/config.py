@@ -9,6 +9,14 @@ from pathlib import Path
 #   token 静态令牌（机器调用）
 #   ldap  目录账号
 #   local 平台自己维护的账号密码（配置在 PLATFORM_LOCAL_USERS）
+# 数据目录的默认位置：放在项目自己下面，而不是散在 /data。
+#
+# 放 /data/vla-platform 那两个坑都踩过：
+#   - 属主是 root，训练产物权限 600，平台用户读不了，模型存下来却拿不走
+#   - 和项目代码分处两地，备份、迁移、看磁盘占用都要跳来跳去
+# 现在统一到 <项目>/data 下，属主就是运行平台的那个用户。
+_PROJECT_DATA = "/home/jjx/vla-train-platform/data"
+
 AUTH_MODES = ("off", "token", "ldap", "local")
 ROLE_ADMIN = "admin"
 ROLE_USER = "user"
@@ -45,14 +53,18 @@ class Settings:
     allowed_gpus: tuple[int, ...] = (1,)
     default_image: str = "vla-smolvla:latest"
     default_command: str = "python /app/train.py"
-    dataset_host_path: str = "/data/vla-platform/datasets"
+    dataset_host_path: str = f"{_PROJECT_DATA}/datasets"
     # Web 容器内看到数据集的路径。Web Pod 挂载了同一个 hostPath，
     # 扫描器在这里读 meta/info.json（见 deploy/web 的 volumeMounts）。
     datasets_mount_path: str = "/datasets"
     # 注册数据集时额外允许的根目录（逗号分隔）。为空时只接受数据集根的直接子目录，
     # 见 services/dataset_register.py。
     dataset_allowed_roots: tuple[str, ...] = ()
-    checkpoint_host_path: str = "/data/vla-platform/checkpoints"
+    checkpoint_host_path: str = f"{_PROJECT_DATA}/checkpoints"
+    # Web 容器内看到 checkpoint 的路径（deployment 挂到 /checkpoints）。
+    # 读 metrics / events / 权重清单都必须用这个，而不是宿主机路径——
+    # 容器里根本不存在 /home/jjx/... 这个前缀。
+    checkpoints_mount_path: str = "/checkpoints"
     db_path: str = "/data/history/platform.db"
     kubeconfig: str | None = None
     log_tail_default: int = 500
@@ -172,10 +184,17 @@ class Settings:
             allowed_gpus=allowed_gpus,
             default_image=os.environ.get("PLATFORM_DEFAULT_IMAGE", "vla-smolvla:latest"),
             default_command=os.environ.get("PLATFORM_DEFAULT_COMMAND", "python /app/train.py"),
-            dataset_host_path=os.environ.get("PLATFORM_DATASET_HOST_PATH", "/data/vla-platform/datasets"),
+            dataset_host_path=os.environ.get(
+                "PLATFORM_DATASET_HOST_PATH", f"{_PROJECT_DATA}/datasets"
+            ),
             datasets_mount_path=os.environ.get("PLATFORM_DATASETS_MOUNT_PATH", "/datasets"),
             dataset_allowed_roots=_parse_csv(os.environ.get("PLATFORM_DATASET_ALLOWED_ROOTS", "")),
-            checkpoint_host_path=os.environ.get("PLATFORM_CHECKPOINT_HOST_PATH", "/data/vla-platform/checkpoints"),
+            checkpoint_host_path=os.environ.get(
+                "PLATFORM_CHECKPOINT_HOST_PATH", f"{_PROJECT_DATA}/checkpoints"
+            ),
+            checkpoints_mount_path=os.environ.get(
+                "PLATFORM_CHECKPOINTS_MOUNT_PATH", "/checkpoints"
+            ),
             db_path=os.environ.get("PLATFORM_DB_PATH", "/data/history/platform.db"),
             kubeconfig=os.environ.get("PLATFORM_KUBECONFIG") or None,
             log_tail_default=log_tail,

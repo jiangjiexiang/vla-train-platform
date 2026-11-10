@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -250,8 +251,11 @@ class PlatformService:
         清理前最想知道的是「哪些任务占了大头」，而不是挨个 du。
         查不到的任务（已被清理或从没跑过）不出现在结果里，
         避免列表里塞满 0 字节条目。
+
+        统计的是 Web 容器里实际挂载的目录（checkpoints_mount_path）。
+        宿主机路径在容器内不存在，拿它 stat 只会永远得到 0。
         """
-        root = Path(self.settings.checkpoint_host_path)
+        root = Path(self.settings.checkpoints_mount_path)
         items: list[dict[str, Any]] = []
         total = 0
 
@@ -400,8 +404,10 @@ class PlatformService:
         for name in plan.checkpoints:
             # 路径必须先校验：直接字符串拼接 + rmtree 是删库级别的风险，
             # 我们已经因为一次变量展开为空丢掉过全部产物。
+            # 删除动作发生在 Web 容器里，根目录必须是容器内路径——
+            # 拿宿主机路径去 rmtree，要么删不到，要么删到同名的错误目录。
             try:
-                path = safe_job_dir(Path(self.settings.checkpoint_host_path), name)
+                path = safe_job_dir(Path(self.settings.checkpoints_mount_path), name)
             except UnsafePath as exc:
                 failed.append({"job": name, "stage": "path_check", "error": str(exc)})
                 continue
@@ -637,12 +643,17 @@ class PlatformService:
                 store.scan_many(root, pending)
         # 列表页只需要展示用字段：action_names / state_names / stats 这些长数组
         # 在大数据集上会让响应膨胀十几倍。详情接口再返回完整内容。
-        items = [_slim_dataset(meta.as_dict()) for meta in store.list_all()]
+        items = [_slim_dataset(_with_path_check(meta.as_dict())) for meta in store.list_all()]
         summary = {
             "total": len(items),
             "ready": sum(1 for item in items if item["status"] == "ready"),
             "warning": sum(1 for item in items if item["status"] == "warning"),
-            "unusable": sum(1 for item in items if item["status"] in ("unusable", "error")),
+            # missing 必须算进「不可用」：它和 unusable 一样不能拿来训练，
+            # 若不计入，页面顶部会显示「0 个不可用」而列表里全是红色徽标。
+            "unusable": sum(
+                1 for item in items if item["status"] in ("unusable", "error", "missing")
+            ),
+            "missing": sum(1 for item in items if item["status"] == "missing"),
             "total_frames": sum(int(item["frames"]) for item in items),
         }
         return {"items": items, "summary": summary, "root": str(root)}
@@ -928,8 +939,26 @@ class PlatformService:
         pods = self.kubernetes.list_job_pods(name)
         pod = self._select_pod(pods)
         if pod is None:
-            return {"name": name, "pod_name": None, "logs": ""}
+            return {
+                "name": name,
+                "pod_name": None,
+                "logs": "训练 Pod 还没有创建。任务可能仍在等待 Kueue 准入或集群配额，"
+                "稍后再看；如果一直停在这里，看「时间线」确认卡在哪个阶段。",
+            }
         pod_name = pod.get("metadata", {}).get("name")
+        waiting = _container_waiting(pod)
+        if waiting is not None:
+            # 容器还在 waiting（拉镜像、创建失败、崩溃退避），Pod 里没有可读的
+            # 容器实例，此时调 K8s 日志接口只会拿到 400 —— 那正是用户看到的
+            # 「Kubernetes rejected the request: 400 Bad Request」。
+            # 直接把容器状态翻译成人话返回，比一个 400 有用得多。
+            return {
+                "name": name,
+                "pod_name": pod_name,
+                "logs": _waiting_log_message(waiting, _pod_image(pod)),
+                "container_waiting": waiting["state"],
+                "container_reason": waiting["reason"],
+            }
         raw = self.kubernetes.read_pod_log(pod_name, tail_lines)
         return {
             "name": name,
@@ -942,7 +971,8 @@ class PlatformService:
         del spec_owner  # 归属校验由路由层统一做
         from .checkpoints import list_checkpoints
 
-        result = list_checkpoints(self.settings.checkpoint_host_path, name)
+        # 容器内路径：宿主机路径在这里读不到
+        result = list_checkpoints(self.settings.checkpoints_mount_path, name)
         return {"name": name, **result}
 
     def job_timeline(self, name: str) -> dict[str, Any]:
@@ -980,6 +1010,8 @@ class PlatformService:
         except ServiceError:
             events = []
 
+        pod = self._latest_pod(job.get("name") or name)
+        waiting = _container_waiting(pod)
         return {
             "name": name,
             "status": status,
@@ -989,8 +1021,24 @@ class PlatformService:
                 message=job.get("message"),
                 log_tail=log_tail[-8000:],
                 events=events,
+                # 容器没起来时容器状态才是根因，事件里往往只有一句
+                # "Back-off pulling image"，光靠它说不出镜像名。
+                waiting_reason=waiting["detail"] if waiting else None,
+                image=str(job.get("image") or _pod_image(pod) or ""),
             ),
         }
+
+    def _latest_pod(self, name: str) -> dict[str, Any] | None:
+        """取这个任务最新的 Pod，拿不到就返回 None。
+
+        诊断要的是容器状态（waiting.reason），它只存在于 Pod 上。K8s 临时不
+        可用时宁可退化成「没有容器状态」也不能让诊断接口整个 500——
+        用户正是在任务出问题的时候才点诊断。
+        """
+        try:
+            return self._select_pod(self.kubernetes.list_job_pods(name))
+        except Exception:  # noqa: BLE001 - 诊断是尽力而为
+            return None
 
     def job_metrics(self, name: str, limit: int = 500) -> dict[str, Any]:
         """训练指标（loss 曲线）。
@@ -1011,7 +1059,8 @@ class PlatformService:
             raise ServiceError(404, f"job {name} not found")
         from .metrics import read_metrics  # 局部导入，保持模块加载轻量
 
-        return read_metrics(self.settings.checkpoint_host_path, name, limit=limit)
+        # 容器内路径：宿主机路径在这里读不到
+        return read_metrics(self.settings.checkpoints_mount_path, name, limit=limit)
 
     def job_tensorboard(self, name: str, limit: int = 2000) -> dict[str, Any]:
         """TensorBoard 曲线（任意 tag）。
@@ -1025,7 +1074,8 @@ class PlatformService:
         if job is None and self.history.get_cancellation(name) is None and self.history.find_submission(name) is None:
             raise ServiceError(404, f"job {name} not found")
         try:
-            return tensorboard_service.read_scalars(self.settings.checkpoint_host_path, name, limit=limit)
+            # 容器内路径：宿主机路径在这里读不到
+            return tensorboard_service.read_scalars(self.settings.checkpoints_mount_path, name, limit=limit)
         except tensorboard_service.TensorboardUnavailable as exc:
             # 镜像里漏装 tensorboard 时，返回明确的 503 而不是 500 + traceback
             raise ServiceError(503, str(exc)) from exc
@@ -1407,7 +1457,7 @@ class PlatformService:
             "workload_status": workload_status,
             "pod_status": pod_phase,
             "message": message,
-            "checkpoint_dir": f"/checkpoints/{spec.name}",
+            "checkpoint_dir": f"{self.settings.checkpoints_mount_path.rstrip('/')}/{spec.name}",
         }
 
     def _spec_for_job(self, job: dict[str, Any]) -> SubmitSpec:
@@ -1523,8 +1573,7 @@ class PlatformService:
             reverse=True,
         )[0]
 
-    @staticmethod
-    def _cancelled_response(record: dict[str, Any]) -> dict[str, Any]:
+    def _cancelled_response(self, record: dict[str, Any]) -> dict[str, Any]:
         spec: SubmitSpec = record["spec"]
         created_at = record["created_at"]
         cancelled_at = record["cancelled_at"]
@@ -1558,7 +1607,7 @@ class PlatformService:
             "workload_status": "Cancelled" if status == "CANCELLED" else "Finished",
             "pod_status": None,
             "message": message,
-            "checkpoint_dir": f"/checkpoints/{spec.name}",
+            "checkpoint_dir": f"{self.settings.checkpoints_mount_path.rstrip('/')}/{spec.name}",
         }
 
 
@@ -1567,6 +1616,100 @@ def _whole_number(value: Any) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _container_waiting(pod: dict[str, Any] | None) -> dict[str, str] | None:
+    """Pod 里是否有容器停在 waiting 态。
+
+    返回 ``{"state", "reason", "message", "detail"}``；容器都已启动（或没有
+    容器状态）时返回 None。``state`` 是 waiting 之外的上层原因：容器根本没被
+    创建过时容器状态是空的，但 Pod 自己会在 ``status.reason`` 里留下
+    ImagePullBackOff / ErrImagePull，这两种都要认。
+    """
+    if not pod:
+        return None
+    status = _dict(pod.get("status"))
+    waiting: dict[str, str] = {}
+    for container_status in _list(status.get("container_statuses")):
+        state = _dict(container_status.get("state"))
+        waiting_state = _dict(state.get("waiting"))
+        if waiting_state:
+            waiting = waiting_state
+            break
+    if not waiting:
+        # 容器状态还没被 kubelet 写进来时，Pod 级别的 reason 同样有信息量。
+        pod_reason = status.get("reason")
+        if isinstance(pod_reason, str) and _POD_LEVEL_WAITING.search(pod_reason):
+            waiting = {"reason": pod_reason, "message": str(status.get("message") or "")}
+        else:
+            return None
+    reason = str(waiting.get("reason") or "Waiting")
+    message = str(waiting.get("message") or "")
+    return {
+        "state": "waiting",
+        "reason": reason,
+        "message": message,
+        "detail": f"{reason}: {message}" if message else reason,
+    }
+
+
+# 容器都没创建出来时，K8s 把拉镜像失败记在 Pod 自己的 status.reason 上。
+_POD_LEVEL_WAITING = re.compile(
+    r"ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerError|"
+    r"CreateContainerConfigError|CrashLoopBackOff",
+    re.I,
+)
+
+
+def _pod_image(pod: dict[str, Any] | None) -> str:
+    """从 Pod spec 里取训练容器（name=pytorch）的镜像名。"""
+    for container in _list(_dict(pod.get("spec")).get("containers")):
+        if _dict(container).get("name") == "pytorch":
+            return str(_dict(container).get("image") or "")
+    return ""
+
+
+def _waiting_log_message(waiting: dict[str, str], image: str) -> str:
+    """把「容器在 waiting」翻译成用户能看懂的一句日志。
+
+    这里刻意不抛错：读日志失败不是请求失败，用户要的是「为什么没有日志」。
+    文案按 reason 分开写，因为 ImagePullBackOff（镜像不在节点上）和
+    CrashLoopBackOff（起来了就挂）要做的修复动作完全不同。
+    """
+    reason = waiting.get("reason") or "Waiting"
+    detail = waiting.get("message") or ""
+    shown_image = image or "<未知镜像>"
+    lines = [f"暂时没有日志：容器尚未启动（{reason}）。"]
+    lowered = reason.lower()
+    if "imagepull" in lowered or "errimagepull" in lowered or "invalidimagename" in lowered:
+        lines.append(
+            f"镜像拉取失败：镜像 {shown_image} 在训练节点（K3s/containerd）上不存在。"
+            "buildah 里有这个镜像不代表 K3s 能用——导出并导入后再重新提交任务："
+            f"`buildah push {shown_image} docker-archive:/tmp/buildah-export.tar`，"
+            "`k3s ctr -n k8s.io images import /tmp/buildah-export.tar`。"
+        )
+    elif "crashloop" in lowered:
+        lines.append(
+            "容器启动后反复退出（CrashLoopBackOff）。Kubernetes 会一直退避重试，"
+            "任务会持续占用 GPU 配额——先取消任务，再去「事件」里看退出原因或退出码。"
+        )
+    elif "createcontainer" in lowered:
+        lines.append(
+            f"容器创建失败（{reason}）。通常是挂载的 ConfigMap/Secret 不存在或权限不足，"
+            "需要管理员核对任务模板。"
+        )
+    elif "containercreating" in lowered or "podinitializing" in lowered:
+        lines.append(
+            "容器正在创建中（拉镜像 / 挂载卷），稍等片刻再刷新日志。"
+            "如果持续很久，看「事件」里的具体原因。"
+        )
+    else:
+        lines.append(
+            "容器还没有开始运行，因此没有日志可读。看「事件」和「时间线」了解它卡在哪一步。"
+        )
+    if detail:
+        lines.append(f"Kubernetes 原文：{detail}")
+    return "\n".join(lines)
 
 
 def _pod_waiting_reason(pod: dict[str, Any] | None) -> str:
@@ -1757,6 +1900,39 @@ def _spec_image(job: dict[str, Any]) -> str:
 
 # 列表接口裁剪掉的字段：详情页才需要
 _DETAIL_ONLY_FIELDS = ("action_names", "state_names", "stats")
+
+
+def _with_path_check(payload: dict[str, Any]) -> dict[str, Any]:
+    """目录不在了就把状态改成 missing，并给一句说明。
+
+    为什么必须做：数据集列表读的是 SQLite 缓存，缓存只记「上次扫描时是什么样」。
+    宿主机目录被删、挂载盘掉了以后，缓存里仍然是 ``status: ready``，用户以为还能用，
+    提交任务后才在容器里报 ``No such file or directory``——一次 GPU 调度就这么浪费掉。
+
+    判定只看目录本身是否存在，不重新扫描（列表接口要快）。目录回来以后
+    下一次扫描会把状态写回去，所以这里不改库，只改返回给前端的副本。
+    """
+    path = str(payload.get("path") or "")
+    status = payload.get("status")
+    # 扫描失败（status=error）优先保留：那条 issue 里带着失败原因，比「目录不存在」更有用。
+    if not path or status == "error":
+        return payload
+    if Path(path).is_dir():
+        return payload
+    checked = dict(payload)
+    checked["status"] = "missing"
+    issues = list(payload.get("issues") or [])
+    if not any(issue.get("code") == "path_missing" for issue in issues):
+        issues.insert(
+            0,
+            {
+                "level": "error",
+                "code": "path_missing",
+                "message": f"数据集目录已不存在：{path}",
+            },
+        )
+    checked["issues"] = issues
+    return checked
 
 
 def _slim_dataset(payload: dict[str, Any]) -> dict[str, Any]:

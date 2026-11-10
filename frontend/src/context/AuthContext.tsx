@@ -50,7 +50,11 @@ function resolveAuthMode(authRequired: boolean | undefined, authMode: AuthMode |
 }
 
 function readTokenForMode(mode: AuthMode | null): string | null {
-  if (mode === 'ldap') return getSessionToken();
+  // local 和 ldap 一样：账号密码登录后拿到的是会话令牌。
+  // 之前只写了 ldap，local 模式返回 null —— 登录接口明明返回了 token，
+  // 前端却读不到，于是 isAuthenticated 一直为 false，
+  // 表现就是「点登录没反应/被送回登录页」。
+  if (mode === 'local' || mode === 'ldap') return getSessionToken();
   if (mode === 'token') return getStaticToken() ?? getSessionToken();
   return null;
 }
@@ -159,6 +163,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     storeSessionToken(payload.token);
     setTokenVersion((version) => version + 1);
     setMessage(null);
+    // 已经在 local 模式就保持不变，不要把模式改回 ldap
     setMode((previous) => previous ?? 'ldap');
     if (payload.user) {
       setUser(payload.user);

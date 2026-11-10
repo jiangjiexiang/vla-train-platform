@@ -3,6 +3,10 @@
 本文面向「有自己的训练代码、想把训练接进本平台」的同事。照本文从零做一遍，就能得到一个能提交、
 能排队、能产出 checkpoint、日志能在网页上看到的训练任务。
 
+> **如果不是 SmolVLA**（要用 openpi / π0.5、GR00T，或者自己写的训练代码），先看
+> [`custom-training-image.md`](custom-training-image.md)：那份文档专讲「镜像必须满足哪些平台约定、
+> 做的时候哪些坑一定会踩」。本文讲的是流程（数据集怎么放、任务怎么提交、怎么验收）。
+
 > 约定：命令默认在平台节点（有 GPU 的那台 K3s 机器）的仓库根目录执行；`<...>` 表示需要替换的值；
 > 用本文示例里的任务名（如 `smolvla-v1`）之前先确认没有被占用（`cli/vla-train list`）。
 > 全文只用 buildah + K3s 自带 containerd，**不需要、也不要安装 Docker**（理由见
@@ -191,7 +195,8 @@ if __name__ == "__main__":
 ### 3.3 编写 Dockerfile
 
 构建上下文（下文约定为 `~/vla-train-image/context/`）里放 `Dockerfile`、训练脚本、预下载的 wheel
-和基座权重。下面是一个**最小可用**示例：
+和基座权重。下面是一个**最小可用**示例（更完整、可整份复制的骨架、以及构建/导入/验证的坑，
+见 [`custom-training-image.md`](custom-training-image.md) 第 3、9 节）：
 
 ```dockerfile
 # 基础镜像：换成和你 torch/CUDA 版本匹配的镜像；本机缓存里有 python:3.11-slim

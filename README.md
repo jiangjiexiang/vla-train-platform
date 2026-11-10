@@ -153,6 +153,7 @@ GPU（NVIDIA 加速卡）
 | [数据集格式](docs/vla-dataset-format.md) | 支持的格式和校验规则 |
 | [API 文档](docs/api.md) | 后端接口说明 |
 | [训练环境配置](docs/training-env-guide.md) | 环境准备与部署 |
+| [制作自己的训练镜像](docs/custom-training-image.md) | 换框架 / 换依赖 / 预置权重时的镜像约定与踩坑 |
 | [运维手册](docs/operations.md) | 备份、恢复、清理、故障处理 |
 | [断点续训](docs/resume-training.md) | 续训的使用方法和注意事项 |
 | [常见问题](docs/troubleshooting.md) | 典型故障排查 |

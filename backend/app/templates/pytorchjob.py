@@ -72,6 +72,40 @@ def render_pytorch_job(spec: SubmitSpec, submitted_at: str, settings: Settings) 
                         "spec": {
                             "runtimeClassName": "nvidia",
                             "terminationGracePeriodSeconds": spec.termination_grace_period_seconds,
+                            # 训练容器和 Web 容器的 uid 不一样，而它们读写同一个
+                            # checkpoint 目录：训练写、Web 读和清理。
+                            #
+                            # 训练镜像没有固定用户，按 Dockerfile 默认跑成 root，
+                            # 写出来的 model.safetensors 是 root:root 600；Web 以
+                            # 10001 运行，读不了——指标空、权重的下载按钮点下去 403。
+                            # 反过来把目录属主改成 Web 的 uid 也不行：训练就写不进去。
+                            #
+                            # 与其在两边反复 chown（每换一次就有一边坏掉），
+                            # 不如在容器起来之前把权限放开一次。initContainer 以
+                            # root 跑，chmod 之后训练进程什么都写得了，Web 也读得到。
+                            # 只作用于挂进来的那一个目录，不动宿主机上别的东西。
+                            "initContainers": [
+                                {
+                                    "name": "init-permissions",
+                                    "image": spec.image,
+                                    "imagePullPolicy": "IfNotPresent",
+                                    "command": [
+                                        "sh",
+                                        "-c",
+                                        # 目录可能还不存在，-p 顺手建出来。
+                                        # chmod 而不是 chown：不关心谁写的，
+                                        # 只要求两边都能读写。
+                                        "mkdir -p " + settings.checkpoints_mount_path
+                                        + " && chmod -R a+rwX " + settings.checkpoints_mount_path,
+                                    ],
+                                    "volumeMounts": [
+                                        {
+                                            "name": "checkpoints",
+                                            "mountPath": settings.checkpoints_mount_path,
+                                        },
+                                    ],
+                                },
+                            ],
                             "containers": [
                                 {
                                     "name": "pytorch",

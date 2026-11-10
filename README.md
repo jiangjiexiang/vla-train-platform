@@ -70,6 +70,30 @@ VLA 模型训练的门槛不在写训练脚本，而在下面这些琐碎但容�
 任务成功或失败时推送到钉钉、企业微信或自定义 Webhook，
 包含任务名、状态、耗时、产物目录等信息。不需要一直盯着页面。
 
+## 界面预览
+
+### 快速开始：选数据集 → 选配方 → 开始
+
+![快速开始](docs/images/quickstart.png)
+
+### 训练监控：TensorBoard 曲线
+
+任务详情页直接嵌入 TensorBoard 官方界面，支持平滑、多指标叠加、直方图与数据导出。
+
+![训练监控](docs/images/job-tensorboard.png)
+
+### 数据集管理
+
+![数据集](docs/images/datasets.png)
+
+### 训练配方
+
+![训练配方](docs/images/recipes.png)
+
+### 集群总览
+
+![集群总览](docs/images/dashboard.png)
+
 ## 使用流程
 
 1. 打开平台地址，用账号登录

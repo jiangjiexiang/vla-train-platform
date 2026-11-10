@@ -279,3 +279,81 @@ GPU 完全没用上（util 0%），看起来像数据问题，实际是**容器�
 所以不能凭一次小规模训练就认为环境没问题——真实配置下的验证才算数。
 这个坑我们是在跑 500 步验证时才暴露的。
 
+## 断点续训
+
+训练被抢占、节点重启或手工取消后，可以从已有 checkpoint 接着训练。
+
+### 怎么用
+
+任务详情页点「续训」，会自动填好续训开关与来源任务，只需确认步数。
+命令行等价于在提交时传 `resume: true` 与 `resume_from: <任务名>`。
+
+### 三个曾经踩过的坑
+
+这个功能看起来只是「加个开关」，实际上前后修了三轮才真正可用，
+每一轮的现象都是「训练能跑但结果不对」：
+
+**一、勾了续训，实际还是从头训练**
+
+lerobot 从 `<输出目录>/checkpoints/last` 找续训点，而平台每次提交都会
+生成新的任务名和新的输出目录，那里空无一物。用户勾了开关，训练照常跑完，
+只是从第一步开始——没有任何报错，所以很难发现。
+
+修复：新增 `resume_from`，提交时把源任务的 checkpoint 复制到本次目录。
+
+**二、复制过去后必定崩溃**
+
+```
+ValueError: Optimizer config is required but not provided in TrainPipelineConfig
+```
+
+lerobot 0.4.4 的 `train.py` 里是这样分流的：
+
+```python
+if policy_path:        # 传了 --policy.path 走这里
+    self.policy = from_pretrained(policy_path)
+elif self.resume:      # 只有不传 policy.path 才会进来
+    self.checkpoint_path = policy_dir.parent
+```
+
+而训练脚本一直无条件传 `--policy.path`，所以续训分支永远不执行，
+`checkpoint_path` 恒为 None；后面 `elif ... and not self.resume` 又跳过了
+建 optimizer，于是 optimizer 也是 None，直接崩在第一步。
+
+修复：续训时不传 `--policy.path`，改用 `--config_path` 指向 checkpoint 里的
+`train_config.json`，让 lerobot 自己恢复配置。
+
+**三、复制 `last` 软链接变成断链**
+
+源目录的 `last` 是指向 `003000` 的软链接。直接复制过去得到一个断链，
+`train_config.json` 读不到，续训仍然失败。修复是解析出真实目录再复制，
+并在目标端重建软链接。
+
+### 验证结果
+
+从 `smolvla-pick1028-003`（step 3000）续到 3100：
+
+```
+续训：已从 smolvla-pick1028-003 复制 checkpoint 003000
+续训：使用配置 .../003000/pretrained_model/train_config.json
+'checkpoint_path': '/checkpoints/.../run/checkpoints/003000'
+'steps': 3100
+
+产物：003000  003100  last
+状态：SUCCEEDED，164 秒
+```
+
+两份独立验证都确认首条日志就是 `step:3K`，全程没有从 1 开始的记录。
+
+### 一个行为差异要知道
+
+`resume=true` 时 lerobot 会用 checkpoint 里的 `train_config`，
+命令行上传的 `steps`、`lr`、`batch_size` 会被忽略。
+这是框架的既定行为，不是平台丢参数。想改这些值只能新建一次训练。
+
+### 指标曲线的步数
+
+续训任务的 `metrics.jsonl` 默认从 1 开始计数，在图上会变成一条新曲线，
+看起来像"又从第一步开始了"。已通过 `VLA_STEP_OFFSET` 修正：
+续训时从 checkpoint 读出起始步数，曲线接着画。
+

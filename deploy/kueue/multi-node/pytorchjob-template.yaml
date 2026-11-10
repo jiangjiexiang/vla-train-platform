@@ -19,7 +19,7 @@
 #      DNS 插件支持。若启动时 DNS 失败（socket.gaierror），先确认 Service 已存在。
 #   3. 每节点 1 卡（契约默认）：worker replicas 数 = 节点数 - 1，
 #      每个容器 nvidia.com/gpu: 1。
-#   3b. checkpoint 用 hostPath /data/vla-platform/checkpoints，与后端
+#   3b. checkpoint 用 hostPath <项目>/data/checkpoints，与后端
 #      backend/app/templates/pytorchjob.py 渲染单机任务的写法一致。
 #      多机时每个 Pod 看到的是**自己节点**上的目录，所以 rank 0 写的
 #      smoke.pt 只落在 master 所在节点；这是有意的（见 examples/README.md），
@@ -109,7 +109,7 @@ spec:
           volumes:
             - name: checkpoints
               hostPath:
-                path: /data/vla-platform/checkpoints
+                path: /home/jjx/vla-train-platform/data/checkpoints
                 type: Directory
     Worker:
       replicas: 1
@@ -170,5 +170,5 @@ spec:
           volumes:
             - name: checkpoints
               hostPath:
-                path: /data/vla-platform/checkpoints
+                path: /home/jjx/vla-train-platform/data/checkpoints
                 type: Directory

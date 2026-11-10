@@ -1,5 +1,5 @@
 import { App, Button, Space } from 'antd';
-import { CopyOutlined, StopOutlined } from '@ant-design/icons';
+import { CopyOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { api, getErrorMessage } from '../api/client';
 import type { Job } from '../types/api';
@@ -17,6 +17,19 @@ export function JobActions({ job, onChanged, size = 'small' }: JobActionsProps) 
 
   const clone = () => {
     navigate('/advanced/submit', { state: { sourceJob: job } });
+  };
+
+  // 只有真的跑起来过的任务才谈得上续训：没开始过就没有 checkpoint。
+  // 失败/取消的任务照样可以续——那正是最需要续训的场景，
+  // 所以只看「跑过多久」，不看成功与否。
+  const canResume =
+    (job.status === 'SUCCEEDED' || job.status === 'FAILED' || job.status === 'CANCELLED') &&
+    (job.duration_seconds ?? 0) > 0;
+
+  const resume = () => {
+    navigate('/advanced/submit', {
+      state: { sourceJob: job, resumeFrom: job.name },
+    });
   };
 
   const confirmCancel = () => {
@@ -42,6 +55,11 @@ export function JobActions({ job, onChanged, size = 'small' }: JobActionsProps) 
   return (
     <Space size={4} onClick={(event) => event.stopPropagation()}>
       <Button type="link" size={size} icon={<CopyOutlined />} onClick={clone}>克隆</Button>
+      {canResume && (
+        <Button type="link" size={size} icon={<ReloadOutlined />} onClick={resume}>
+          续训
+        </Button>
+      )}
       {canCancel && (
         <Button type="link" danger size={size} icon={<StopOutlined />} onClick={confirmCancel}>
           取消

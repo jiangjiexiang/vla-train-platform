@@ -129,7 +129,12 @@ export function SubmitJobPage() {
   const navigate = useNavigate();
   const { message } = App.useApp();
   const { user } = useAuth();
-  const sourceJob = (location.state as { sourceJob?: Job } | null)?.sourceJob;
+  const navState = location.state as { sourceJob?: Job; resumeFrom?: string } | null;
+  const sourceJob = navState?.sourceJob;
+  // 从任务详情点「续训」进来时，除了复制参数还要把续训来源填好。
+  // 否则用户点完续训，提交出去的仍是一个从头开始的普通任务——
+  // 这正是之前 resume 失效的原因，不能只靠用户自己记得填。
+  const resumeFrom = navState?.resumeFrom;
   const [config, setConfig] = useState<Awaited<ReturnType<typeof api.getConfig>> | null>(null);
   // 镜像候选：优先用 /images 的返回，加载失败时退化成只有默认镜像，不阻塞提交
   const [imageOptions, setImageOptions] = useState<string[]>([]);
@@ -145,6 +150,16 @@ export function SubmitJobPage() {
   const [paramsLoading, setParamsLoading] = useState(false);
   const paramsRequestId = useRef(0);
   const [form] = Form.useForm<SubmitFormValues>();
+
+  // 从「续训」按钮进来时，自动把续训开关和来源任务填好。
+  // 只填一次：用 ref 防止用户手动改回后被覆盖。
+  const resumeApplied = useRef(false);
+  useEffect(() => {
+    if (!resumeFrom || resumeApplied.current) return;
+    resumeApplied.current = true;
+    void form.setFieldValue(['params', 'resume'], true);
+    void form.setFieldValue(['params', 'resume_from'], resumeFrom);
+  }, [resumeFrom, form]);
   const multiNode = Form.useWatch('multi_node', form) ?? false;
   // 实时预览最终命令：训练参数会被拼接到 base command 后面
   const watchCommand = Form.useWatch('command', form);

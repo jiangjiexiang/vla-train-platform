@@ -72,7 +72,7 @@ def prune_backups(backup_dir: Path, keep: int) -> dict[str, Any]:
     """
     keep = max(1, int(keep))
     if not backup_dir.is_dir():
-        return {"removed": [], "kept": 0}
+        return {"removed": [], "kept": 0, "failed": []}
 
     files = sorted(
         (p for p in backup_dir.glob("platform-*.db") if p.is_file()),
@@ -80,13 +80,21 @@ def prune_backups(backup_dir: Path, keep: int) -> dict[str, Any]:
         reverse=True,
     )
     removed: list[str] = []
+    failed: list[dict[str, str]] = []
     for path in files[keep:]:
         try:
             path.unlink()
             removed.append(path.name)
-        except OSError:
-            continue
-    return {"removed": removed, "kept": min(len(files), keep)}
+        except OSError as exc:
+            # 以前这里是静默 continue：权限不足时删不掉却报"保留 N 份"，
+            # 于是备份目录无限增长而没人知道。实测普通用户对 10001 属主的
+            # 目录就是删不了，但接口显示一切正常。
+            failed.append({"name": path.name, "error": str(exc)})
+    return {
+        "removed": removed,
+        "kept": min(len(files), keep),
+        "failed": failed,
+    }
 
 
 def list_backups(backup_dir: Path) -> list[dict[str, Any]]:

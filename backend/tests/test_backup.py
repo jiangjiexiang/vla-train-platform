@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 from app.services.backup import create_backup, list_backups, prune_backups
 
@@ -112,3 +113,37 @@ def test_repeated_backups_do_not_overwrite(tmp_path):
 
     assert first["path"] != second["path"]
     assert len(list_backups(bdir)) == 2
+
+
+def test_prune_reports_permission_failures(tmp_path, monkeypatch):
+    """删不掉时必须报告，不能静默 continue。
+
+    实测踩过：备份文件属主是容器内的 10001，运维用普通用户跑清理时
+    一个都删不掉，但接口返回「保留 2 份」——看起来清理了，实际全在，
+    备份目录会无限增长而没人发现。
+    """
+    from app.services import backup as backup_module
+
+    bdir = tmp_path / "backups"
+    bdir.mkdir()
+    for i in range(4):
+        (bdir / f"platform-2026010{i}T000000Z.db").write_bytes(b"x")
+
+    def boom(self):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "unlink", boom)
+
+    result = backup_module.prune_backups(bdir, keep=1)
+
+    assert result["removed"] == []
+    assert len(result["failed"]) == 3
+    assert "Permission denied" in result["failed"][0]["error"]
+
+
+def test_prune_result_always_has_failed_key(tmp_path):
+    """结构稳定：没有失败也要有空列表，调用方不用做存在性判断。"""
+    from app.services.backup import prune_backups
+
+    empty = prune_backups(tmp_path / "nope", keep=3)
+    assert empty["failed"] == []

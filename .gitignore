@@ -21,3 +21,8 @@ frontend/.cache/
 # smoke 镜像构建用的预下载 wheel（908MB），不进版本库
 images/smoke-train/wheels/
 images/smolvla-train/wheels/
+
+# 远端仓库遗留的 Gatsby 模板（历史保留，但不再使用）
+.gitignore.gatsby-backup
+public/
+.cache/

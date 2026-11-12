@@ -7,6 +7,8 @@ export type JobStatus =
   | 'SUCCEEDED'
   | 'FAILED'
   | 'CANCELLED'
+  // 训练对象已消失，且此前未记录到可靠终态
+  | 'GONE'
   | 'UNKNOWN';
 
 export type Priority = 'low' | 'normal' | 'high';

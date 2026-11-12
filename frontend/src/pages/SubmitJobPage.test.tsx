@@ -196,4 +196,13 @@ describe('SubmitJobPage v0.9 字段', () => {
 
     expect(await screen.findByText('GPU quota exceeded: 4 used of 4 allowed')).toBeInTheDocument();
   });
+
+  it('标签格式错误提示与不允许下划线的规则一致', async () => {
+    const { LABEL_PATTERN, validateLabels } = await import('./SubmitJobPage');
+
+    expect(LABEL_PATTERN.test('team_name')).toBe(false);
+    const error = validateLabels({ team_name: 'perception' });
+    expect(error).toContain('仅允许小写字母、数字、中划线和点');
+    expect(error).not.toContain('下划线');
+  });
 });

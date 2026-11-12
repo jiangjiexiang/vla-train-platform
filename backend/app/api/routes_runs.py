@@ -8,18 +8,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
 from ..auth import AuthContext, require_user, set_actor
-from ..models import RunSubmitRequest
+from ..models import RunRequest
 from ..services.platform import PlatformService
-from ..services.runs import RunRequest
+from .dependencies import get_service
 
 router = APIRouter(prefix="/api/v1")
-
-
-def get_service(request: Request) -> PlatformService:
-    return request.app.state.service
 
 
 def _recipe_summary(recipe: Any, service: PlatformService) -> dict[str, Any]:
@@ -64,7 +60,7 @@ def estimate_run(
 
 @router.post("/runs/preflight")
 def preflight_run(
-    payload: RunSubmitRequest,
+    payload: RunRequest,
     _user: AuthContext = Depends(require_user),
     service: PlatformService = Depends(get_service),
 ) -> dict[str, Any]:
@@ -72,15 +68,14 @@ def preflight_run(
 
     前端点「加入队列」前先调这个，把问题展示出来，而不是让任务进队列后失败。
     """
-    return service.preflight_run(RunRequest(**payload.model_dump()))
+    return service.preflight_run(payload)
 
 
 @router.post("/runs", status_code=201)
 def create_run(
-    payload: RunSubmitRequest,
+    payload: RunRequest,
     user: AuthContext = Depends(set_actor),
     service: PlatformService = Depends(get_service),
 ) -> dict[str, Any]:
     """一键开始训练：选数据集 + 选配方即可，其余由平台填充。"""
-    request = RunRequest(**payload.model_dump())
-    return service.create_run(request, owner=user.username)
+    return service.create_run(payload, owner=user.username)

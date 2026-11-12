@@ -13,12 +13,25 @@
 | `preflight.sh` | 装机前只读检查（**本次新增多机检查项**） |
 | `cleanup-jobs.py` / `lint.sh` / `test.sh` / `release.sh` | 维护类 |
 
+### 单机验收脚本公共库
+
+`verify-4090.sh` 和 `verify-a100.sh` 共同加载 `scripts/lib/verify-common.sh`，公共库包含
+集群只读巡检、Web API 查询、诊断和清理逻辑，不应单独执行。两个入口通过自身路径定位
+公共库，因此可从仓库根目录或其它工作目录调用；CLI、环境变量和硬件专属验收仍由各入口定义。
+
+默认模式不提交训练。只有显式指定 `--e2e`（A100 还可指定 `--8gpu-smoke`）才会调用任务提交、
+取消接口；失败清理也只针对本次已创建且未保留的任务。
+
+```bash
+bash -n scripts/verify-4090.sh scripts/verify-a100.sh scripts/lib/verify-common.sh
+```
+
 ## 新增脚本（v0.9 多机 / 高可用分区）
 
 | 脚本 | 是否写集群 | 作用 |
 |---|---|---|
 | `verify-multi-node.sh` | 否（dry-run 也不写 etcd） | 多机 + HA 全套**静态校验**：`bash -n`、`py_compile`、`kustomize build`、结构断言、rendezvous 场景、preflight 分支、可选 `apply --dry-run` |
-| `check-smoke-train-rendezvous.py` | 否 | 假 torch 驱动 `train.py`，验证 8 个 rendezvous 场景（多机 rank0/rank1、torchrun、单机、缺参数报错） |
+| `check-smoke-train-rendezvous.py` | 否 | 假 torch 驱动 `train.py`，验证 13 个 rendezvous 场景（多机 rank0/rank1、torchrun、单机 env、非法 rank/port/env） |
 | `check-preflight-multinode.sh` | 否 | 假 kubectl 验证 `preflight.sh` 的多机分支（一致 / 部分缺失 / 不一致必须 FAIL） |
 | `deploy-multi-node-ha.sh` | **默认 dry-run，`--apply` 才写** | 打节点多机标签、应用 `deploy/kueue/multi-node`、可选叠加 Web HA、校验并给回滚命令 |
 

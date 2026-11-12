@@ -3,58 +3,65 @@ import {
   App,
   Button,
   Card,
-  Collapse,
   Col,
-  Modal,
+  Collapse,
   Empty,
   Form,
   Input,
-  InputNumber,
+  Modal,
   Radio,
   Row,
-  Select,
   Space,
   Spin,
   Steps,
-  Switch,
   Tag,
-  Tooltip,
   Typography,
 } from 'antd';
 import {
-  CheckCircleFilled,
   DatabaseOutlined,
-  ExclamationCircleOutlined,
   FireOutlined,
   ReloadOutlined,
   RocketOutlined,
   SearchOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormInstance } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
-import { ApiError, api, getErrorMessage, isAbortError, isUnauthorized } from '../api/client';
-import {
-  DatasetStatusTag,
-  DatasetWarningHint,
-  isDatasetUsable,
-  issuesByLevel,
-} from '../components/DatasetBadges';
+import { api, getErrorMessage, isAbortError, isUnauthorized } from '../api/client';
+import { isDatasetUsable } from '../components/DatasetBadges';
 import { ErrorAlert } from '../components/ErrorAlert';
-import { PARAMS_FIELD, paramRules, visibleParams } from '../components/TrainParamsForm';
-import type { ParamSpec } from '../types/api';
+import { visibleParams } from '../components/TrainParamsForm';
 import type {
   DatasetMeta,
-  ParamsTemplate,
-  PreflightCheck,
   PreflightResponse,
   Priority,
   Recipe,
   RunRequest,
 } from '../types/api';
-import { formatBytes, formatCount, formatMinutes, paramPlaceholder } from '../utils/dataset';
+import { ParamsPanel } from './quickstart/ParamsPanel';
+import { PreflightList } from './quickstart/PreflightList';
+import { DatasetCard, RecipeCard } from './quickstart/SelectionCards';
+import {
+  PRIORITY_OPTIONS,
+  buildOverrides,
+  describePreflightErrors,
+  describeSubmitError,
+  isRecipeCompatible,
+  recipeInitialParams,
+  recipeTemplate,
+} from './quickstart/utils';
+
+// 页面测试与外部引用统一走本模块再导出，避免各自深引 utils 路径。
+export {
+  PRIORITY_OPTIONS,
+  buildOverrides,
+  describePreflightErrors,
+  describeSubmitError,
+  isRecipeCompatible,
+  recipeInitialParams,
+  recipeTemplate,
+};
+export { PreflightList } from './quickstart/PreflightList';
 
 /**
  * 页面间传递「用此数据聚集开始训练」的预选。走 history state 而不是 query，
@@ -64,449 +71,11 @@ export interface QuickStartLocationState {
   datasetId?: string;
 }
 
-/** 参数推荐值的影子字段后缀，只用于展示，不会出现在提交的 overrides 里。 */
-const DEFAULT_VALUE_SUFFIX = '__default';
-
-export const PRIORITY_OPTIONS: Array<{ value: Priority; label: string }> = [
-  { value: 'low', label: '低' },
-  { value: 'normal', label: '普通' },
-  { value: 'high', label: '高' },
-];
-
-/** 配方能否吃下这个数据集：格式必须精确匹配（与后端 check_compatibility 一致）。 */
-export function isRecipeCompatible(recipe: Recipe, dataset: DatasetMeta | null): boolean {
-  if (!dataset) return false;
-  return (recipe.dataset_formats ?? []).includes(dataset.format);
-}
-
-/** 把配方列表项转成 TrainParamsForm 需要的模板结构。 */
-function recipeTemplate(recipe: Recipe): ParamsTemplate {
-  return {
-    schema_version: 1,
-    entrypoint: recipe.entrypoint,
-    params: recipe.params ?? [],
-    extra_args: recipe.extra_args ?? undefined,
-  };
-}
-
-/**
- * 参数初始值：模板 default 为主，配方的 defaults 覆盖模板（与后端
- * runs.merge_values 的优先级 defaults > default 一致）。bool 缺省显式给 false，
- * 保证 Switch 受控；enum 缺省时取第一个选项。
- */
-export function recipeInitialParams(recipe: Recipe): Record<string, unknown> {
-  const values: Record<string, unknown> = {};
-  for (const param of visibleParams(recipeTemplate(recipe))) {
-    if (param.type === 'bool') {
-      values[param.key] = false;
-    } else if (param.default !== undefined && param.default !== null && param.default !== '') {
-      values[param.key] = param.default;
-    } else if (param.type === 'enum' && param.options && param.options.length > 0) {
-      values[param.key] = param.options[0];
-    } else {
-      values[param.key] = null;
-    }
-  }
-  for (const [key, value] of Object.entries(recipe.defaults ?? {})) {
-    if (key in values) values[key] = value;
-  }
-  return values;
-}
-
-/** 只把用户真正改过的参数放进 overrides，未改的交给后端用 defaults/模板默认值。 */
-export function buildOverrides(
-  recipe: Recipe | null,
-  params: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  if (!recipe || !params) return {};
-  const initial = recipeInitialParams(recipe);
-  const overrides: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(params)) {
-    if (key === 'extra_args') continue;
-    if (value === null || value === undefined || value === '') continue;
-    if (!(key in initial)) continue;
-    if (value !== initial[key]) overrides[key] = value;
-  }
-  return overrides;
-}
-
-/**
- * 422 的 detail 分两种：数据集本身不可用，或配方不支持该格式。两者处理方式完全不同，
- * 提示要分开写，否则用户会去换配方而问题其实在数据上。
- */
-export function describeSubmitError(error: unknown): { title: string; description: string } {
-  const text = getErrorMessage(error);
-  if (error instanceof ApiError && error.status === 409) {
-    return {
-      title: '任务名已被占用',
-      description: `${text}。请换一个任务名，或清空任务名让平台自动生成。`,
-    };
-  }
-  if (error instanceof ApiError && error.status === 422) {
-    if (/数据集.*不可用|dataset.*unavailable/i.test(text)) {
-      return {
-        title: '数据集不可用',
-        description: `${text}。请到「数据集」页查看问题并修复后重新扫描，或换一个可用数据集。`,
-      };
-    }
-    if (/不支持数据集格式|不支持|格式/i.test(text)) {
-      return {
-        title: '数据集与配方不兼容',
-        description: `${text}。请换一个支持该格式的配方，或先把数据集转换格式。`,
-      };
-    }
-    return { title: '提交参数有误', description: text };
-  }
-  return { title: '提交失败', description: text };
-}
-
-/** 预检 error → 页面顶部 Alert 的标题与说明。 */
-export function describePreflightErrors(errors: PreflightCheck[]): { title: string; description: string } {
-  const codes = new Set(errors.map((check) => check.code));
-  const title = codes.has('dataset_unusable') || codes.has('no_camera')
-    ? '数据集不可用，先修好再训练'
-    : codes.has('format_mismatch')
-      ? '数据集与配方不兼容'
-      : '预检未通过';
-  const description = errors.map((check) => check.message).join('；') || '请按下方建议处理后重试';
-  return { title, description };
-}
-
 const STEPS = [
   { title: '选数据集', description: '确认格式与规模' },
   { title: '选配方', description: '现成的训练方案' },
   { title: '加入队列', description: '平台自动补全参数' },
 ];
-
-// 网格里的卡片用 role=radio 暴露可选中状态，比裸 div 更好测也更好读
-
-/** 训练耗时预估。失败就返回 null —— 估不出来不该挡住用户提交。 */
-function useEstimate(recipeId: string | undefined, recipe: Recipe | undefined) {
-  const [value, setValue] = useState<{ range: string; hint: string } | null>(null);
-  const defaults = (recipe?.defaults ?? {}) as Record<string, unknown>;
-  const steps = defaults.steps;
-
-  useEffect(() => {
-    if (!recipeId) {
-      setValue(null);
-      return;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const result = await api.estimateRun({
-            recipe_id: recipeId,
-            // 预估只用配方参数；后端不强制 dataset，这里给空串即可
-            dataset_id: '',
-            overrides: steps === undefined ? undefined : { steps: Number(steps) },
-          });
-          if (cancelled) return;
-          if (!result.estimated_seconds) {
-            setValue(null);
-            return;
-          }
-          setValue({
-            range: result.range_text || result.estimated_text,
-            hint:
-              result.source === 'history'
-                ? `按 ${result.samples} 个同类历史任务实测（约 ${(result as { steps_per_second?: number }).steps_per_second ?? '?'} 步/秒）`
-                : '暂无同类历史数据，用的是保守估计',
-          });
-        } catch {
-          if (!cancelled) setValue(null);
-        }
-      })();
-    }, 400);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [recipeId, steps]);
-
-  return value;
-}
-
-function DatasetCard({
-  dataset,
-  selected,
-  onSelect,
-}: {
-  dataset: DatasetMeta;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const usable = isDatasetUsable(dataset);
-  const errors = issuesByLevel(dataset.issues, 'error');
-  const warnings = issuesByLevel(dataset.issues, 'warning');
-
-  const metaItems = [
-    { label: '集数', value: formatCount(dataset.episodes) },
-    { label: '帧数', value: formatCount(dataset.frames) },
-    { label: '时长', value: formatMinutes(dataset.duration_seconds) },
-    { label: '相机', value: `${dataset.cameras?.length ?? 0} 路` },
-    { label: '维度', value: `state ${dataset.state_dim} / action ${dataset.action_dim}` },
-    { label: '体积', value: formatBytes(dataset.size_bytes) },
-  ];
-
-  const body = (
-    <div
-      className={`pick-card dataset-card${selected ? ' pick-card-selected' : ''}${usable ? '' : ' pick-card-disabled'}`}
-      role="radio"
-      aria-checked={selected}
-      aria-disabled={!usable}
-      tabIndex={usable ? 0 : -1}
-      data-testid={`dataset-card-${dataset.id}`}
-      onClick={() => {
-        if (usable) onSelect();
-      }}
-      onKeyDown={(event) => {
-        if (usable && (event.key === 'Enter' || event.key === ' ')) {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
-    >
-      <div className="pick-card-head">
-        <Space size={6} wrap>
-          <Typography.Text strong>{dataset.name}</Typography.Text>
-          <DatasetStatusTag status={dataset.status} />
-          <Tag bordered={false}>{dataset.format || 'unknown'}</Tag>
-          <DatasetWarningHint issues={dataset.issues} />
-        </Space>
-        {selected && <CheckCircleFilled className="pick-card-check" />}
-      </div>
-      <div className="pick-card-meta">
-        {metaItems.map((item) => (
-          <div key={item.label} className="pick-meta-item">
-            <span className="pick-meta-label">{item.label}</span>
-            <span className="pick-meta-value">{item.value}</span>
-          </div>
-        ))}
-      </div>
-      {!usable && (
-        <Typography.Text type="danger" className="pick-card-reason">
-          <ExclamationCircleOutlined /> {errors[0]?.message || '数据集不可用，请先修复后重新扫描'}
-        </Typography.Text>
-      )}
-      {usable && warnings.length > 0 && (
-        <Typography.Text type="warning" className="pick-card-reason">
-          {warnings.length} 条警告：{warnings[0].message}
-        </Typography.Text>
-      )}
-    </div>
-  );
-
-  // 不可用卡片 hover 时把全部 error 列出来，不必先点到详情页
-  return usable ? body : (
-    <Tooltip title={(
-      <div>
-        {errors.map((issue, index) => <div key={`${issue.code}-${index}`}>· {issue.message}</div>)}
-      </div>
-    )}>
-      {/* Tooltip 需要能捕获鼠标事件的包裹层，disabled 的卡片仍可 hover */}
-      <div className="pick-card-tooltip-wrap">{body}</div>
-    </Tooltip>
-  );
-}
-
-function RecipeCard({
-  recipe,
-  selected,
-  onSelect,
-}: {
-  recipe: Recipe;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <div
-      className={`pick-card recipe-card${selected ? ' pick-card-selected' : ''}`}
-      role="radio"
-      aria-checked={selected}
-      tabIndex={0}
-      data-testid={`recipe-card-${recipe.id}`}
-      onClick={onSelect}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
-    >
-      <div className="pick-card-head">
-        <Space size={6} wrap>
-          <Typography.Text strong>{recipe.name}</Typography.Text>
-          {recipe.estimated_vram_gb !== null && recipe.estimated_vram_gb !== undefined && (
-            <Tag bordered={false} icon={<ThunderboltOutlined />}>约 {recipe.estimated_vram_gb} GB 显存</Tag>
-          )}
-          <Tag bordered={false}>{recipe.gpu_count} × GPU</Tag>
-        </Space>
-        {selected && <CheckCircleFilled className="pick-card-check" />}
-      </div>
-      <Typography.Paragraph type="secondary" className="pick-card-desc" ellipsis={{ rows: 2 }}>
-        {recipe.description || '暂无描述'}
-      </Typography.Paragraph>
-    </div>
-  );
-}
-
-/**
- * 快速开始的参数控件：类型映射与 TrainParamsForm.ParamControl 保持一致
- * （int/float → InputNumber，bool → Switch，enum → Select，其余 → Input）。
- * 表单初值由 ParamsPanel 里的 Form.Item 负责，这里只补一个占位文案。
- */
-function QuickParamControl({ param }: { param: ParamSpec }) {
-  const placeholder = paramPlaceholder(param);
-  const width = '100%';
-  switch (param.type) {
-    case 'int':
-      return (
-        <InputNumber
-          style={{ width }}
-          placeholder={placeholder}
-          min={param.min}
-          max={param.max}
-          precision={0}
-          step={1}
-        />
-      );
-    case 'float':
-      return (
-        <InputNumber<string>
-          style={{ width }}
-          placeholder={placeholder}
-          min={param.min === undefined ? undefined : String(param.min)}
-          max={param.max === undefined ? undefined : String(param.max)}
-          stringMode
-        />
-      );
-    case 'bool':
-      return <Switch checkedChildren="开启" unCheckedChildren="关闭" />;
-    case 'enum':
-      return (
-        <Select
-          allowClear
-          placeholder={placeholder ?? '默认'}
-          options={(param.options ?? []).map((option) => ({ value: option, label: option }))}
-        />
-      );
-    case 'str':
-    case 'path':
-    default:
-      return <Input placeholder={placeholder} />;
-  }
-}
-
-/**
- * 高级参数面板。
- *
- * 不直接复用 TrainParamsForm：它内部的 Form.Item 用相对路径 (namePath=[]) 注册，
- * 而 antd 5 的 Form.Item 不会把父级 name 前缀拼进子字段，参数既进不了 store 也不会被校验。
- * 这里沿用同一套控件类型映射与校验规则，显式给出 [params, key] 的绝对路径。
- *
- * 默认值处理：Field 只在挂载那一刻读一次 store，而折叠面板展开时 Field 才真正渲染，
- * 之后写 store 不会回填到控件。因此在 ParamsPanel 渲染（早于 Field 挂载）时先把配方
- * defaults 写进 store；另外为每个参数准备一条 `params.<key>__default` 字段，专门用来
- * 把推荐值显示成输入框的占位文案——折叠状态下也能看出「不改会用什么值」。
- */
-function ParamsPanel({
-  form,
-  recipe,
-  defaults,
-}: {
-  form: FormInstance;
-  recipe: Recipe;
-  defaults: Record<string, unknown>;
-}) {
-  // 渲染阶段写 store：此时的写入发生在 Field 挂载/订阅之前，控件挂载后直接读出，
-  // 之后再改用户输入也不会被覆盖。
-  const appliedRef = useRef<string | null>(null);
-  if (appliedRef.current !== recipe.id) {
-    appliedRef.current = recipe.id;
-    form.setFields([
-      ...Object.entries(defaults).map(([key, value]) => ({ name: [PARAMS_FIELD, key], value })),
-      ...Object.entries(defaults).map(([key, value]) => ({
-        name: [PARAMS_FIELD, `${key}${DEFAULT_VALUE_SUFFIX}`],
-        value,
-      })),
-    ]);
-  }
-
-  const params = visibleParams(recipeTemplate(recipe));
-  // 预估耗时：用户填 5000 步时最想知道的就是这个
-  const estimateInfo = useEstimate(recipe?.id, recipe);
-  return (
-    <div data-testid="quickstart-params">
-      {estimateInfo ? (
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message={`预计训练耗时 ${estimateInfo.range}`}
-          description={estimateInfo.hint}
-          data-testid="quickstart-estimate"
-        />
-      ) : null}
-      <Row gutter={16}>
-        {params.map((param) => (
-          <Col xs={24} md={param.type === 'bool' ? 12 : 8} key={param.key}>
-            <Form.Item
-              name={[PARAMS_FIELD, param.key]}
-              label={param.label}
-              extra={param.help}
-              rules={paramRules(param)}
-              valuePropName={param.type === 'bool' ? 'checked' : 'value'}
-              data-testid={`param-${param.key}`}
-            >
-              <QuickParamControl param={param} />
-            </Form.Item>
-            {param.type !== 'bool' && (
-              <Form.Item noStyle name={[PARAMS_FIELD, `${param.key}${DEFAULT_VALUE_SUFFIX}`]}>
-                <DefaultValueHint param={param} />
-              </Form.Item>
-            )}
-          </Col>
-        ))}
-      </Row>
-    </div>
-  );
-}
-
-/** 把配方推荐值渲染成「默认 5」这样的提示，不改动控件本身。 */
-function DefaultValueHint({ param }: { param: ParamSpec }) {
-  const text = paramPlaceholder(param);
-  if (param.type === 'bool' || !text) return null;
-  return (
-    <Typography.Text type="secondary" className="param-default-hint">
-      默认 {text}
-    </Typography.Text>
-  );
-}
-
-/** 预检结果：按 level 分色，逐条给出 message 与可执行的 suggestion。 */
-export function PreflightList({ checks }: { checks: PreflightCheck[] }) {
-  if (checks.length === 0) return null;
-  return (
-    <ul className="preflight-list" data-testid="preflight-list">
-      {checks.map((check, index) => (
-        <li key={`${check.code}-${index}`} className={`dataset-issue dataset-issue-${check.level}`}>
-          <div>
-            <Typography.Text
-              strong
-              type={check.level === 'error' ? 'danger' : check.level === 'warning' ? 'warning' : undefined}
-            >
-              {check.message}
-            </Typography.Text>
-            <Typography.Text type="secondary" className="preflight-suggestion">
-              {check.suggestion}
-            </Typography.Text>
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
 
 export function QuickStartPage() {
   const navigate = useNavigate();

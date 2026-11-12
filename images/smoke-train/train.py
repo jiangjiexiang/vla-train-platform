@@ -2,20 +2,19 @@
 """Small synthetic training job for platform validation, not a VLA model."""
 
 import argparse
-from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 import shutil
 import socket
 import subprocess
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 import torch
+import torch.distributed as dist
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel
-import torch.distributed as dist
-
 
 # torchrun 在单机多卡时注入的 rendezvous 变量。多机模式下这几个变量由
 # PyTorchJob/Gang 端口 + MASTER_ADDR/MASTER_PORT/WORLD_SIZE 手工提供，
@@ -355,7 +354,7 @@ def save_checkpoint(path, model, optimizer, step, world_size, backend):
     os.replace(temporary, path)
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description="Synthetic single-GPU/DDP/multi-node platform smoke training")
     parser.add_argument("--steps", type=positive_int, default=100, help="training steps (default: 100)")
     parser.add_argument("--sleep", type=nonnegative_float, default=0.1, help="seconds to sleep per step (default: 0.1)")
@@ -364,165 +363,213 @@ def main():
         action="store_true",
         help="initialize DDP from the env:// rendezvous (torchrun, PyTorchJob master, or manual RANK/WORLD_SIZE)",
     )
-    args = parser.parse_args()
+    return parser
 
+
+def initialize_distributed(rendezvous, mode):
+    if not rendezvous["distributed"]:
+        return None
+
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    nccl_environment()
+    log(f"Initializing distributed backend: {backend} via env://")
+    if mode in ("multi-node", "single-node-env") and backend == "nccl":
+        # 跨节点 NCCL 最怕网卡选错：未显式指定时给出建议值，而不是替用户改。
+        if not os.environ.get("NCCL_SOCKET_IFNAME"):
+            log(
+                "NCCL_HINT 未设置 NCCL_SOCKET_IFNAME；多节点 NCCL 常需要指定业务网卡"
+                "（例如 NCCL_SOCKET_IFNAME=eth0），否则可能选到 flannel/cni 网卡造成超时或性能骤降。"
+            )
+    dist.init_process_group(backend=backend, init_method="env://")
+    # 结构化输出：便于 scripts/verify-multi-node.sh 用 grep 校验真正生效的 rendezvous。
+    log(
+        "RENDEZVOUS "
+        + json.dumps(
+            {
+                "init_method": "env://",
+                "master_addr": os.environ.get("MASTER_ADDR", ""),
+                "master_port": os.environ.get("MASTER_PORT", ""),
+                "rank": rendezvous["rank"],
+                "world_size": rendezvous["world_size"],
+                "local_rank": rendezvous["local_rank"],
+                "local_world_size": rendezvous["local_world_size"],
+                "backend": backend,
+                "mode": mode,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return backend
+
+
+def select_device(local_rank):
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        return torch.device("cuda", local_rank)
+    return torch.device("cpu")
+
+
+def train_model(args, rendezvous, device):
+    rank = rendezvous["rank"]
+    world_size = rendezvous["world_size"]
+    distributed = rendezvous["distributed"]
+
+    torch.manual_seed(1234)
+    model = nn.Sequential(nn.Linear(8, 16), nn.Tanh(), nn.Linear(16, 1)).to(device)
+    if distributed:
+        model = DistributedDataParallel(
+            model,
+            device_ids=[rendezvous["local_rank"]] if device.type == "cuda" else None,
+        )
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loss_function = nn.MSELoss()
+    expected_participation = world_size * (world_size + 1) / 2
+
+    for step in range(1, args.steps + 1):
+        model.train()
+        features = torch.full((16, 8), float(rank + 1), device=device)
+        features += torch.arange(8, dtype=features.dtype, device=device) * 0.01
+        targets = torch.full((16, 1), float(rank + 1) * 0.1, device=device)
+        optimizer.zero_grad(set_to_none=True)
+        loss = loss_function(model(features), targets)
+        loss.backward()
+        optimizer.step()
+
+        if distributed:
+            participation = torch.tensor(float(rank + 1), device=device)
+            dist.all_reduce(participation, op=dist.ReduceOp.SUM)
+            actual = float(participation.item())
+            if actual != expected_participation:
+                raise RuntimeError(
+                    f"DDP participation mismatch at step {step}: "
+                    f"expected {expected_participation}, got {actual}"
+                )
+        if rank == 0:
+            current_loss = float(loss.item())
+            log(f"step={step}/{args.steps} loss={current_loss:.6f} world_size={world_size}")
+            append_metrics(
+                {
+                    "step": step,
+                    "loss": current_loss,
+                    "lr": float(optimizer.param_groups[0]["lr"]),
+                    "world_size": world_size,
+                }
+            )
+        if args.sleep:
+            time.sleep(args.sleep)
+    return model, optimizer
+
+
+def save_and_verify_checkpoint(args, rendezvous, backend, model, optimizer):
+    rank = rendezvous["rank"]
+    distributed = rendezvous["distributed"]
+    checkpoint = checkpoint_directory() / "smoke.pt"
+    if rank == 0:
+        save_checkpoint(
+            checkpoint,
+            model,
+            optimizer,
+            args.steps,
+            rendezvous["world_size"],
+            backend,
+        )
+    if distributed:
+        dist.barrier()
+    # 校验策略：
+    #   - rank 0：始终校验自己写的文件；
+    #   - 单机非 0 rank（含 torchrun 单机 8 卡）：共享同一个 /checkpoints，
+    #     由 rank 0 负责写，因此 worker 只通过 barrier 等待；
+    #   - 多节点：checkpoint 目录是各节点自己的 hostPath，worker 根本看不到
+    #     rank 0 写的文件。此时只用 rank 0 校验，其余 rank 通过 barrier 保证
+    #     「rank 0 写盘的顺序」，再配合 DDP_VERIFIED 里的 nodes 数验证拓扑。
+    #     若把 checkpoint 换成 RWX 共享存储（NFS/CephFS），也可以显式导出
+    #     VLA_SHARED_CHECKPOINT=1 让所有 rank 参与校验。
+    shared_checkpoint = os.environ.get("VLA_SHARED_CHECKPOINT") == "1"
+    # 只有两类进程需要校验：本进程负责写盘的 rank 0，或显式声明共享存储
+    # 让所有 rank 都能看到该文件。其余 rank 只等 barrier。
+    verify_here = (not distributed) or rank == 0 or shared_checkpoint
+    if verify_here and (not checkpoint.is_file() or checkpoint.stat().st_size == 0):
+        raise RuntimeError(f"checkpoint was not created: {checkpoint}")
+    if not verify_here:
+        log(f"checkpoint 由 rank 0 写入本节点 hostPath，worker 不做存在性校验：{checkpoint}")
+    return checkpoint
+
+
+def verify_distributed_participants(rendezvous, device, backend, mode, checkpoint):
+    if not rendezvous["distributed"]:
+        return
+
+    rank = rendezvous["rank"]
+    world_size = rendezvous["world_size"]
+    participant = {
+        "rank": rank,
+        "host": hostname(),
+        "host_ip": node_ip(),
+        "device": str(device),
+        "master_addr": rendezvous["master_addr"] or "unset",
+        "checkpoint": str(checkpoint),
+    }
+    participants = [None] * world_size
+    dist.all_gather_object(participants, participant)
+    if rank != 0:
+        return
+
+    ranks = sorted(item["rank"] for item in participants)
+    if ranks != list(range(world_size)):
+        raise RuntimeError(f"DDP final rank verification failed: {ranks}")
+    hosts = len({item["host"] for item in participants})
+    log("DDP_PARTICIPANTS " + json.dumps(participants, ensure_ascii=False, sort_keys=True))
+    log(
+        f"DDP_VERIFIED world_size={world_size} ranks={ranks} nodes={hosts} "
+        f"mode={mode} backend={backend}"
+    )
+    if mode == "multi-node" and hosts < 2:
+        raise RuntimeError(
+            f"多节点模式要求至少 2 个不同主机，实际仅 {hosts} 个；"
+            "PyTorchJob 的副本可能被调度到了同一节点"
+        )
+
+
+def run_training(args, rendezvous, device, backend, mode):
+    rank = rendezvous["rank"]
+    log(
+        f"PARTICIPANT rank={rank}/{rendezvous['world_size'] - 1} "
+        f"local_rank={rendezvous['local_rank']} host={hostname()} "
+        f"device={device} backend={backend or 'none'}"
+    )
+    log_rank_banner(rendezvous, mode, backend, args)
+    if rendezvous["distributed"]:
+        nccl_diagnostics(rendezvous, backend, mode)
+
+    model, optimizer = train_model(args, rendezvous, device)
+    checkpoint = save_and_verify_checkpoint(args, rendezvous, backend, model, optimizer)
+    verify_distributed_participants(rendezvous, device, backend, mode, checkpoint)
+    if rank == 0:
+        log(f"SMOKE_COMPLETE steps={args.steps} checkpoint={checkpoint}")
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
     rendezvous = rendezvous_environment(args.distributed)
     local_world_size = validate_rendezvous(parser, args, rendezvous)
     mode = detect_launch_mode(rendezvous)
-    rank = rendezvous["rank"]
-    world_size = rendezvous["world_size"]
-    local_rank = rendezvous["local_rank"]
 
     log("VLA platform synthetic smoke training; this is not a real VLA model.")
-    log(f"LAUNCH_MODE {mode} world_size={world_size} local_world_size={local_world_size}")
-    if rank == 0:
+    log(
+        f"LAUNCH_MODE {mode} world_size={rendezvous['world_size']} "
+        f"local_world_size={local_world_size}"
+    )
+    if rendezvous["rank"] == 0:
         print_cuda_info()
 
-    backend = None
-    distributed = args.distributed
-    if distributed:
-        backend = "nccl" if torch.cuda.is_available() else "gloo"
-        nccl_environment()
-        log(f"Initializing distributed backend: {backend} via env://")
-        if mode in ("multi-node", "single-node-env") and backend == "nccl":
-            # 跨节点 NCCL 最怕网卡选错：未显式指定时给出建议值，而不是替用户改。
-            if not os.environ.get("NCCL_SOCKET_IFNAME"):
-                log(
-                    "NCCL_HINT 未设置 NCCL_SOCKET_IFNAME；多节点 NCCL 常需要指定业务网卡"
-                    "（例如 NCCL_SOCKET_IFNAME=eth0），否则可能选到 flannel/cni 网卡造成超时或性能骤降。"
-                )
-        dist.init_process_group(backend=backend, init_method="env://")
-        # 结构化输出：便于 scripts/verify-multi-node.sh 用 grep 校验真正生效的 rendezvous。
-        log(
-            "RENDEZVOUS "
-            + json.dumps(
-                {
-                    "init_method": "env://",
-                    "master_addr": os.environ.get("MASTER_ADDR", ""),
-                    "master_port": os.environ.get("MASTER_PORT", ""),
-                    "rank": rank,
-                    "world_size": world_size,
-                    "local_rank": local_rank,
-                    "local_world_size": local_world_size,
-                    "backend": backend,
-                    "mode": mode,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-        )
-
+    backend = initialize_distributed(rendezvous, mode)
     try:
-        if torch.cuda.is_available():
-            torch.cuda.set_device(local_rank)
-            device = torch.device("cuda", local_rank)
-        else:
-            device = torch.device("cpu")
-        log(
-            f"PARTICIPANT rank={rank}/{world_size - 1} local_rank={local_rank} "
-            f"host={hostname()} device={device} backend={backend or 'none'}"
-        )
-        log_rank_banner(rendezvous, mode, backend, args)
-        if distributed:
-            nccl_diagnostics(rendezvous, backend, mode)
-
-        torch.manual_seed(1234)
-        model = nn.Sequential(nn.Linear(8, 16), nn.Tanh(), nn.Linear(16, 1)).to(device)
-        if distributed:
-            model = DistributedDataParallel(
-                model,
-                device_ids=[local_rank] if device.type == "cuda" else None,
-            )
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
-        loss_function = nn.MSELoss()
-        expected_participation = world_size * (world_size + 1) / 2
-
-        for step in range(1, args.steps + 1):
-            model.train()
-            features = torch.full((16, 8), float(rank + 1), device=device)
-            features += torch.arange(8, dtype=features.dtype, device=device) * 0.01
-            targets = torch.full((16, 1), float(rank + 1) * 0.1, device=device)
-            optimizer.zero_grad(set_to_none=True)
-            loss = loss_function(model(features), targets)
-            loss.backward()
-            optimizer.step()
-
-            if distributed:
-                participation = torch.tensor(float(rank + 1), device=device)
-                dist.all_reduce(participation, op=dist.ReduceOp.SUM)
-                actual = float(participation.item())
-                if actual != expected_participation:
-                    raise RuntimeError(
-                        f"DDP participation mismatch at step {step}: "
-                        f"expected {expected_participation}, got {actual}"
-                    )
-            if rank == 0:
-                current_loss = float(loss.item())
-                log(f"step={step}/{args.steps} loss={current_loss:.6f} world_size={world_size}")
-                append_metrics(
-                    {
-                        "step": step,
-                        "loss": current_loss,
-                        "lr": float(optimizer.param_groups[0]["lr"]),
-                        "world_size": world_size,
-                    }
-                )
-            if args.sleep:
-                time.sleep(args.sleep)
-
-        checkpoint = checkpoint_directory() / "smoke.pt"
-        if rank == 0:
-            save_checkpoint(checkpoint, model, optimizer, args.steps, world_size, backend)
-        if distributed:
-            dist.barrier()
-        # 校验策略：
-        #   - rank 0：始终校验自己写的文件；
-        #   - 单机非 0 rank（含 torchrun 单机 8 卡）：共享同一个 /checkpoints，
-        #     由 rank 0 负责写，因此 worker 只通过 barrier 等待；
-        #   - 多节点：checkpoint 目录是各节点自己的 hostPath，worker 根本看不到
-        #     rank 0 写的文件。此时只用 rank 0 校验，其余 rank 通过 barrier 保证
-        #     「rank 0 写盘的顺序」，再配合 DDP_VERIFIED 里的 nodes 数验证拓扑。
-        #     若把 checkpoint 换成 RWX 共享存储（NFS/CephFS），也可以显式导出
-        #     VLA_SHARED_CHECKPOINT=1 让所有 rank 参与校验。
-        shared_checkpoint = os.environ.get("VLA_SHARED_CHECKPOINT") == "1"
-        # 只有两类进程需要校验：本进程负责写盘的 rank 0，或显式声明共享存储
-        # 让所有 rank 都能看到该文件。其余 rank 只等 barrier。
-        verify_here = (not distributed) or rank == 0 or shared_checkpoint
-        if verify_here and (not checkpoint.is_file() or checkpoint.stat().st_size == 0):
-            raise RuntimeError(f"checkpoint was not created: {checkpoint}")
-        if not verify_here:
-            log(f"checkpoint 由 rank 0 写入本节点 hostPath，worker 不做存在性校验：{checkpoint}")
-
-        if distributed:
-            participant = {
-                "rank": rank,
-                "host": hostname(),
-                "host_ip": node_ip(),
-                "device": str(device),
-                "master_addr": rendezvous["master_addr"] or "unset",
-                "checkpoint": str(checkpoint),
-            }
-            participants = [None] * world_size
-            dist.all_gather_object(participants, participant)
-            if rank == 0:
-                ranks = sorted(item["rank"] for item in participants)
-                if ranks != list(range(world_size)):
-                    raise RuntimeError(f"DDP final rank verification failed: {ranks}")
-                hosts = len({item["host"] for item in participants})
-                log("DDP_PARTICIPANTS " + json.dumps(participants, ensure_ascii=False, sort_keys=True))
-                log(
-                    f"DDP_VERIFIED world_size={world_size} ranks={ranks} nodes={hosts} "
-                    f"mode={mode} backend={backend}"
-                )
-                if mode == "multi-node" and hosts < 2:
-                    raise RuntimeError(
-                        f"多节点模式要求至少 2 个不同主机，实际仅 {hosts} 个；"
-                        "PyTorchJob 的副本可能被调度到了同一节点"
-                    )
-        if rank == 0:
-            log(f"SMOKE_COMPLETE steps={args.steps} checkpoint={checkpoint}")
+        device = select_device(rendezvous["local_rank"])
+        run_training(args, rendezvous, device, backend, mode)
     finally:
-        if distributed and dist.is_initialized():
+        if rendezvous["distributed"] and dist.is_initialized():
             dist.destroy_process_group()
 
 

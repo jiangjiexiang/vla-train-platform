@@ -216,7 +216,7 @@ def install_torch_stub(record_path):
 
     class SGD:
         def __init__(self, params, lr=0.01):
-            pass
+            self.param_groups = [{"lr": lr}]
 
         @staticmethod
         def zero_grad(set_to_none=True):
@@ -503,6 +503,55 @@ def main():
             "env": {"WORLD_SIZE": "1", "RANK": "0"},
             "args": ["--distributed", "--steps", "1"],
             "expect_exit": 2,
+            "expect_stderr": "WORLD_SIZE",
+        },
+        {
+            "name": "single node env rendezvous",
+            "env": {"WORLD_SIZE": "2", "RANK": "0", "LOCAL_RANK": "0", "LOCAL_WORLD_SIZE": "2"},
+            "args": ["--distributed", "--steps", "2", "--sleep", "0"],
+            "expect_exit": 0,
+            "expect": {"launch_mode": "single-node-env", "init_method": "env://", "rank": 0},
+        },
+        {
+            "name": "multi-node non-numeric MASTER_PORT must fail",
+            "env": {
+                "WORLD_SIZE": "2",
+                "RANK": "0",
+                "LOCAL_RANK": "0",
+                "LOCAL_WORLD_SIZE": "1",
+                "MASTER_ADDR": "master",
+                "MASTER_PORT": "not-a-port",
+            },
+            "args": ["--distributed", "--steps", "1"],
+            "expect_exit": 2,
+            "expect_stderr": "MASTER_PORT",
+        },
+        {
+            "name": "RANK outside WORLD_SIZE must fail",
+            "env": {
+                "WORLD_SIZE": "2",
+                "RANK": "2",
+                "LOCAL_RANK": "0",
+                "LOCAL_WORLD_SIZE": "1",
+                "MASTER_ADDR": "master",
+                "MASTER_PORT": "23456",
+            },
+            "args": ["--distributed", "--steps", "1"],
+            "expect_exit": 2,
+            "expect_stderr": "RANK",
+        },
+        {
+            "name": "LOCAL_RANK outside LOCAL_WORLD_SIZE must fail",
+            "env": {"WORLD_SIZE": "2", "RANK": "0", "LOCAL_RANK": "2", "LOCAL_WORLD_SIZE": "2"},
+            "args": ["--distributed", "--steps", "1"],
+            "expect_exit": 2,
+            "expect_stderr": "LOCAL_RANK",
+        },
+        {
+            "name": "non-integer WORLD_SIZE must fail",
+            "env": {"WORLD_SIZE": "not-a-number", "RANK": "0"},
+            "args": ["--distributed", "--steps", "1"],
+            "expect_exit": 1,
             "expect_stderr": "WORLD_SIZE",
         },
     ]

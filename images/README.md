@@ -70,7 +70,7 @@ checkpoint 写到 `hostPath /data/vla-platform/checkpoints`（与后端渲染单
 
 ```bash
 python3 -m py_compile images/smoke-train/train.py          # 语法
-python3 scripts/check-smoke-train-rendezvous.py            # 假 torch 跑 8 个 rendezvous 场景
+python3 scripts/check-smoke-train-rendezvous.py            # 假 torch 跑 13 个 rendezvous 场景
 ```
 
 `check-smoke-train-rendezvous.py` 不下载 PyTorch：它在 `sys.modules` 里放一个

@@ -22,6 +22,25 @@ ROLE_ADMIN = "admin"
 ROLE_USER = "user"
 
 
+def _default_db_path() -> str:
+    """容器内固定用 /data/history；宿主机直跑时回落到项目 data/。
+
+    部署清单会显式覆盖 PLATFORM_DB_PATH，这里只兜底本地开发场景：
+    /data/history 在宿主机上通常不存在或不可写，直接起不来。
+    """
+    container_default = "/data/history/platform.db"
+    if os.path.isdir(os.path.dirname(container_default)) and os.access(
+        os.path.dirname(container_default), os.W_OK
+    ):
+        return container_default
+    project_data = Path(__file__).resolve().parents[2] / "data" / "history"
+    try:
+        project_data.mkdir(parents=True, exist_ok=True)
+        return str(project_data / "platform.db")
+    except OSError:
+        return container_default
+
+
 @dataclass(frozen=True)
 class Settings:
     api_token: str
@@ -204,7 +223,7 @@ class Settings:
             training_code_host_path=os.environ.get(
                 "PLATFORM_TRAINING_CODE_HOST_PATH", ""
             ),
-            db_path=os.environ.get("PLATFORM_DB_PATH", "/data/history/platform.db"),
+            db_path=os.environ.get("PLATFORM_DB_PATH") or _default_db_path(),
             kubeconfig=os.environ.get("PLATFORM_KUBECONFIG") or None,
             log_tail_default=log_tail,
             gpu_metrics_url=os.environ.get("PLATFORM_GPU_METRICS_URL", "http://vla-gpu-metrics:8080/"),

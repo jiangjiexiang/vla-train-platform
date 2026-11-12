@@ -118,3 +118,10 @@ def test_oversized_spec_can_still_be_parsed_back():
     """Size caps must not apply on read, or legacy jobs become unreadable."""
     oversized = make_spec(command="a" * (MAX_COMMAND_BYTES + 10))
     assert SubmitSpec.model_validate(oversized.model_dump()).name == "exp001"
+
+
+def test_run_request_is_shared_by_api_and_service():
+    from app.models import RunRequest
+    from app.services.runs import RunRequest as ServiceRunRequest
+
+    assert ServiceRunRequest is RunRequest

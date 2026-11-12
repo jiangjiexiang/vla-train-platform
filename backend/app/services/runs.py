@@ -10,8 +10,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
+from ..models import RunRequest
 from ..params_templates import BUILTIN_TEMPLATE, ParamsTemplate, parse_template
 from ..recipes.loader import Recipe, check_compatibility
 from .params_render import build_command
@@ -20,28 +19,7 @@ if TYPE_CHECKING:  # 避免与 platform.py 循环导入（platform 反过来要 
     from .platform import PlatformService
 from .errors import ServiceError
 
-NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 MAX_NAME_LENGTH = 50
-
-
-class RunRequest(BaseModel):
-    """「一键开始训练」在业务层的输入。
-
-    校验由 API 层的 ``models.RunSubmitRequest`` 完成并已转成 HTTP 422；
-    这里保持宽松，只做类型约束，避免同一个错误在两处各报一次。
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    recipe_id: str
-    dataset_id: str
-    # 省略时自动生成 <recipe>-<dataset>-<序号>
-    name: str | None = Field(default=None, max_length=MAX_NAME_LENGTH)
-    # L2/L3 参数覆盖；键名是参数模板里的 key
-    overrides: dict[str, Any] = Field(default_factory=dict)
-    priority: str = "normal"
-    # 额外的环境变量（高级用途），会覆盖配方里的 env
-    env: dict[str, str] = Field(default_factory=dict)
 
 
 def resolve_template(recipe: Recipe, service: PlatformService) -> ParamsTemplate:

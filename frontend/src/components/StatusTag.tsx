@@ -9,6 +9,7 @@ const STATUS_META: Record<JobStatus, { label: string; color: string }> = {
   SUCCEEDED: { label: '已成功', color: 'success' },
   FAILED: { label: '已失败', color: 'error' },
   CANCELLED: { label: '已取消', color: 'default' },
+  GONE: { label: '已消失', color: 'warning' },
   UNKNOWN: { label: '状态未知', color: 'purple' },
 };
 

@@ -12,18 +12,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..auth import require_user, set_admin_actor
 from ..models import DatasetRegisterRequest, DatasetScanRequest
 from ..services.dataset_register import UnsafeDatasetPath
 from ..services.platform import PlatformService
+from .dependencies import get_service
 
 router = APIRouter(prefix="/api/v1")
-
-
-def get_service(request: Request) -> PlatformService:
-    return request.app.state.service
 
 
 @router.get("/datasets", dependencies=[Depends(require_user)])

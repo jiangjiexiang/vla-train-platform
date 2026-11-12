@@ -18,8 +18,8 @@ import argparse
 import json
 import os
 import subprocess
-import threading
 import sys
+import threading
 from pathlib import Path
 
 # 预训练基座。lerobot-train 会同时加载它和它 config 里引用的 VLM，
@@ -171,6 +171,117 @@ def check_environment(dataset_root: Path, output_dir: Path, args=None) -> dict:
     return report
 
 
+def prepare_resume_checkpoint(args: argparse.Namespace, output_dir: Path) -> None:
+    if not args.resume or not args.resume_from:
+        return
+
+    # 把源任务的最近 checkpoint 复制到本次输出目录，让 lerobot 的
+    # "从 output_dir/checkpoints/last 续训" 语义能对上。
+    # CHECKPOINT_DIR 是 /checkpoints/<本次任务名>，父目录就是所有任务的产物根
+    checkpoint_root = Path(os.environ.get("CHECKPOINT_DIR") or "/checkpoints").parent
+    source = checkpoint_root / args.resume_from / "run" / "checkpoints"
+    if not source.is_dir():
+        raise SystemExit(
+            f"续训失败：{args.resume_from} 没有产物目录（{source}）。"
+            "请确认该任务真的训练过，且产物没有被清理。"
+        )
+    target = output_dir / "checkpoints"
+    target.mkdir(parents=True, exist_ok=True)
+    # lerobot 读的是 last 指向的那份，优先复制它以节省时间与磁盘
+    # last 是软链接。直接 copytree 会复制成断链——目标端没有
+    # 那个相对目标可以指向，续训就读不到 train_config 了。
+    # 所以要解析出它真正指向的步数目录，再按目录名复制。
+    last_link = source / "last"
+    if last_link.exists() or last_link.is_symlink():
+        resolved = last_link.resolve()
+        step_dir = source / resolved.name
+    else:
+        digits = sorted(
+            (item for item in source.iterdir() if item.is_dir() and item.name.isdigit()),
+            key=lambda p: int(p.name),
+        )
+        step_dir = digits[-1] if digits else None
+
+    if step_dir is None or not step_dir.is_dir():
+        raise SystemExit(f"续训失败：{source} 下没有可用的 checkpoint")
+
+    dest = target / step_dir.name
+    if not dest.exists():
+        import shutil as _shutil
+
+        _shutil.copytree(step_dir, dest)
+
+    # 目标端也建一个 last 软链接，指向刚复制的那个目录，
+    # 让 lerobot 的「从 output_dir/checkpoints/last 续训」语义成立。
+    dest_last = target / "last"
+    if dest_last.is_symlink() or dest_last.exists():
+        try:
+            dest_last.unlink()
+        except OSError:
+            pass
+    try:
+        dest_last.symlink_to(step_dir.name)
+    except OSError as exc:
+        print(f"续训：创建 last 链接失败（{exc}），继续", flush=True)
+
+    # 把源 checkpoint 的步数告诉指标 hook，让曲线接着画而不是从 0 重来。
+    # 读不到就算了——曲线从 0 开始不影响训练，只是图上不好看。
+    step_file = step_dir / "training_state" / "training_step.json"
+    try:
+        import json as _json
+
+        start_step = int(_json.loads(step_file.read_text(encoding="utf-8")).get("step") or 0)
+        if start_step > 0:
+            os.environ["VLA_STEP_OFFSET"] = str(start_step)
+            print(f"续训：起点 step {start_step}", flush=True)
+    except (OSError, ValueError, TypeError):
+        pass
+
+    print(f"续训：已从 {args.resume_from} 复制 checkpoint {step_dir.name}", flush=True)
+
+
+def prepare_output_directory(args: argparse.Namespace, output_dir: Path) -> None:
+    if args.resume:
+        return
+
+    parent = output_dir.parent
+    observation_outputs = [parent / "metrics.jsonl", parent / "tensorboard"]
+    has_observation_outputs = any(path.exists() or path.is_symlink() for path in observation_outputs)
+    if not output_dir.exists() and not has_observation_outputs:
+        return
+
+    # 非续训启动必须同时隔离上一轮的训练目录和观测数据，否则 metrics.jsonl
+    # 会重复追加相同 step，TensorBoard 也会把多个 events 文件混在同一张图里。
+    index = 1
+    while (parent / f".attempt-{index}").exists():
+        index += 1
+    legacy = parent / f".attempt-{index}"
+
+    if output_dir.exists():
+        try:
+            output_dir.rename(legacy)
+        except OSError as exc:
+            # 挂载点或跨设备目录无法 rename 时，逐项移走内容。
+            print(f"目录重命名失败（{exc}），改为逐项移动", flush=True)
+            legacy.mkdir(parents=True, exist_ok=True)
+            for entry in list(output_dir.iterdir()):
+                try:
+                    entry.rename(legacy / entry.name)
+                except OSError as inner:
+                    print(f"  移动 {entry.name} 失败：{inner}", flush=True)
+    else:
+        legacy.mkdir(parents=True)
+
+    for path in observation_outputs:
+        if not path.exists() and not path.is_symlink():
+            continue
+        try:
+            path.rename(legacy / path.name)
+        except OSError as exc:
+            raise SystemExit(f"无法隔离上一轮指标 {path}：{exc}") from exc
+    print(f"上一轮训练产物与指标已移动到 {legacy.name}", flush=True)
+
+
 def build_train_command(
     args: argparse.Namespace,
     dataset_root: Path,
@@ -216,101 +327,9 @@ def build_train_command(
     # 传了不支持的会被当未知参数报错，所以只在大于 1 时尝试。
     if args.gradient_accumulation_steps and args.gradient_accumulation_steps > 1:
         command.append(f"--policy.gradient_accumulation_steps={args.gradient_accumulation_steps}")
-    if args.resume and args.resume_from:
-        # 把源任务的最近 checkpoint 复制到本次输出目录，让 lerobot 的
-        # "从 output_dir/checkpoints/last 续训" 语义能对上。
-        # CHECKPOINT_DIR 是 /checkpoints/<本次任务名>，父目录就是所有任务的产物根
-        checkpoint_root = Path(os.environ.get("CHECKPOINT_DIR") or "/checkpoints").parent
-        source = checkpoint_root / args.resume_from / "run" / "checkpoints"
-        if not source.is_dir():
-            raise SystemExit(
-                f"续训失败：{args.resume_from} 没有产物目录（{source}）。"
-                "请确认该任务真的训练过，且产物没有被清理。"
-            )
-        target = output_dir / "checkpoints"
-        target.mkdir(parents=True, exist_ok=True)
-        # lerobot 读的是 last 指向的那份，优先复制它以节省时间与磁盘
-        # last 是软链接。直接 copytree 会复制成断链——目标端没有
-        # 那个相对目标可以指向，续训就读不到 train_config 了。
-        # 所以要解析出它真正指向的步数目录，再按目录名复制。
-        last_link = source / "last"
-        if last_link.exists() or last_link.is_symlink():
-            resolved = last_link.resolve()
-            step_dir = source / resolved.name
-        else:
-            digits = sorted(
-                (item for item in source.iterdir() if item.is_dir() and item.name.isdigit()),
-                key=lambda p: int(p.name),
-            )
-            step_dir = digits[-1] if digits else None
 
-        if step_dir is None or not step_dir.is_dir():
-            raise SystemExit(f"续训失败：{source} 下没有可用的 checkpoint")
-
-        dest = target / step_dir.name
-        if not dest.exists():
-            import shutil as _shutil
-
-            _shutil.copytree(step_dir, dest)
-
-        # 目标端也建一个 last 软链接，指向刚复制的那个目录，
-        # 让 lerobot 的「从 output_dir/checkpoints/last 续训」语义成立。
-        dest_last = target / "last"
-        if dest_last.is_symlink() or dest_last.exists():
-            try:
-                dest_last.unlink()
-            except OSError:
-                pass
-        try:
-            dest_last.symlink_to(step_dir.name)
-        except OSError as exc:
-            print(f"续训：创建 last 链接失败（{exc}），继续", flush=True)
-
-        # 把源 checkpoint 的步数告诉指标 hook，让曲线接着画而不是从 0 重来。
-        # 读不到就算了——曲线从 0 开始不影响训练，只是图上不好看。
-        step_file = step_dir / "training_state" / "training_step.json"
-        try:
-            import json as _json
-
-            start_step = int(_json.loads(step_file.read_text(encoding="utf-8")).get("step") or 0)
-            if start_step > 0:
-                os.environ["VLA_STEP_OFFSET"] = str(start_step)
-                print(f"续训：起点 step {start_step}", flush=True)
-        except (OSError, ValueError, TypeError):
-            pass
-
-        print(f"续训：已从 {args.resume_from} 复制 checkpoint {step_dir.name}", flush=True)
-
-    if not args.resume and output_dir.exists():
-        # lerobot 要求 output_dir 不存在或为空（除非 resume）。
-        # 平台预创建了这个目录作为任务产物根，里面可能已经有 metrics.jsonl
-        # （指标 hook 会往里写），所以不能简单删掉——把已有内容挪到 .attempt-N，
-        # 既不丢指标文件也不阻塞重跑。
-        #
-        # 这一步在「pod 被抢占后 operator 重建」时特别关键：
-        # 重建的容器会看到上一次留下的目录，直接 FileExistsError 崩掉。
-        # 实测过这种情况——任务既不会续训也不会从头跑，确定性失败，
-        # 前面几分钟算力全白费。
-        index = 1
-        while (output_dir.parent / f".attempt-{index}").exists():
-            index += 1
-        legacy = output_dir.parent / f".attempt-{index}"
-        try:
-            output_dir.rename(legacy)
-            print(f"输出目录已存在，历史内容移动到 {legacy.name}", flush=True)
-        except OSError as exc:
-            # rename 失败时（例如目录是挂载点、或跨设备）退而求其次：
-            # 逐项移走。留一个能继续训练的路径，比让任务直接失败强。
-            print(f"目录重命名失败（{exc}），改为逐项移动", flush=True)
-            legacy.mkdir(parents=True, exist_ok=True)
-            for entry in list(output_dir.iterdir()):
-                if entry.name == "metrics.jsonl":
-                    # 指标是跨 attempt 的连续记录，不跟着搬
-                    continue
-                try:
-                    entry.rename(legacy / entry.name)
-                except OSError as inner:
-                    print(f"  移动 {entry.name} 失败：{inner}", flush=True)
+    prepare_resume_checkpoint(args, output_dir)
+    prepare_output_directory(args, output_dir)
 
     if args.resume:
         # lerobot 0.4.4 的续训协议（train.py validate 里那段 if/elif）：
@@ -349,7 +368,7 @@ def build_train_command(
 
 
 
-def _prune_checkpoints_periodically(output_dir: Path, stop: "threading.Event") -> None:
+def _prune_checkpoints_periodically(output_dir: Path, stop: threading.Event) -> None:
     """每 60 秒扫一次 checkpoints/，只留最近 N 个。
 
     N 来自 VLA_KEEP_LAST_CHECKPOINTS，默认 3：
@@ -409,37 +428,9 @@ def _prune_checkpoints_periodically(output_dir: Path, stop: "threading.Event") -
     sweep()
     while not stop.wait(60):
         sweep()
-    return
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    dataset_root, output_dir = resolve_paths(args)
-    report = check_environment(dataset_root, output_dir, args)
-    print("环境自检：", json.dumps(report, ensure_ascii=False, indent=2), flush=True)
 
-    if args.smoke:
-        print("自检完成（--smoke 模式，不进入训练）")
-        return 0 if report.get("cuda_available") else 1
 
-    if not report.get("cuda_available"):
-        print("错误：CUDA 不可用，无法训练。请确认 GPU 已挂载到容器。", file=sys.stderr)
-        return 1
-
-    # 注意：这里**不能**安装指标 hook。训练是 subprocess 起的独立 Python 进程，
-    # 在父进程里 monkey-patch 不会被子进程继承——之前就是在父进程装、日志也打印了，
-    # 但训练进程里根本没有 hook，曲线始终为空，排查了很多轮。
-    # 真正的安装点在 metrics_boot/sitecustomize.py，它由 PYTHONPATH 注入，
-    # 任何 Python 进程启动时都会执行。
-
-    command = build_train_command(args, dataset_root, output_dir)
-    print("即将执行：", " ".join(command), flush=True)
-    if args.dry_run:
-        return 0
-
-    # 用子进程而不是 exec：指标 hook 需要在训练进程内生效，
-    # exec 会换掉当前进程，patch 就白做了。
-    # 取消任务时平台会 SIGTERM 整个 Pod，子进程会一并收到。
-    import subprocess
-
+def training_environment() -> dict[str, str]:
     # 同目录下的 metrics_boot/sitecustomize.py 会被 Python 自动导入，
     # 在那里安装 hook 才能作用于训练进程本身。
     env = dict(os.environ)
@@ -447,8 +438,14 @@ def main(argv: list[str] | None = None) -> int:
     if boot_dir.is_dir():
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = f"{boot_dir}{os.pathsep}{existing}" if existing else str(boot_dir)
+    return env
 
-    child = subprocess.Popen(command, env=env)
+
+def run_training(command: list[str], output_dir: Path) -> int:
+    # 用子进程而不是 exec：指标 hook 需要在训练进程内生效，
+    # exec 会换掉当前进程，patch 就白做了。
+    # 取消任务时平台会 SIGTERM 整个 Pod，子进程会一并收到。
+    child = subprocess.Popen(command, env=training_environment())
 
     # checkpoint 清理线程：训练中定期淘汰旧存档。
     #
@@ -471,6 +468,32 @@ def main(argv: list[str] | None = None) -> int:
         stop_prune.set()
         pruner.join(timeout=5)
     return child.returncode
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    dataset_root, output_dir = resolve_paths(args)
+    report = check_environment(dataset_root, output_dir, args)
+    print("环境自检：", json.dumps(report, ensure_ascii=False, indent=2), flush=True)
+
+    if args.smoke:
+        print("自检完成（--smoke 模式，不进入训练）")
+        return 0 if report.get("cuda_available") else 1
+
+    if not report.get("cuda_available"):
+        print("错误：CUDA 不可用，无法训练。请确认 GPU 已挂载到容器。", file=sys.stderr)
+        return 1
+
+    # 注意：这里**不能**安装指标 hook。训练是 subprocess 起的独立 Python 进程，
+    # 在父进程里 monkey-patch 不会被子进程继承——之前就是在父进程装、日志也打印了，
+    # 但训练进程里根本没有 hook，曲线始终为空，排查了很多轮。
+    # 真正的安装点在 metrics_boot/sitecustomize.py，它由 PYTHONPATH 注入，
+    # 任何 Python 进程启动时都会执行。
+    command = build_train_command(args, dataset_root, output_dir)
+    print("即将执行：", " ".join(command), flush=True)
+    if args.dry_run:
+        return 0
+    return run_training(command, output_dir)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -19,6 +20,21 @@ LABEL_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 MAX_LABELS_BYTES = 256
 # owner 只用于展示与过滤，不写入容器；限制长度防止 UI/数据库被撑爆。
 MAX_OWNER_LENGTH = 128
+
+
+class JobStatus(str, Enum):
+    QUEUED = "QUEUED"
+    # Pod 建出来了但永远起不来（镜像拉不到等）。和 QUEUED 分开：
+    # 排队值得等，这个不值得。
+    STARTING_FAILED = "STARTING_FAILED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    # 集群对象已消失，且平台没有记录到可确认的终态。
+    GONE = "GONE"
+
+
 class SubmitSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -210,20 +226,18 @@ class DatasetScanRequest(BaseModel):
 
 
 class RunSubmitRequest(BaseModel):
-    """一键训练请求。
-
-    这是「一键训练」唯一的校验入口：API 层用它拦下非法输入，再原样转成
-    services/runs.RunRequest。两个模型保持字段与规则一致，避免出现
-    「工具层抛 ValidationError 而没转成 HTTP 422」这种情况。
-    """
+    """一键训练请求，由 API 与业务层共用，确保非法输入统一返回 HTTP 422。"""
 
     model_config = ConfigDict(extra="forbid")
 
     recipe_id: str = Field(min_length=1, max_length=64)
     dataset_id: str = Field(min_length=1, max_length=100)
+    # 省略时自动生成 <recipe>-<dataset>-<序号>
     name: str | None = Field(default=None, max_length=50)
+    # L2/L3 参数覆盖；键名是参数模板里的 key
     overrides: dict[str, Any] = Field(default_factory=dict)
     priority: str = "normal"
+    # 额外的环境变量（高级用途），会覆盖配方里的 env
     env: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("name")
@@ -241,3 +255,6 @@ class RunSubmitRequest(BaseModel):
         if value not in ("low", "normal", "high"):
             raise ValueError("优先级必须是 low / normal / high")
         return value
+
+
+RunRequest = RunSubmitRequest

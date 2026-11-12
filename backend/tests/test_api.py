@@ -261,6 +261,13 @@ def test_list_jobs_status_filter_starting_failed_empty_returns_empty_list(api_cl
     assert body["items"] == []
 
 
+def test_list_jobs_status_filter_accepts_gone(api_client):
+    response = api_client.get("/api/v1/jobs", params={"status": "GONE"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == []
+
+
 def test_list_jobs_accepts_boundary_values(api_client):
     response = api_client.get(
         "/api/v1/jobs",

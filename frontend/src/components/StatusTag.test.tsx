@@ -11,6 +11,7 @@ const statusCases: Array<[status: string, label: string, color: string]> = [
   ['SUCCEEDED', '已成功', 'success'],
   ['FAILED', '已失败', 'error'],
   ['CANCELLED', '已取消', 'default'],
+  ['GONE', '已消失', 'warning'],
   ['UNKNOWN', '状态未知', 'purple'],
 ];
 

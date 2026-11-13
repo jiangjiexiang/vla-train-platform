@@ -18,7 +18,7 @@ from ..params_templates import (
     parse_template,
     validate_image_name,
 )
-from ..recipes.loader import Recipe, RecipeStore
+from ..recipes.loader import Recipe, RecipeError, RecipeStore, parse_recipe
 from ..templates.pytorchjob import render_pytorch_job
 from .audit import AuditStore
 from .cluster import ClusterServiceMixin
@@ -221,7 +221,14 @@ class PlatformService(
     def _recipe_store(self) -> RecipeStore:
         store = getattr(self, "_recipes", None)
         if store is None:
-            store = RecipeStore()
+            # 覆盖层来自历史库（管理员页面上保存的完整 YAML），惰性回调保证
+            # 保存后下一次读取立即生效，不需要重启或清缓存。
+            store = RecipeStore(
+                overrides=lambda: {
+                    recipe_id: record["yaml"]
+                    for recipe_id, record in self.history.list_recipe_overrides().items()
+                }
+            )
             self._recipes = store
         return store
 
@@ -238,6 +245,140 @@ class PlatformService(
         from .runs import resolve_template  # 延迟导入，避免循环依赖
 
         return resolve_template(recipe, self)
+
+    # --- 配方管理（仅 admin；v1.1 完整 YAML 编辑） --------------------------
+    def admin_list_recipes(self) -> dict[str, Any]:
+        """管理视图的配方列表：含隐藏的，并标注 默认/已覆盖 与覆盖元信息。"""
+        meta = self.history.list_recipe_overrides()
+        items = []
+        for recipe in self._recipe_store().load_all():
+            item = recipe.as_dict()
+            record = meta.get(recipe.id)
+            item["updated_at"] = record["updated_at"] if record else None
+            item["updated_by"] = record["updated_by"] if record else None
+            items.append(item)
+        return {"items": items}
+
+    def admin_recipe_detail(self, recipe_id: str) -> dict[str, Any]:
+        """编辑器回填：生效中的原始 YAML（覆盖优先，否则内置文件原文）。"""
+        raw = self._recipe_store().raw_text(recipe_id)
+        if raw is None:
+            raise ServiceError(404, f"recipe {recipe_id} not found")
+        yaml_text, source = raw
+        record = self.history.get_recipe_override(recipe_id)
+        return {
+            "id": recipe_id,
+            "source": source,
+            "yaml": yaml_text,
+            "updated_at": record["updated_at"] if record else None,
+            "updated_by": record["updated_by"] if record else None,
+        }
+
+    def save_recipe_override(self, recipe_id: str, yaml_text: str) -> dict[str, Any]:
+        """保存完整 YAML 覆盖。校验全部通过才落库——非法输入 422，绝不写坏配置。"""
+        recipe = self._validate_recipe_yaml(recipe_id, yaml_text)
+        self.history.put_recipe_override(recipe_id, yaml_text, utc_now(), self._current_actor)
+        self.audit.record(
+            "recipe.override.put",
+            actor=self._current_actor,
+            target=recipe_id,
+            detail={"image": recipe.image, "public": recipe.public},
+        )
+        return self.admin_recipe_detail(recipe_id)
+
+    def restore_recipe_default(self, recipe_id: str) -> dict[str, Any]:
+        """删除覆盖，恢复随镜像发布的内置默认。没有覆盖时返回 restored=false。"""
+        self._require_builtin_recipe(recipe_id)
+        restored = self.history.delete_recipe_override(
+            recipe_id, utc_now(), self._current_actor, action="restore"
+        )
+        if restored:
+            self.audit.record("recipe.override.restore", actor=self._current_actor, target=recipe_id)
+        detail = self.admin_recipe_detail(recipe_id)
+        detail["restored"] = restored
+        return detail
+
+    def recipe_override_history(self, recipe_id: str, limit: int = 20) -> dict[str, Any]:
+        """覆盖的变更历史（谁在什么时候保存/恢复/回滚过）。不回传 YAML 全量，保持列表轻。"""
+        self._require_builtin_recipe(recipe_id)
+        rows = self.history.list_recipe_override_history(recipe_id, limit=limit)
+        items = []
+        for row in rows:
+            item = {key: value for key, value in row.items() if key != "yaml"}
+            item["has_yaml"] = row["yaml"] is not None
+            items.append(item)
+        return {"items": items}
+
+    def rollback_recipe(self, recipe_id: str) -> dict[str, Any]:
+        """回滚到上一个版本，连续回滚沿版本链逐步倒退（v2→v1→内置默认）。
+
+        历史是只追加的审计日志，不能删行；因此把 save/restore 视为入栈、
+        rollback 视为出栈，回放整个历史得出当前版本栈，栈顶下一层就是回滚目标。
+        这样「回滚产生的记录」本身不会成为下一次回滚的目标，避免在两个版本间振荡。
+        """
+        self._require_builtin_recipe(recipe_id)
+        rows = self.history.list_recipe_override_history(recipe_id, limit=1000)
+        stack: list[str | None] = [None]  # None = 内置默认（无覆盖）
+        for row in reversed(rows):  # 历史按时间正序回放
+            if row["action"] == "rollback":
+                if len(stack) > 1:
+                    stack.pop()
+            else:  # save / restore
+                stack.append(row["yaml"])
+        if len(stack) < 2:
+            raise ServiceError(409, f"recipe {recipe_id} 没有可回滚的历史版本")
+        target = stack[-2]
+        if target is None:
+            self.history.delete_recipe_override(
+                recipe_id, utc_now(), self._current_actor, action="rollback"
+            )
+        else:
+            # 历史内容也重新过一遍校验：校验规则可能在那次保存之后收紧过。
+            self._validate_recipe_yaml(recipe_id, target)
+            self.history.put_recipe_override(
+                recipe_id, target, utc_now(), self._current_actor, action="rollback"
+            )
+        self.audit.record(
+            "recipe.override.rollback",
+            actor=self._current_actor,
+            target=recipe_id,
+            detail={"to": "builtin" if target is None else "previous-override"},
+        )
+        return self.admin_recipe_detail(recipe_id)
+
+    def _require_builtin_recipe(self, recipe_id: str) -> None:
+        """覆盖只允许作用于随镜像发布的内置配方，不能凭空新建 id。"""
+        builtin = RecipeStore().get(recipe_id)
+        if builtin is None or builtin.source == "error":
+            raise ServiceError(404, f"recipe {recipe_id} not found")
+
+    def _validate_recipe_yaml(self, recipe_id: str, yaml_text: str) -> Recipe:
+        import yaml
+
+        self._require_builtin_recipe(recipe_id)
+        if len(yaml_text.encode("utf-8")) > MAX_TEMPLATE_BYTES:
+            raise ServiceError(422, f"配方 YAML 不能超过 {MAX_TEMPLATE_BYTES} 字节")
+        try:
+            payload = yaml.safe_load(yaml_text)
+        except yaml.YAMLError as exc:
+            raise ServiceError(422, f"YAML 解析失败：{exc}") from exc
+        try:
+            recipe = parse_recipe(payload, source=f"override:{recipe_id}.yaml")
+        except RecipeError as exc:
+            raise ServiceError(422, str(exc)) from exc
+        if recipe.id != recipe_id:
+            raise ServiceError(422, f"YAML 里的 id 是 {recipe.id!r}，不能改成与 {recipe_id!r} 不同的值")
+        if not validate_image_name(recipe.image):
+            raise ServiceError(422, f"镜像名 {recipe.image!r} 不合法")
+        try:
+            template = self.recipe_template(recipe)
+        except ServiceError as exc:
+            raise ServiceError(422, f"参数模板无效：{exc.message}") from exc
+        declared = {param.key for param in template.params}
+        unknown = sorted(set(recipe.defaults) - declared)
+        if unknown:
+            raise ServiceError(422, f"defaults 含模板未声明的参数：{', '.join(unknown)}")
+        return recipe
 
     def preflight_run(self, request: RunRequest) -> dict[str, Any]:
         """提交前预检：不创建任何对象，只检查能不能跑、会有什么问题。"""

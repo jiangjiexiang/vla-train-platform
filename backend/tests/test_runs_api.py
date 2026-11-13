@@ -442,3 +442,38 @@ def test_concurrent_run_creation_gets_distinct_names(client, tmp_path):
     # 全部成功，且名字互不相同
     assert len(names) == 5, results
     assert len(set(names)) == 5, names
+
+
+# --------------------------------------------------------------------------
+# 随仓库发布的内置配方（recipes/*.yaml）完整性
+# --------------------------------------------------------------------------
+def test_shipped_recipes_have_valid_templates():
+    """内置配方必须能加载；内联模板必须能解析，且 defaults 只覆盖已声明的参数。"""
+    from app.params_templates import parse_template
+    from app.recipes.loader import RecipeStore
+
+    recipes = RecipeStore().load_all()
+
+    assert recipes, "仓库里应当有内置配方"
+    for recipe in recipes:
+        assert "配置错误" not in recipe.name, f"配方 {recipe.id} 解析失败：{recipe.description}"
+        if recipe.template is None:
+            continue
+        template = parse_template(recipe.template)
+        declared = {param.key for param in template.params}
+        unknown = set(recipe.defaults) - declared
+        assert not unknown, f"配方 {recipe.id} 的 defaults 含未声明参数：{sorted(unknown)}"
+
+
+def test_shipped_recipes_model_paths_not_under_checkpoints():
+    """模型与仿真资产统一走镜像内 /trainingworkspace，/checkpoints 只挂训练输出。
+
+    回归保护：/checkpoints/_models 是旧的宿主机挂载约定，已随自包含镜像废弃。
+    """
+    from app.recipes.loader import RecipeStore
+
+    for recipe in RecipeStore().load_all():
+        values = list(recipe.env.values()) + [str(item) for item in recipe.defaults.values()]
+        values += [str(param.get("default", "")) for param in (recipe.template or {}).get("params", [])]
+        for value in values:
+            assert "/checkpoints/_models" not in value, recipe.id

@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from .api.routes import router
 from .api.routes_datasets import router as datasets_router
+from .api.routes_recipes_admin import router as recipes_admin_router
 from .api.routes_runs import router as runs_router
 from .config import Settings
 from .history import HistoryStore
@@ -57,6 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(router)
     app.include_router(datasets_router)
     app.include_router(runs_router)
+    app.include_router(recipes_admin_router)
     register_tensorboard(app, settings)
     # SPA 兜底必须最后注册，避免吞掉 API 与 TensorBoard 路径。
     register_spa(app, settings)

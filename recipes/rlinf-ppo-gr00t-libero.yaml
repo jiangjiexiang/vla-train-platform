@@ -1,0 +1,75 @@
+id: rlinf-ppo-gr00t-libero
+name: RLinf PPO（GR00T N1.7 / LIBERO-Spatial）
+description: >-
+  用 RLinf v0.4 对 GR00T N1.7 做 PPO 强化学习（LIBERO-Spatial 仿真，gr00t_n1d7 环境）。
+  注意：上游配置 libero_spatial_ppo_gr00t_n1d7 除 GR00T 权重外还需要 Cosmos-Reason2-2B
+  作为 VLM backbone（backbone_model_path），当前镜像只内置了
+  /trainingworkspace/_models/GR00T-N1.7-3B（且为基座权重，非 LIBERO 微调版），
+  未内置 Cosmos-Reason2-2B，因此本配方暂不公开（public: false），补齐 backbone 前提交会在加载模型时失败。
+  PPO 不使用数据集，提交时任选占位。
+image: vla-rlinf:0.5-selfcontained
+entrypoint: bash /usr/local/bin/run_ppo.sh
+dataset_formats:
+  - lerobot-v3.0
+  - lerobot-v2.1
+  - lerobot-v2.0
+env:
+  RLINF_ENV: gr00t_n1d7
+  ROBOT_PLATFORM: LIBERO
+template:
+  schema_version: 1
+  params:
+    - key: config
+      flag: --config
+      label: RLinf 配置名
+      type: str
+      default: libero_spatial_ppo_gr00t_n1d7
+      help: examples/embodiment/config/ 下的配置名（不带 .yaml），如 libero_goal_ppo_gr00t_n1d7
+    - key: model_path
+      flag: --model-path
+      label: GR00T 权重路径
+      type: str
+      default: /trainingworkspace/_models/GR00T-N1.7-3B
+      help: 默认为镜像内置的 GR00T N1.7 基座权重；若有 LIBERO SFT 版权重（GR00T-N1.7-LIBERO）效果更佳
+    - key: backbone_path
+      flag: --backbone-path
+      label: VLM backbone 路径（必填）
+      type: str
+      default: ""
+      help: GR00T N1.7 依赖 Cosmos-Reason2-2B 作为 backbone，镜像暂未内置，需自行提供镜像内可访问的路径
+    - key: max_steps
+      flag: --max-steps
+      label: 最大训练步数
+      type: int
+      default: 200
+      min: 1
+      help: 冒烟验证用 200；正式训练按需调大，-1 表示不限
+    - key: save_interval
+      flag: --save-interval
+      label: 保存 checkpoint 间隔（epoch）
+      type: int
+      default: 40
+      min: 1
+    - key: num_envs
+      flag: --num-envs
+      label: 并行仿真环境数
+      type: int
+      default: 8
+      min: 1
+      max: 256
+      help: GR00T 比 OpenVLA 更占显存，默认 8；显存充裕可再调大
+    - key: placement
+      flag: --placement
+      label: GPU 分配（component_placement）
+      type: str
+      default: actor,env,rollout:0-0
+      help: 单卡保持默认；双卡可改 actor,env,rollout:0-1
+defaults:
+  config: libero_spatial_ppo_gr00t_n1d7
+  max_steps: 200
+  save_interval: 40
+  num_envs: 8
+gpu_count: 1
+order: 32
+# 缺 Cosmos-Reason2-2B backbone，权重不完整，不对普通用户公开
+public: false

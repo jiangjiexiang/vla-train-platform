@@ -686,3 +686,26 @@ body {
   background: #fff;
   margin-bottom: 8px;
 }
+
+/* 配方管理：完整 YAML 编辑器与历史条目 */
+.yaml-editor {
+  width: 100%;
+  min-height: 420px;
+  resize: vertical;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font: 13px/1.6 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  tab-size: 2;
+}
+
+.yaml-editor:focus {
+  border-color: #315efb;
+  outline: none;
+}
+
+.recipe-history-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

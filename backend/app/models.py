@@ -148,6 +148,14 @@ class QuotaUpdate(BaseModel):
     max_active_jobs: int | None = Field(default=None, ge=0)
 
 
+class RecipeYamlUpdate(BaseModel):
+    """管理员保存配方覆盖：整份 YAML 文本。校验在服务层做（parse_recipe + parse_template）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    yaml: str = Field(min_length=1, max_length=128 * 1024)
+
+
 def check_payload_size(spec: SubmitSpec) -> None:
     """Reject specs too large to store in a Kubernetes annotation.
 

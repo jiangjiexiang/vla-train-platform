@@ -1,6 +1,7 @@
 """训练配方与一键训练 API。
 
-配方是只读的（来自镜像内 ``/app/recipes/*.yaml``），这里提供浏览；
+配方内置在镜像内 ``/app/recipes/*.yaml``，管理员可在 ``/admin/recipes``
+（routes_recipes_admin.py）做完整 YAML 覆盖，这里对普通用户只读；
 ``POST /runs`` 是「选数据集 + 选配方 → 加入队列」的入口。
 """
 

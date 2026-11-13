@@ -38,6 +38,9 @@ ACTIONS = {
     "user.quota.update",
     "image.params.put",
     "image.params.delete",
+    "recipe.override.put",
+    "recipe.override.restore",
+    "recipe.override.rollback",
 }
 
 

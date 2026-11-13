@@ -1,6 +1,9 @@
 import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, HealthResponse, Job, JobDiagnosisResponse, JobEventsResponse, JobListResponse, JobLogs, JobMetricsResponse, JobStatus, JobTimelineResponse, JobCheckpointsResponse, LoginResponse, PlatformConfig, PreflightResponse, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, Recipe, RecipeListResponse, RunRequest, SubmitJobRequest, UserListResponse, ImageListResponse, ImageParamsResponse,
   TensorboardResponse,
   FailureSummary,
+  AdminRecipeListResponse,
+  AdminRecipeDetail,
+  RecipeHistoryResponse,
 } from '../types/api';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE || '/api/v1').replace(/\/+$/, '');
@@ -198,6 +201,25 @@ export const api = {
   // 201 返回新建的 Job；422 = 格式不兼容 / 数据集不可用 / 参数未知，409 = 任务名重复
   createRun: (payload: RunRequest) =>
     request<Job>('/runs', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // ---- v1.1 配方管理（仅 admin）：完整 YAML 覆盖、恢复默认、历史与回滚 ----
+  adminListRecipes: (signal?: AbortSignal) =>
+    request<AdminRecipeListResponse>('/admin/recipes', { signal }),
+  adminGetRecipe: (id: string, signal?: AbortSignal) =>
+    request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}`, { signal }),
+  // 422 = YAML/配方/模板校验失败，响应 detail 是面向管理员的错误说明
+  adminSaveRecipe: (id: string, yaml: string) =>
+    request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ yaml }),
+    }),
+  adminRestoreRecipe: (id: string) =>
+    request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  adminRecipeHistory: (id: string, signal?: AbortSignal) =>
+    request<RecipeHistoryResponse>(`/admin/recipes/${encodeURIComponent(id)}/history`, { signal }),
+  // 409 = 没有可回滚的历史版本
+  adminRollbackRecipe: (id: string) =>
+    request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}/rollback`, { method: 'POST' }),
 
   // 训练指标（loss 曲线）。老任务没有 metrics.jsonl 时返回空 items + path_exists=false
   getJobMetrics: (name: string, limit = 500, signal?: AbortSignal) =>

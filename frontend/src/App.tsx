@@ -13,6 +13,7 @@ import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { QuickStartPage } from './pages/QuickStartPage';
 import { QueuesPage } from './pages/QueuesPage';
+import { RecipeAdminPage } from './pages/RecipeAdminPage';
 import { RecipesPage } from './pages/RecipesPage';
 import { SubmitJobPage } from './pages/SubmitJobPage';
 import { UsersPage } from './pages/UsersPage';
@@ -66,6 +67,7 @@ export default function App() {
                 <Route path="/jobs/:name" element={<JobDetailPage />} />
                 <Route path="/queues" element={<QueuesPage />} />
                 <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
+                <Route path="/admin/recipes" element={<AdminOnly><RecipeAdminPage /></AdminOnly>} />
                 <Route path="*" element={<NotFoundPage />} />
               </Route>
             </Routes>

@@ -1,0 +1,65 @@
+id: rlinf-ppo-maniskill
+name: RLinf PPO（ManiSkill 仿真）
+description: >-
+  用 RLinf v0.4 在 ManiSkill 仿真里做 PPO 强化学习（默认 OpenVLA + PutCarrotOnPlateInScene，openvla 环境）。
+  PPO 是仿真在线采样训练，不使用数据集，提交时任选一个数据集占位即可。
+  默认单卡：actor/env/rollout 全部放在 GPU 0；多卡可自行改 placement。
+image: vla-rlinf:0.5-selfcontained
+entrypoint: bash /usr/local/bin/run_ppo.sh
+# PPO 不读数据集，这里列出全部格式只是让平台的「必选数据集」校验能通过。
+dataset_formats:
+  - lerobot-v3.0
+  - lerobot-v2.1
+  - lerobot-v2.0
+env:
+  RLINF_ENV: openvla
+template:
+  schema_version: 1
+  params:
+    - key: config
+      flag: --config
+      label: RLinf 配置名
+      type: str
+      default: maniskill_ppo_openvla_quickstart
+      help: examples/embodiment/config/ 下的配置名（不带 .yaml），如 maniskill_ppo_openvlaoft_quickstart
+    - key: model_path
+      flag: --model-path
+      label: 模型权重路径
+      type: str
+      default: /trainingworkspace/_models/openvla-7b-rlvla-warmup
+      help: PPO 热启动权重（SFT ckpt），默认走镜像内 /trainingworkspace/_models/openvla-7b-rlvla-warmup；若镜像未内置该权重需自行改路径
+    - key: max_steps
+      flag: --max-steps
+      label: 最大训练步数
+      type: int
+      default: 200
+      min: 1
+      help: 冒烟验证用 200；正式训练按需调大，-1 表示不限
+    - key: save_interval
+      flag: --save-interval
+      label: 保存 checkpoint 间隔（epoch）
+      type: int
+      default: 40
+      min: 1
+    - key: num_envs
+      flag: --num-envs
+      label: 并行仿真环境数
+      type: int
+      default: 32
+      min: 1
+      max: 256
+      help: 显存紧张时调小，如 16
+    - key: placement
+      flag: --placement
+      label: GPU 分配（component_placement）
+      type: str
+      default: actor,env,rollout:0-0
+      help: 单卡保持默认；双卡可改 actor,env,rollout:0-1
+defaults:
+  config: maniskill_ppo_openvla_quickstart
+  max_steps: 200
+  save_interval: 40
+  num_envs: 32
+gpu_count: 1
+order: 30
+public: true

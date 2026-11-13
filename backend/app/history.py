@@ -52,6 +52,26 @@ class HistoryStore:
                     template_json TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                -- v1.1：管理员在页面上编辑的完整配方 YAML。内置配方随镜像只读，
+                -- 覆盖层落库才能跨重启生效；同 id 覆盖内置，删除覆盖即恢复默认。
+                CREATE TABLE IF NOT EXISTS recipe_overrides (
+                    recipe_id TEXT PRIMARY KEY,
+                    yaml TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT NOT NULL
+                );
+                -- 每次保存/恢复/回滚追加一行，yaml 存全量内容（配方只有几 KB），
+                -- 这样任何历史版本都能直接回滚，不用做 diff 回放。
+                CREATE TABLE IF NOT EXISTS recipe_override_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recipe_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    yaml TEXT,
+                    changed_at TEXT NOT NULL,
+                    changed_by TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS recipe_override_history_recipe
+                    ON recipe_override_history(recipe_id, id DESC);
                 """
             )
             self._ensure_status_column(connection)
@@ -153,6 +173,90 @@ class HistoryStore:
             ).fetchall()
         return [
             {"image": row["image"], "template": json.loads(row["template_json"]), "updated_at": row["updated_at"]}
+            for row in rows
+        ]
+
+    # --- 配方覆盖（v1.1） ---------------------------------------------------
+    def get_recipe_override(self, recipe_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT recipe_id, yaml, updated_at, updated_by FROM recipe_overrides WHERE recipe_id = ?",
+                (recipe_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "recipe_id": row["recipe_id"],
+            "yaml": row["yaml"],
+            "updated_at": row["updated_at"],
+            "updated_by": row["updated_by"],
+        }
+
+    def list_recipe_overrides(self) -> dict[str, dict[str, Any]]:
+        """recipe_id → 覆盖记录（yaml + 更新时间/操作者），供列表展示与覆盖层合并。"""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT recipe_id, yaml, updated_at, updated_by FROM recipe_overrides"
+            ).fetchall()
+        return {
+            row["recipe_id"]: {
+                "yaml": row["yaml"],
+                "updated_at": row["updated_at"],
+                "updated_by": row["updated_by"],
+            }
+            for row in rows
+        }
+
+    def put_recipe_override(
+        self, recipe_id: str, yaml_text: str, updated_at: str, updated_by: str, action: str = "save"
+    ) -> None:
+        """保存覆盖并追加历史。覆盖表与历史表必须在同一事务里，
+        否则崩溃后会留下「生效了但查不到来历」的配置。"""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO recipe_overrides(recipe_id, yaml, updated_at, updated_by) VALUES (?, ?, ?, ?)
+                ON CONFLICT(recipe_id) DO UPDATE SET
+                    yaml = excluded.yaml,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+                """,
+                (recipe_id, yaml_text, updated_at, updated_by),
+            )
+            connection.execute(
+                "INSERT INTO recipe_override_history(recipe_id, action, yaml, changed_at, changed_by) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (recipe_id, action, yaml_text, updated_at, updated_by),
+            )
+
+    def delete_recipe_override(
+        self, recipe_id: str, changed_at: str, changed_by: str, action: str = "restore"
+    ) -> bool:
+        """删除覆盖（恢复内置默认），同样追加历史。返回是否真的有覆盖被删。"""
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM recipe_overrides WHERE recipe_id = ?", (recipe_id,))
+            connection.execute(
+                "INSERT INTO recipe_override_history(recipe_id, action, yaml, changed_at, changed_by) "
+                "VALUES (?, ?, NULL, ?, ?)",
+                (recipe_id, action, changed_at, changed_by),
+            )
+        return cursor.rowcount > 0
+
+    def list_recipe_override_history(self, recipe_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, action, yaml, changed_at, changed_by FROM recipe_override_history "
+                "WHERE recipe_id = ? ORDER BY id DESC LIMIT ?",
+                (recipe_id, limit),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "action": row["action"],
+                "yaml": row["yaml"],
+                "changed_at": row["changed_at"],
+                "changed_by": row["changed_by"],
+            }
             for row in rows
         ]
 

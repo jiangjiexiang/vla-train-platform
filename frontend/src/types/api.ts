@@ -376,6 +376,43 @@ export interface RecipeListResponse {
   items: Recipe[];
 }
 
+// ---- v1.1：配方管理（仅 admin，见 backend/app/api/routes_recipes_admin.py）----
+
+export interface AdminRecipe extends Recipe {
+  // builtin = 随镜像发布；override = 管理员改过；error = 覆盖配置解析失败
+  source: string;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+export interface AdminRecipeListResponse {
+  items: AdminRecipe[];
+}
+
+export interface AdminRecipeDetail {
+  id: string;
+  source: string;
+  // 生效中的完整 YAML（覆盖优先，否则内置文件原文），编辑器直接回填
+  yaml: string;
+  updated_at: string | null;
+  updated_by: string | null;
+  // 仅 DELETE（恢复默认）响应携带
+  restored?: boolean;
+}
+
+export interface RecipeHistoryEntry {
+  id: number;
+  action: 'save' | 'restore' | 'rollback' | string;
+  changed_at: string;
+  changed_by: string;
+  // save/rollback 带 YAML 全量；restore 不带
+  has_yaml: boolean;
+}
+
+export interface RecipeHistoryResponse {
+  items: RecipeHistoryEntry[];
+}
+
 // POST /runs 的请求体（见 backend/app/models.py RunSubmitRequest）
 export interface RunRequest {
   recipe_id: string;

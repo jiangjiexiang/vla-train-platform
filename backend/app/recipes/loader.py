@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -77,6 +78,9 @@ class Recipe:
     order: int = 100
     # 是否对普通用户可见（false 只在高级提交页可选）
     public: bool = True
+    # 生效来源：builtin = 随镜像/仓库发布的 YAML；override = 管理员在页面上改过的。
+    # 解析失败的条目用 "error"，前端据此提示管理员去修覆盖配置。
+    source: str = "builtin"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -93,6 +97,7 @@ class Recipe:
             "env": dict(self.env),
             "order": self.order,
             "public": self.public,
+            "source": self.source,
             "has_custom_template": self.template is not None,
         }
 
@@ -154,35 +159,100 @@ def parse_recipe(payload: Any, source: str = "<memory>") -> Recipe:
 
 
 class RecipeStore:
-    """从目录加载配方。目录不存在时返回空集，不报错（允许不配配方的最小部署）。"""
+    """从目录加载配方。目录不存在时返回空集，不报错（允许不配配方的最小部署）。
 
-    def __init__(self, directory: str | Path | None = None):
+    ``overrides`` 是「recipe_id → YAML 文本」的惰性回调（管理员在页面上保存的
+    完整 YAML，持久化在平台数据库里）。生效顺序是 覆盖 > 内置：同 id 的覆盖
+    整个替换内置配方；镜像升级改的是内置默认值，覆盖层不动。
+    覆盖只允许作用于已存在的内置配方 id，服务层在保存时保证这一点。
+    """
+
+    def __init__(
+        self,
+        directory: str | Path | None = None,
+        overrides: Callable[[], dict[str, str]] | None = None,
+    ):
         self.directory = Path(directory) if directory else _resolve_recipes_dir()
+        self._overrides = overrides
 
     def load_all(self) -> list[Recipe]:
-        recipes: list[Recipe] = []
+        recipes: dict[str, Recipe] = {}
+        broken: list[Recipe] = []
+        for path, text in self._read_builtin_files():
+            try:
+                payload = yaml.safe_load(text)
+                recipe = parse_recipe(payload, source=path.name)
+                recipes[recipe.id] = recipe
+            except (yaml.YAMLError, RecipeError) as exc:
+                # 单个配方写错不应该让整个平台起不来；启动日志里会看到具体错误
+                broken.append(self._broken_recipe(path.stem, exc))
+        for recipe_id, text in self._active_overrides().items():
+            try:
+                payload = yaml.safe_load(text)
+                recipe = parse_recipe(payload, source=f"override:{recipe_id}.yaml")
+                if recipe.id != recipe_id:
+                    raise RecipeError(
+                        f"覆盖内容的 id 是 {recipe.id!r}，与覆盖目标 {recipe_id!r} 不一致"
+                    )
+                recipe.source = "override"
+                recipes[recipe_id] = recipe
+            except (yaml.YAMLError, RecipeError) as exc:
+                # 保存时已做过完整校验，走到这里说明库被手工改过；
+                # 与内置文件写错同样处理：标错但不拖垮整个平台。
+                broken.append(self._broken_recipe(recipe_id, exc))
+        items = [*recipes.values(), *broken]
+        items.sort(key=lambda item: (item.order, item.id))
+        return items
+
+    def raw_text(self, recipe_id: str) -> tuple[str, str] | None:
+        """返回生效中的原始 YAML 与来源（override / builtin），供管理员编辑器回填。
+
+        覆盖优先；没有覆盖时读内置文件原文（保留注释，编辑器里看到的就是发布的那份）。
+        """
+        overrides = self._active_overrides()
+        if recipe_id in overrides:
+            return overrides[recipe_id], "override"
+        for path, text in self._read_builtin_files():
+            try:
+                payload = yaml.safe_load(text)
+                if isinstance(payload, dict) and str(payload.get("id") or "") == recipe_id:
+                    return text, "builtin"
+            except yaml.YAMLError:
+                continue
+        return None
+
+    def _active_overrides(self) -> dict[str, str]:
+        if self._overrides is None:
+            return {}
+        try:
+            return dict(self._overrides())
+        except Exception:  # noqa: BLE001 - 覆盖存储不可用时退回内置，不让平台起不来
+            return {}
+
+    def _read_builtin_files(self) -> list[tuple[Path, str]]:
+        entries: list[tuple[Path, str]] = []
         if not self.directory.is_dir():
-            return recipes
+            return entries
         for path in sorted(self.directory.glob("*.yaml")):
             try:
-                payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-                recipes.append(parse_recipe(payload, source=path.name))
-            except (OSError, yaml.YAMLError, RecipeError) as exc:
-                # 单个配方写错不应该让整个平台起不来；启动日志里会看到具体错误
-                recipes.append(
-                    Recipe(
-                        id=path.stem,
-                        name=f"{path.stem}（配置错误）",
-                        description=f"配方文件解析失败：{exc}",
-                        image="",
-                        entrypoint=None,
-                        dataset_formats=[],
-                        public=False,
-                        order=9999,
-                    )
-                )
-        recipes.sort(key=lambda item: (item.order, item.id))
-        return recipes
+                entries.append((path, path.read_text(encoding="utf-8")))
+            except OSError:
+                continue
+        return entries
+
+    @staticmethod
+    def _broken_recipe(stem: str, exc: Exception) -> Recipe:
+        return Recipe(
+            id=stem,
+            name=f"{stem}（配置错误）",
+            description=f"配方文件解析失败：{exc}",
+            image="",
+            entrypoint=None,
+            dataset_formats=[],
+            public=False,
+            order=9999,
+            source="error",
+        )
 
     def get(self, recipe_id: str) -> Recipe | None:
         for recipe in self.load_all():

@@ -1,0 +1,53 @@
+id: rlinf-ppo-lingbotvlav2-robotwin
+name: RLinf PPO（LingBotVLA 2.0 / RoboTwin）
+description: >-
+  用 RLinf 对 LingBotVLA 2.0 做 PPO 强化学习（RoboTwin 2.0 Click Bell）。
+  使用官方 global_step_50000 RoboTwin checkpoint 和 Qwen3-VL-4B-Instruct。
+  默认 4 卡，模型、代码和 RoboTwin 资产均从宿主机挂载。PPO 不使用数据集，提交时任选占位。
+image: docker.io/library/rlinf:embodied-full-v2
+entrypoint: source switch_env lingbotvlav2 && bash /yyl/jiangjiexiang/runtime/nvidia-550.90.07/with_graphics.sh bash /workspace/RLinf/examples/embodiment/run_embodiment.sh robotwin_click_bell_ppo_lingbotvlav2
+dataset_formats:
+  - lerobot-v3.0
+  - lerobot-v2.1
+  - lerobot-v2.0
+env:
+  ROBOT_PLATFORM: ALOHA
+  ROBOTWIN_PATH: /opt/RoboTwin
+  ROBOTWIN_ASSETS_PATH: /opt/RoboTwin
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  STEPS: "-2"
+  SAVE_INTER: "-2"
+host_paths:
+  - name: models
+    host_path: /models
+    mount_path: /models
+    read_only: true
+  - name: rlinf-v2
+    host_path: /yyl/jiangjiexiang/vla-train/RLinf-v2
+    mount_path: /workspace/RLinf
+    read_only: false
+  - name: robotwin
+    host_path: /yyl/jiangjiexiang/training_code/RoboTwin
+    mount_path: /opt/RoboTwin
+    read_only: false
+  - name: nvidia-graphics
+    host_path: /yyl/jiangjiexiang/runtime/nvidia-550.90.07
+    mount_path: /yyl/jiangjiexiang/runtime/nvidia-550.90.07
+    read_only: true
+template:
+  schema_version: 1
+  params:
+    - key: extra_args
+      kind: extra
+      type: str
+      label: Hydra 覆盖参数
+      default: runner.logger.log_path=/checkpoints/${JOB_NAME}
+  extra_args:
+    label: Hydra 覆盖参数
+    help: 例如 runner.max_steps=100 env.train.total_num_envs=64 actor.global_batch_size=128；留空使用官方配置
+    default: runner.logger.log_path=/checkpoints/${JOB_NAME}
+gpu_count: 4
+estimated_vram_gb: 48
+order: 33
+public: false

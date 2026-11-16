@@ -72,3 +72,23 @@ def test_restart_policy_follows_max_retries(settings):
 
     assert master(render(make_spec(max_retries=0), settings))["restartPolicy"] == "Never"
     assert master(render(make_spec(max_retries=2), settings))["restartPolicy"] == "OnFailure"
+
+
+def test_recipe_host_paths_are_mounted(settings):
+    spec = make_spec(
+        host_paths=[
+            {
+                "name": "models",
+                "host_path": "/models",
+                "mount_path": "/models",
+                "read_only": True,
+            }
+        ]
+    )
+    pod = pod_spec(render(spec, settings))
+
+    mount = next(item for item in pod["containers"][0]["volumeMounts"] if item["name"] == "models")
+    volume = next(item for item in pod["volumes"] if item["name"] == "models")
+    assert mount["mountPath"] == "/models"
+    assert mount["readOnly"] is True
+    assert volume["hostPath"] == {"path": "/models", "type": "Directory"}

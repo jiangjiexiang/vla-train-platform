@@ -1,14 +1,13 @@
 """宿主机路径 vs 容器内路径的区分测试。
 
-数据目录从 ``/data/vla-platform`` 迁到 ``<项目>/data`` 之后，配置里出现了两组
-看着相似、用途完全不同的路径：
+平台配置里有两组看着相似、用途完全不同的路径：
 
 - ``checkpoint_host_path`` / ``dataset_host_path``：**宿主机**路径，
   只用来构造训练 Job 的 hostPath volume；
 - ``checkpoints_mount_path`` / ``datasets_mount_path``：**容器内**路径，
   Web 进程实际能读到的路径。
 
-Web 容器里根本不存在 ``/home/jjx/vla-train-platform/data/...`` 这个前缀。
+Web 容器里根本不存在宿主机的 ``/data/vla-platform/...`` 这个前缀。
 代码里只要有一处拿宿主机路径去读文件，那个功能在真实部署里就是静默失效
 （不报错，只是永远返回空），本地测试还看不出来——所以这里刻意让两个路径
 指向**不同的真实目录**，任何一处用错都会立刻表现为「读不到数据」。

@@ -172,7 +172,7 @@ export function JobListPage() {
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/advanced/submit')}>提交任务</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/')}>提交任务</Button>
         </Space>
       </div>
       {quotaInfo.text && (

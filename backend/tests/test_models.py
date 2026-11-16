@@ -78,6 +78,27 @@ def test_unknown_fields_rejected():
         make_spec(privileged=True)
 
 
+def test_recipe_host_paths_require_absolute_unique_paths():
+    with pytest.raises(ValidationError):
+        make_spec(host_paths=[{"name": "models", "host_path": "models", "mount_path": "/models"}])
+    with pytest.raises(ValidationError):
+        make_spec(
+            host_paths=[
+                {"name": "models", "host_path": "/models", "mount_path": "/models"},
+                {"name": "models", "host_path": "/models", "mount_path": "/models"},
+            ]
+        )
+
+
+def test_submit_request_cannot_mount_arbitrary_host_paths():
+    with pytest.raises(ValidationError, match="only be assigned by a recipe"):
+        SubmitRequest(
+            name="exp004",
+            gpus=1,
+            host_paths=[{"name": "host", "host_path": "/", "mount_path": "/host"}],
+        )
+
+
 def test_submit_request_applies_defaults():
     request = SubmitRequest(name="exp002", gpus=1, image=None, command=None)
     spec = request.with_defaults("vla-smoke:latest", "python /app/train.py")

@@ -53,7 +53,7 @@ def _environment(spec: SubmitSpec, settings: Settings) -> list[dict]:
     return environment
 
 
-def _volume_mounts(settings: Settings) -> list[dict]:
+def _volume_mounts(spec: SubmitSpec, settings: Settings) -> list[dict]:
     mounts = [
         {"name": "dshm", "mountPath": "/dev/shm"},
         {"name": "datasets", "mountPath": "/datasets", "readOnly": True},
@@ -65,10 +65,18 @@ def _volume_mounts(settings: Settings) -> list[dict]:
     ]
     if settings.training_code_host_path:
         mounts.append({"name": "training-code", "mountPath": "/app", "readOnly": True})
+    mounts.extend(
+        {
+            "name": item.name,
+            "mountPath": item.mount_path,
+            "readOnly": item.read_only,
+        }
+        for item in spec.host_paths
+    )
     return mounts
 
 
-def _volumes(settings: Settings) -> list[dict]:
+def _volumes(spec: SubmitSpec, settings: Settings) -> list[dict]:
     volumes = [
         {
             "name": "dshm",
@@ -90,6 +98,13 @@ def _volumes(settings: Settings) -> list[dict]:
                 "hostPath": {"path": settings.training_code_host_path, "type": "Directory"},
             }
         )
+    volumes.extend(
+        {
+            "name": item.name,
+            "hostPath": {"path": item.host_path, "type": "Directory"},
+        }
+        for item in spec.host_paths
+    )
     return volumes
 
 
@@ -129,10 +144,10 @@ def _training_pod_spec(spec: SubmitSpec, settings: Settings) -> dict:
                     "requests": {"nvidia.com/gpu": str(spec.gpus)},
                     "limits": {"nvidia.com/gpu": str(spec.gpus)},
                 },
-                "volumeMounts": _volume_mounts(settings),
+                "volumeMounts": _volume_mounts(spec, settings),
             }
         ],
-        "volumes": _volumes(settings),
+        "volumes": _volumes(spec, settings),
     }
 
 

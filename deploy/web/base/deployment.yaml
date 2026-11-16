@@ -104,14 +104,13 @@ spec:
               value: vla-smolvla:latest
             - name: PLATFORM_DEFAULT_COMMAND
               value: python /app/train.py
-            # 宿主机路径：训练 Pod 的 hostPath 用它。所有产出都在项目 data/ 下。
-            # 注意这里踩过一次坑：这些环境变量会**覆盖** config.py 的默认值，
-            # 改了代码默认值但忘了改这里，训练 Job 仍然挂到旧路径上，
-            # 表现是「数据集明明修好了，训练还是报 KeyError」。
+            # 宿主机路径：训练 Pod 的 hostPath 用它。数据集与训练产物统一放在
+            # /data/vla-platform 下。注意这些环境变量会**覆盖** config.py 的默认值，
+            # 两边必须保持一致，否则训练 Job 会挂到旧路径上。
             - name: PLATFORM_DATASET_HOST_PATH
-              value: /home/jjx/vla-train-platform/data/datasets
+              value: /data/vla-platform/datasets
             - name: PLATFORM_CHECKPOINT_HOST_PATH
-              value: /home/jjx/vla-train-platform/data/checkpoints
+              value: /data/vla-platform/checkpoints
             # 训练代码从宿主机挂载，覆盖镜像里的 train_vla.py 等。
             #
             # 改一行训练脚本要不要重建 10GB 镜像？开了这个就不用：
@@ -119,7 +118,7 @@ spec:
             # 不设（或设为空）= 用镜像自带的代码，镜像自包含，
             # 拿到别的机器也能直接跑。正式发布时应该留空。
             - name: PLATFORM_TRAINING_CODE_HOST_PATH
-              value: /home/jjx/vla-train-platform/images/smolvla-train
+              value: /yyl/jiangjiexiang/vla-train/vla-train-platform/images/smolvla-train
             - name: PLATFORM_DB_PATH
               value: /data/history/platform.db
             - name: PLATFORM_LOG_TAIL_DEFAULT
@@ -137,9 +136,8 @@ spec:
                   key: PLATFORM_LDAP_BIND_PASSWORD
                   optional: true
           volumeMounts:
-            # 历史库（SQLite）。宿主机落在 <项目>/data/history，经 PV
-            # vla-web-history 挂进来——平台的所有产出都在项目目录下，
-            # 主机上不再留 /data/vla-platform。容器内路径保持不变，
+            # 历史库（SQLite）。宿主机落在 /data/vla-platform/history，经 PV
+            # vla-web-history 挂进来。容器内路径保持不变，
             # 所以 PLATFORM_DB_PATH 与 config 默认值都不用改。
             - name: history
               mountPath: /data/history
@@ -216,27 +214,27 @@ spec:
       volumes:
         - name: datasets
           hostPath:
-            path: /home/jjx/vla-train-platform/data/datasets
+            path: /data/vla-platform/datasets
             type: Directory
         - name: checkpoints
           hostPath:
-            path: /home/jjx/vla-train-platform/data/checkpoints
+            path: /data/vla-platform/checkpoints
             type: Directory
         # ---- 代码挂载（迭代模式）----
         # 代码从宿主机挂进来，改完 rollout restart 就生效（约 10 秒），
         # 不用重建镜像 + 导入 K3s。见 volumeMounts 处的说明。
         - name: app-code
           hostPath:
-            path: /home/jjx/vla-train-platform/backend/app
+            path: /yyl/jiangjiexiang/vla-train/vla-train-platform/backend/app
             type: Directory
         - name: recipes
           hostPath:
-            path: /home/jjx/vla-train-platform/recipes
+            path: /yyl/jiangjiexiang/vla-train/vla-train-platform/recipes
             type: Directory
         # 前端产物。前端仍要 npm run build（约 20 秒），但不用重建镜像。
         - name: static
           hostPath:
-            path: /home/jjx/vla-train-platform/frontend/dist
+            path: /yyl/jiangjiexiang/vla-train/vla-train-platform/frontend/dist
             type: DirectoryOrCreate
         - name: history
           persistentVolumeClaim:

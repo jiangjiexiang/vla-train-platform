@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -35,6 +36,30 @@ class JobStatus(str, Enum):
     GONE = "GONE"
 
 
+class HostPathMount(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    host_path: str
+    mount_path: str
+    read_only: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not JOB_NAME_PATTERN.fullmatch(value):
+            raise ValueError("host path name must be a valid Kubernetes volume name")
+        return value
+
+    @field_validator("host_path", "mount_path")
+    @classmethod
+    def validate_absolute_path(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if not path.is_absolute() or ".." in path.parts or "\x00" in value:
+            raise ValueError("host_path and mount_path must be absolute paths without '..'")
+        return str(path)
+
+
 class SubmitSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -56,6 +81,15 @@ class SubmitSpec(BaseModel):
     labels: dict[str, str] = Field(default_factory=dict)
     nodes: int = Field(default=1, ge=1)
     gpus_per_node: int | None = Field(default=None, ge=1)
+    host_paths: list[HostPathMount] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_unique_host_paths(self) -> SubmitSpec:
+        names = [item.name for item in self.host_paths]
+        mount_paths = [item.mount_path for item in self.host_paths]
+        if len(names) != len(set(names)) or len(mount_paths) != len(set(mount_paths)):
+            raise ValueError("host path volume names and mount paths must be unique")
+        return self
 
     @field_validator("name")
     @classmethod
@@ -100,6 +134,12 @@ class SubmitRequest(SubmitSpec):
     command: str | None = None
     # 单机时 gpus 必填；多机（nodes > 1）时可由服务端按 nodes * gpus_per_node 计算。
     gpus: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def reject_user_host_paths(self) -> SubmitRequest:
+        if self.host_paths:
+            raise ValueError("host_paths can only be assigned by a recipe")
+        return self
 
     @model_validator(mode="after")
     def validate_topology(self) -> SubmitRequest:

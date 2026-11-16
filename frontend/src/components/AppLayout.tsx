@@ -4,9 +4,7 @@ import {
   AppstoreOutlined,
   DashboardOutlined,
   EditOutlined,
-  ExperimentOutlined,
   LogoutOutlined,
-  PlusOutlined,
   ProfileOutlined,
   RocketOutlined,
   TeamOutlined,
@@ -38,12 +36,10 @@ export function AppLayout() {
   const menuItems: MenuProps['items'] = [
     { key: '/', icon: <RocketOutlined />, label: '快速开始' },
     { key: '/datasets', icon: <AppstoreOutlined />, label: '数据集' },
-    { key: '/recipes', icon: <ExperimentOutlined />, label: '训练配方' },
     { key: '/jobs', icon: <ProfileOutlined />, label: '任务' },
     { key: '/queues', icon: <UnorderedListOutlined />, label: '队列' },
     ...(isAdmin ? [{ key: '/users', icon: <TeamOutlined />, label: '用户与配额' }] : []),
     ...(isAdmin ? [{ key: '/admin/recipes', icon: <EditOutlined />, label: '配方管理' }] : []),
-    { key: '/advanced/submit', icon: <PlusOutlined />, label: '高级提交' },
     { key: '/dashboard', icon: <DashboardOutlined />, label: '集群总览' },
   ];
 

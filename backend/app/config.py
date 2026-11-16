@@ -9,13 +9,9 @@ from pathlib import Path
 #   token 静态令牌（机器调用）
 #   ldap  目录账号
 #   local 平台自己维护的账号密码（配置在 PLATFORM_LOCAL_USERS）
-# 数据目录的默认位置：放在项目自己下面，而不是散在 /data。
-#
-# 放 /data/vla-platform 那两个坑都踩过：
-#   - 属主是 root，训练产物权限 600，平台用户读不了，模型存下来却拿不走
-#   - 和项目代码分处两地，备份、迁移、看磁盘占用都要跳来跳去
-# 现在统一到 <项目>/data 下，属主就是运行平台的那个用户。
-_PROJECT_DATA = "/home/jjx/vla-train-platform/data"
+# 数据目录的统一约定：数据集、训练产物和历史库都放在 /data/vla-platform 下。
+# 部署清单也会显式配置这些路径，避免本地开发与集群部署使用两套默认值。
+_PLATFORM_DATA = "/data/vla-platform"
 
 AUTH_MODES = ("off", "token", "ldap", "local")
 ROLE_ADMIN = "admin"
@@ -23,20 +19,19 @@ ROLE_USER = "user"
 
 
 def _default_db_path() -> str:
-    """容器内固定用 /data/history；宿主机直跑时回落到项目 data/。
+    """容器内固定用 /data/history；宿主机直跑时回落到 /data/vla-platform/history。
 
-    部署清单会显式覆盖 PLATFORM_DB_PATH，这里只兜底本地开发场景：
-    /data/history 在宿主机上通常不存在或不可写，直接起不来。
+    部署清单会显式覆盖 PLATFORM_DB_PATH，这里只兜底本地开发场景。
     """
     container_default = "/data/history/platform.db"
     if os.path.isdir(os.path.dirname(container_default)) and os.access(
         os.path.dirname(container_default), os.W_OK
     ):
         return container_default
-    project_data = Path(__file__).resolve().parents[2] / "data" / "history"
+    host_history = Path(_PLATFORM_DATA) / "history"
     try:
-        project_data.mkdir(parents=True, exist_ok=True)
-        return str(project_data / "platform.db")
+        host_history.mkdir(parents=True, exist_ok=True)
+        return str(host_history / "platform.db")
     except OSError:
         return container_default
 
@@ -72,17 +67,17 @@ class Settings:
     allowed_gpus: tuple[int, ...] = (1,)
     default_image: str = "vla-smolvla:latest"
     default_command: str = "python /app/train.py"
-    dataset_host_path: str = f"{_PROJECT_DATA}/datasets"
+    dataset_host_path: str = f"{_PLATFORM_DATA}/datasets"
     # Web 容器内看到数据集的路径。Web Pod 挂载了同一个 hostPath，
     # 扫描器在这里读 meta/info.json（见 deploy/web 的 volumeMounts）。
     datasets_mount_path: str = "/datasets"
     # 注册数据集时额外允许的根目录（逗号分隔）。为空时只接受数据集根的直接子目录，
     # 见 services/dataset_register.py。
     dataset_allowed_roots: tuple[str, ...] = ()
-    checkpoint_host_path: str = f"{_PROJECT_DATA}/checkpoints"
+    checkpoint_host_path: str = f"{_PLATFORM_DATA}/checkpoints"
     # Web 容器内看到 checkpoint 的路径（deployment 挂到 /checkpoints）。
     # 读 metrics / events / 权重清单都必须用这个，而不是宿主机路径——
-    # 容器里根本不存在 /home/jjx/... 这个前缀。
+    # 容器里根本不存在 /data/vla-platform/... 这个前缀。
     checkpoints_mount_path: str = "/checkpoints"
     # 训练代码的宿主机目录。非空时把它挂进训练容器，覆盖镜像里的那几份代码。
     #
@@ -210,12 +205,12 @@ class Settings:
             default_image=os.environ.get("PLATFORM_DEFAULT_IMAGE", "vla-smolvla:latest"),
             default_command=os.environ.get("PLATFORM_DEFAULT_COMMAND", "python /app/train.py"),
             dataset_host_path=os.environ.get(
-                "PLATFORM_DATASET_HOST_PATH", f"{_PROJECT_DATA}/datasets"
+                "PLATFORM_DATASET_HOST_PATH", f"{_PLATFORM_DATA}/datasets"
             ),
             datasets_mount_path=os.environ.get("PLATFORM_DATASETS_MOUNT_PATH", "/datasets"),
             dataset_allowed_roots=_parse_csv(os.environ.get("PLATFORM_DATASET_ALLOWED_ROOTS", "")),
             checkpoint_host_path=os.environ.get(
-                "PLATFORM_CHECKPOINT_HOST_PATH", f"{_PROJECT_DATA}/checkpoints"
+                "PLATFORM_CHECKPOINT_HOST_PATH", f"{_PLATFORM_DATA}/checkpoints"
             ),
             checkpoints_mount_path=os.environ.get(
                 "PLATFORM_CHECKPOINTS_MOUNT_PATH", "/checkpoints"

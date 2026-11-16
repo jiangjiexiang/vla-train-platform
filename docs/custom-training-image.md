@@ -76,7 +76,7 @@ dataset_root = Path(os.environ.get("DATASET_ROOT") or "/datasets/<数据集名>"
 
 两个配套要求：
 
-1. **不要写死宿主机路径**。宿主机路径（`/home/jjx/vla-train-platform/data/datasets`）
+1. **不要写死宿主机路径**。宿主机路径（`/data/vla-platform/datasets`）
    在容器里不存在，只有 `/datasets`。
 2. **要能容忍传了上层目录**。用户传 `/datasets` 而不是 `/datasets/pick1028` 是常见失误，
    建议像 `images/smolvla-train/train_vla.py` 的 `resolve_paths()` 那样：
@@ -478,7 +478,7 @@ cd ~/my-train-image
 # 唯一要绕开的是 torch：宿主机上的 torch 未必是 CUDA 版，
 # 入口里的 GPU 自检会在这一关把你挡住（这本身也是对的，见下面的「期望」）。
 # 输出不要写 /tmp：该机器的 /tmp 不可用，写 ~/ 下。
-DATASET_ROOT=/home/jjx/vla-train-platform/data/datasets/pick1028 \
+DATASET_ROOT=/data/vla-platform/datasets/pick1028 \
 CHECKPOINT_DIR=~/tryrun-ckpt/job1 JOB_NAME=job1 \
   bash entrypoint.sh --steps 5 --log_freq 1
 

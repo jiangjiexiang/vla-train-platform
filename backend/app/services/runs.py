@@ -140,6 +140,7 @@ def build_run(
         "priority": request.priority,
         "command": command,
         "env": env,
+        "host_paths": [item.model_dump() for item in recipe.host_paths],
         "max_retries": 0,
         "termination_grace_period_seconds": 30,
         "owner": owner,

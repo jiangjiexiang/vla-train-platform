@@ -2,15 +2,14 @@
 
 平台的持久数据分两类，可靠性要求完全不同。
 
-平台的所有产出都在项目目录 `<项目>/data/` 下（v1.3 起，主机上不再有
-`/data/vla-platform`）。属主是容器里的 10001，不是 root——以前产物属主是 root、
-权重权限 600，平台用户读不了也下载不走。
+平台的所有产出都在 `/data/vla-platform/` 下。属主是容器里的 10001，不是 root——
+否则权重权限一旦是 600，平台用户读不了也下载不走。
 
 | 数据 | 位置（宿主机） | 能否重建 | 备份方式 |
 |---|---|---|---|
-| 数据库（审计/历史/配额） | `<项目>/data/history/platform.db` | **不能** | 自动 + 手动 |
-| 数据集 | `<项目>/data/datasets/` | 能（重新拷贝） | 另行备份 |
-| 训练产物 | `<项目>/data/checkpoints/` | 能（重跑几小时） | 不备份，按需清理 |
+| 数据库（审计/历史/配额） | `/data/vla-platform/history/platform.db` | **不能** | 自动 + 手动 |
+| 数据集 | `/data/vla-platform/datasets/` | 能（重新拷贝） | 另行备份 |
+| 训练产物 | `/data/vla-platform/checkpoints/` | 能（重跑几小时） | 不备份，按需清理 |
 
 数据库是重点：审计日志和提交历史一旦丢失就无法重建。
 
@@ -20,11 +19,11 @@
 
 | 容器内 | 宿主机 |
 |---|---|
-| `/datasets` | `<项目>/data/datasets` |
-| `/checkpoints` | `<项目>/data/checkpoints` |
-| `/data/history/platform.db` | `<项目>/data/history/platform.db` |
+| `/datasets` | `/data/vla-platform/datasets` |
+| `/checkpoints` | `/data/vla-platform/checkpoints` |
+| `/data/history/platform.db` | `/data/vla-platform/history/platform.db` |
 
-`<项目>` = `/home/jjx/vla-train-platform`。配置里分成两组名字：
+配置里分成两组名字：
 `*_host_path` 是宿主机路径（只在拼给训练 Pod 的 hostPath 时用），
 `*_mount_path` 是容器内路径（Web 自己读写文件时**必须**用这组）。
 用错不会报错，只会读空——见 `backend/tests/test_path_kinds.py`。
@@ -38,16 +37,16 @@ Web 上的「清理历史 checkpoint」要在容器内 `rmtree`，**删除目录
 部署机上一次设好（新机器、或 data 目录换了属主之后重跑）：
 
 ```bash
-sudo chown -R 10001:10001 /home/jjx/vla-train-platform/data/checkpoints
+sudo chown -R 10001:10001 /data/vla-platform/checkpoints
 sudo setfacl -R -m  g:10001:rwx \
               -m  d:g:10001:rwx \
-              /home/jjx/vla-train-platform/data/checkpoints
+              /data/vla-platform/checkpoints
 ```
 
 `d:`（default）那一项让**之后**由 root 训练写出的目录自动继承组写权限，
 不用每次训练完再补一遍。没设这个 ACL 时，清理会报
 `Permission denied`，并把该任务记进返回值的 `failed` 列表。
-检查方法：`getfacl -p <项目>/data/checkpoints` 里应有 `default:group:10001:rwx`。
+检查方法：`getfacl -p /data/vla-platform/checkpoints` 里应有 `default:group:10001:rwx`。
 
 在宿主机上跑运维命令时，一律用右列的路径。我曾用容器路径去宿主机上查，
 报「文件不存在」，当时以为数据库丢了。

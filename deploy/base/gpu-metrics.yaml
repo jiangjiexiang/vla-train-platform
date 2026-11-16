@@ -8,24 +8,182 @@ metadata:
     app.kubernetes.io/managed-by: vla-train-platform
     app.kubernetes.io/component: gpu-metrics
 data:
-  gpu-metrics.sh: |
-    #!/bin/sh
-    samples=$(nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits 2>/dev/null)
-    if [ $? -ne 0 ]; then
-      body='{"error":"nvidia-smi failed"}'
-      status='503 Service Unavailable'
-    else
-      body=$(printf '%s\n' "$samples" | awk -F ', *' '
-        BEGIN { printf "[" }
-        {
-          printf "%s{\"index\":%s,\"name\":\"%s\",\"utilization_percent\":%s,\"memory_used_mib\":%s,\"memory_total_mib\":%s,\"temperature_celsius\":%s}", separator, $1, $2, $3, $4, $5, $6
-          separator=","
-        }
-        END { print "]" }
-      ')
-      status='200 OK'
-    fi
-    printf 'HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "$status" "${#body}" "$body"
+  gpu-metrics.py: |
+    #!/usr/bin/env python3
+    """Persistent NVML-based GPU metrics HTTP exporter."""
+
+    from __future__ import annotations
+
+    import ctypes
+    import json
+    import os
+    import signal
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    POLL_INTERVAL_SECONDS = float(os.environ.get("GPU_METRICS_INTERVAL", "5"))
+    PORT = int(os.environ.get("GPU_METRICS_PORT", "8080"))
+    NVML_TEMPERATURE_GPU = 0
+    MIB = 1024 * 1024
+
+
+    class NvmlUtilization(ctypes.Structure):
+        _fields_ = [("gpu", ctypes.c_uint), ("memory", ctypes.c_uint)]
+
+
+    class NvmlMemory(ctypes.Structure):
+        _fields_ = [
+            ("total", ctypes.c_ulonglong),
+            ("free", ctypes.c_ulonglong),
+            ("used", ctypes.c_ulonglong),
+        ]
+
+
+    def _load_nvml():
+        for name in (
+            "libnvidia-ml.so.1",
+            "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1",
+            "/usr/lib64/libnvidia-ml.so.1",
+        ):
+            try:
+                lib = ctypes.CDLL(name)
+                rc = lib.nvmlInit_v2()
+                if rc != 0:
+                    raise RuntimeError(f"nvmlInit_v2 failed with code {rc}")
+                return lib
+            except OSError:
+                continue
+        raise RuntimeError("libnvidia-ml.so.1 not found")
+
+
+    def _collect(lib) -> bytes:
+        count = ctypes.c_uint()
+        rc = lib.nvmlDeviceGetCount_v2(ctypes.byref(count))
+        if rc != 0:
+            raise RuntimeError(f"nvmlDeviceGetCount_v2 failed with code {rc}")
+
+        items = []
+        name_buf = ctypes.create_string_buffer(96)
+        util = NvmlUtilization()
+        mem = NvmlMemory()
+        temp = ctypes.c_uint()
+
+        for idx in range(count.value):
+            handle = ctypes.c_void_p()
+            if lib.nvmlDeviceGetHandleByIndex_v2(idx, ctypes.byref(handle)) != 0:
+                continue
+            name = (
+                name_buf.value.decode("utf-8", errors="replace")
+                if lib.nvmlDeviceGetName(handle, name_buf, len(name_buf)) == 0
+                else f"GPU-{idx}"
+            )
+            util_pct = (
+                int(util.gpu)
+                if lib.nvmlDeviceGetUtilizationRates(handle, ctypes.byref(util)) == 0
+                else 0
+            )
+            if lib.nvmlDeviceGetMemoryInfo(handle, ctypes.byref(mem)) == 0:
+                used_mib = int(mem.used // MIB)
+                total_mib = int(mem.total // MIB)
+            else:
+                used_mib = 0
+                total_mib = 0
+            temp_c = (
+                int(temp.value)
+                if lib.nvmlDeviceGetTemperature(handle, NVML_TEMPERATURE_GPU, ctypes.byref(temp)) == 0
+                else 0
+            )
+            items.append(
+                {
+                    "index": idx,
+                    "name": name,
+                    "utilization_percent": util_pct,
+                    "memory_used_mib": used_mib,
+                    "memory_total_mib": total_mib,
+                    "temperature_celsius": temp_c,
+                }
+            )
+        return json.dumps(items, separators=(",", ":")).encode("utf-8")
+
+
+    class MetricsState:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self._ok = False
+            self._body = b"{\"error\":\"initializing\"}"
+            self._lib = None
+
+        def refresh(self) -> None:
+            try:
+                if self._lib is None:
+                    self._lib = _load_nvml()
+                body = _collect(self._lib)
+                with self._lock:
+                    self._ok = True
+                    self._body = body
+            except Exception as exc:
+                self._lib = None
+                err = json.dumps({"error": str(exc)}).encode("utf-8")
+                with self._lock:
+                    self._ok = False
+                    self._body = err
+
+        def read(self) -> tuple[bool, bytes]:
+            with self._lock:
+                return self._ok, self._body
+
+        def close(self) -> None:
+            if self._lib is not None:
+                try:
+                    self._lib.nvmlShutdown()
+                except Exception:
+                    pass
+                self._lib = None
+
+
+    def main() -> None:
+        state = MetricsState()
+        state.refresh()
+        stop = threading.Event()
+
+        def poll_loop() -> None:
+            while not stop.wait(POLL_INTERVAL_SECONDS):
+                state.refresh()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                ok, body = state.read()
+                self.send_response(200 if ok else 503)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args) -> None:
+                return
+
+        server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+
+        def shutdown_handler(_signum, _frame) -> None:
+            stop.set()
+            threading.Thread(target=server.shutdown, daemon=True).start()
+
+        signal.signal(signal.SIGTERM, shutdown_handler)
+        signal.signal(signal.SIGINT, shutdown_handler)
+
+        poller = threading.Thread(target=poll_loop, daemon=True, name="nvml-poller")
+        poller.start()
+        try:
+            server.serve_forever()
+        finally:
+            stop.set()
+            server.server_close()
+            state.close()
+
+
+    if __name__ == "__main__":
+        main()
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -51,9 +209,9 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: metrics
-          image: nvcr.io/nvidia/k8s-device-plugin:v0.20.1
+          image: docker.io/library/vla-platform:local
           imagePullPolicy: IfNotPresent
-          command: ["nc", "-ll", "-p", "8080", "-e", "/usr/local/bin/gpu-metrics.sh"]
+          command: ["python3", "/usr/local/bin/gpu-metrics.py"]
           env:
             - name: NVIDIA_VISIBLE_DEVICES
               value: all
@@ -64,25 +222,27 @@ spec:
               containerPort: 8080
           volumeMounts:
             - name: metrics-script
-              mountPath: /usr/local/bin/gpu-metrics.sh
-              subPath: gpu-metrics.sh
+              mountPath: /usr/local/bin/gpu-metrics.py
+              subPath: gpu-metrics.py
               readOnly: true
           resources:
             requests:
               cpu: 10m
-              memory: 16Mi
+              memory: 32Mi
             limits:
               cpu: 100m
-              memory: 64Mi
+              memory: 128Mi
           readinessProbe:
             httpGet:
               path: /
               port: metrics
-            initialDelaySeconds: 3
-            periodSeconds: 10
+            initialDelaySeconds: 2
+            periodSeconds: 15
             timeoutSeconds: 3
+            failureThreshold: 3
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
       volumes:

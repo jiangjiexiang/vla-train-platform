@@ -468,6 +468,8 @@ def test_from_env_defaults_are_unlimited(monkeypatch):
     assert settings.default_max_active_jobs is None
     assert settings.max_nodes == 1
     assert settings.session_ttl_hours == 12
+    assert settings.dataset_host_path == "/data/vla-platform/datasets"
+    assert settings.checkpoint_host_path == "/data/vla-platform/checkpoints"
 
 
 def test_require_admin_helper_shape():

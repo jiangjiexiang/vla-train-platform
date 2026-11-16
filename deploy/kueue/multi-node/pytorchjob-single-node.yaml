@@ -76,5 +76,5 @@ spec:
           volumes:
             - name: checkpoints
               hostPath:
-                path: /home/jjx/vla-train-platform/data/checkpoints
+                path: /data/vla-platform/checkpoints
                 type: Directory

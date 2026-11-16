@@ -294,9 +294,6 @@ export function QuickStartPage() {
             选数据集 → 选配方 → 点开始。镜像、命令、环境变量和显存配置由平台自动补齐。
           </Typography.Text>
         </div>
-        <Button size="small" type="text" onClick={() => navigate('/advanced/submit')}>
-          需要更多控制？使用高级提交
-        </Button>
       </div>
 
       <Card className="section-card quickstart-steps" size="small">

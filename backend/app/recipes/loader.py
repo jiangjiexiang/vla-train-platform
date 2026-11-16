@@ -18,6 +18,8 @@ from typing import Any
 
 import yaml
 
+from ..models import HostPathMount
+
 RECIPE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 # 配方目录解析，按优先级依次尝试：
 #   1. 环境变量 PLATFORM_RECIPES_DIR（部署时显式指定，最稳）
@@ -74,6 +76,7 @@ class Recipe:
     estimated_vram_gb: float | None = None
     # 数据集外还需要的环境变量（如 DATA_CONFIG）
     env: dict[str, str] = field(default_factory=dict)
+    host_paths: list[HostPathMount] = field(default_factory=list)
     # 展示顺序，小的在前
     order: int = 100
     # 是否对普通用户可见（false 只在高级提交页可选）
@@ -95,6 +98,7 @@ class Recipe:
             "gpu_count": self.gpu_count,
             "estimated_vram_gb": self.estimated_vram_gb,
             "env": dict(self.env),
+            "host_paths": [item.model_dump() for item in self.host_paths],
             "order": self.order,
             "public": self.public,
             "source": self.source,
@@ -138,6 +142,13 @@ def parse_recipe(payload: Any, source: str = "<memory>") -> Recipe:
     if template is not None and not isinstance(template, dict):
         raise RecipeError(f"{source}: template 必须是映射")
 
+    try:
+        host_paths = [
+            HostPathMount.model_validate(item) for item in payload.get("host_paths") or []
+        ]
+    except ValueError as exc:
+        raise RecipeError(f"{source}: host_paths 配置有误：{exc}") from exc
+
     return Recipe(
         id=recipe_id,
         name=str(payload["name"]),
@@ -153,6 +164,7 @@ def parse_recipe(payload: Any, source: str = "<memory>") -> Recipe:
             float(payload["estimated_vram_gb"]) if payload.get("estimated_vram_gb") is not None else None
         ),
         env={str(key): str(value) for key, value in env.items()},
+        host_paths=host_paths,
         order=int(payload.get("order", 100)),
         public=bool(payload.get("public", True)),
     )

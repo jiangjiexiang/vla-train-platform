@@ -278,6 +278,32 @@ def test_create_run_expands_recipe(client):
     assert body["status"] == "QUEUED"
 
 
+def test_create_run_includes_recipe_host_paths(client, env):
+    _, recipes_dir = env
+    recipe_path = recipes_dir / "demo.yaml"
+    recipe_path.write_text(
+        recipe_path.read_text()
+        + """
+host_paths:
+  - name: models
+    host_path: /models
+    mount_path: /models
+    read_only: true
+"""
+    )
+
+    response = client.post("/api/v1/runs", json={"recipe_id": "demo-recipe", "dataset_id": "pick1028"})
+
+    assert response.status_code == 201, response.text
+    job = client.app.state.service.kubernetes.jobs[response.json()["name"]]
+    stored = json.loads(job["metadata"]["annotations"]["vla-platform/spec"])
+    assert stored["host_paths"] == [
+        {"name": "models", "host_path": "/models", "mount_path": "/models", "read_only": True}
+    ]
+    volumes = job["spec"]["pytorchReplicaSpecs"]["Master"]["template"]["spec"]["volumes"]
+    assert {"name": "models", "hostPath": {"path": "/models", "type": "Directory"}} in volumes
+
+
 def test_create_run_applies_overrides(client):
     response = client.post(
         "/api/v1/runs",

@@ -179,7 +179,3 @@ cd backend && pytest
 # 前端
 cd frontend && npm test
 ```
-
-## 许可
-
-内部项目，未经许可请勿外传。

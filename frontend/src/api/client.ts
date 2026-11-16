@@ -1,4 +1,4 @@
-import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, HealthResponse, Job, JobDiagnosisResponse, JobEventsResponse, JobListResponse, JobLogs, JobMetricsResponse, JobStatus, JobTimelineResponse, JobCheckpointsResponse, LoginResponse, PlatformConfig, PreflightResponse, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, Recipe, RecipeListResponse, RunRequest, SubmitJobRequest, UserListResponse, ImageListResponse, ImageParamsResponse,
+import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, HealthResponse, Job, JobDiagnosisResponse, JobEventsResponse, JobListResponse, JobLogs, JobMetricsResponse, JobStatus, JobTimelineResponse, JobCheckpointsResponse, LoginResponse, PlatformConfig, PreflightResponse, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, Recipe, RecipeListResponse, RunRequest, SubmitJobRequest, UserCreateRequest, UserListResponse, UserSummary, UserUpdateRequest, ImageListResponse, ImageParamsResponse,
   TensorboardResponse,
   FailureSummary,
   AdminRecipeListResponse,
@@ -161,6 +161,20 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(quota),
     }),
+  createUser: (payload: UserCreateRequest) =>
+    request<UserSummary>('/users', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateUser: (username: string, payload: UserUpdateRequest) =>
+    request<UserSummary>(`/users/${encodeURIComponent(username)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteUser: (username: string) =>
+    request<{ deleted: string }>(`/users/${encodeURIComponent(username)}`, {
+      method: 'DELETE',
+    }),
 
   getClusterSummary: (signal?: AbortSignal) =>
     request<ClusterSummary>('/cluster/summary', { signal }),
@@ -208,10 +222,10 @@ export const api = {
   adminGetRecipe: (id: string, signal?: AbortSignal) =>
     request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}`, { signal }),
   // 422 = YAML/配方/模板校验失败，响应 detail 是面向管理员的错误说明
-  adminSaveRecipe: (id: string, yaml: string) =>
+  adminSaveRecipe: (id: string, payload: string | { fields: Record<string, unknown> }) =>
     request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: JSON.stringify({ yaml }),
+      body: JSON.stringify(typeof payload === 'string' ? { yaml: payload } : payload),
     }),
   adminRestoreRecipe: (id: string) =>
     request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}`, { method: 'DELETE' }),

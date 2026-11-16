@@ -188,12 +188,36 @@ class QuotaUpdate(BaseModel):
     max_active_jobs: int | None = Field(default=None, ge=0)
 
 
+class UserCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    password: str = Field(min_length=1, max_length=1024)
+    role: Literal["admin", "user"] = "user"
+    max_gpus: int | None = Field(default=None, ge=0)
+    max_active_jobs: int | None = Field(default=None, ge=0)
+
+
+class UserUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["admin", "user"] | None = None
+    password: str | None = Field(default=None, min_length=1, max_length=1024)
+
+
 class RecipeYamlUpdate(BaseModel):
-    """管理员保存配方覆盖：整份 YAML 文本。校验在服务层做（parse_recipe + parse_template）。"""
+    """管理员保存配方覆盖：支持整份 YAML 文本或结构化表单字段。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    yaml: str = Field(min_length=1, max_length=128 * 1024)
+    yaml: str | None = Field(default=None, min_length=1, max_length=128 * 1024)
+    fields: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def require_yaml_or_fields(self) -> "RecipeYamlUpdate":
+        if self.yaml is None and self.fields is None:
+            raise ValueError("必须提供 yaml 或 fields")
+        return self
 
 
 def check_payload_size(spec: SubmitSpec) -> None:
@@ -280,6 +304,17 @@ class RunSubmitRequest(BaseModel):
 
     recipe_id: str = Field(min_length=1, max_length=64)
     dataset_id: str = Field(min_length=1, max_length=100)
+    dataset_ids: list[str] | None = None
+
+    def resolved_dataset_ids(self) -> list[str]:
+        if self.dataset_ids:
+            seen: list[str] = []
+            for item in self.dataset_ids:
+                if item and item not in seen:
+                    seen.append(item)
+            if seen:
+                return seen
+        return [self.dataset_id]
     # 省略时自动生成 <recipe>-<dataset>-<序号>
     name: str | None = Field(default=None, max_length=50)
     # L2/L3 参数覆盖；键名是参数模板里的 key

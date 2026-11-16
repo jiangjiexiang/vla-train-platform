@@ -113,7 +113,7 @@ describe('RecipeAdminPage', () => {
     );
     renderPage();
 
-    const editButtons = await screen.findAllByRole('button', { name: /编辑 YAML/ });
+    const editButtons = await screen.findAllByRole('button', { name: /编辑/ });
     fireEvent.click(editButtons[0]);
 
     const textarea = await screen.findByLabelText('配方 YAML');

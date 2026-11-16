@@ -90,6 +90,18 @@ export function describeSubmitError(error: unknown): { title: string; descriptio
         description: `${text}。请到「数据集」页查看问题并修复后重新扫描，或换一个可用数据集。`,
       };
     }
+    if (/GPU quota exceeded/i.test(text)) {
+      return {
+        title: 'GPU 配额不足',
+        description: `你的 GPU 配额不够了（${text}）。请联系管理员在「用户与配额」中调高 GPU 上限，或改用更少 GPU 的配方。`,
+      };
+    }
+    if (/Active job quota exceeded/i.test(text)) {
+      return {
+        title: '活跃任务配额不足',
+        description: `你的活跃任务数已达配额上限（${text}）。请等待已有任务完成或取消后再提交，或联系管理员调高配额。`,
+      };
+    }
     if (/不支持数据集格式|不支持|格式/i.test(text)) {
       return {
         title: '数据集与配方不兼容',

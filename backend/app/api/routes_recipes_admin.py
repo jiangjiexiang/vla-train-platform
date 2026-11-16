@@ -46,7 +46,9 @@ def admin_save_recipe(
     service: PlatformService = Depends(get_service),
 ) -> dict[str, Any]:
     """保存完整 YAML 覆盖。校验不过返回 422，不落库。"""
-    return service.save_recipe_override(recipe_id, payload.yaml)
+    if payload.yaml is not None:
+        return service.save_recipe_override(recipe_id, payload.yaml)
+    return service.save_recipe_fields(recipe_id, payload.fields or {})
 
 
 @router.delete("/recipes/{recipe_id}")

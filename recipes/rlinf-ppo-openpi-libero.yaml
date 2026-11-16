@@ -1,0 +1,64 @@
+id: rlinf-ppo-openpi-libero
+name: RLinf PPO（OpenPI π0.5 / LIBERO-Spatial）
+description: >-
+  用 RLinf v2 对 OpenPI π0.5 做 PPO 强化学习（LIBERO-Spatial 仿真，openpi 环境）。
+  默认使用宿主机挂载的 /models/openpi/base_models/pi05_base，可在 Hydra 参数中替换为 LIBERO SFT 权重。
+  PPO 不使用数据集，提交时任选占位。
+image: docker.io/library/rlinf:embodied-full-v2
+entrypoint: >-
+  source switch_env openpi &&
+  bash /yyl/jiangjiexiang/runtime/nvidia-550.90.07/with_graphics.sh
+  python /workspace/RLinf/examples/embodiment/train_embodied_agent.py
+  --config-path /workspace/RLinf/examples/embodiment/config
+  --config-name libero_spatial_ppo_openpi_pi05
+dataset_formats:
+  - lerobot-v3.0
+  - lerobot-v2.1
+  - lerobot-v2.0
+env:
+  ROBOT_PLATFORM: LIBERO
+  MUJOCO_GL: egl
+  PYOPENGL_PLATFORM: egl
+  PYTHONPATH: /workspace/RLinf
+  EMBODIED_PATH: /workspace/RLinf/examples/embodiment
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+host_paths:
+  - name: models
+    host_path: /models
+    mount_path: /models
+    read_only: true
+  - name: rlinf-v2
+    host_path: /yyl/jiangjiexiang/vla-train/RLinf-v2
+    mount_path: /workspace/RLinf
+    read_only: false
+  - name: nvidia-graphics
+    host_path: /yyl/jiangjiexiang/runtime/nvidia-550.90.07
+    mount_path: /yyl/jiangjiexiang/runtime/nvidia-550.90.07
+    read_only: true
+template:
+  schema_version: 1
+  params:
+    - key: extra_args
+      kind: extra
+      type: str
+      label: Hydra 覆盖参数
+      default: >-
+        runner.logger.log_path=/checkpoints/${JOB_NAME}
+        actor.model.model_path=/models/openpi/base_models/pi05_base
+        rollout.model.model_path=/models/openpi/base_models/pi05_base
+        runner.max_steps=200
+        runner.save_interval=40
+  extra_args:
+    label: Hydra 覆盖参数
+    help: 可覆盖 runner.max_steps、env.train.total_num_envs、actor.model.model_path 等 Hydra 参数
+    default: >-
+      runner.logger.log_path=/checkpoints/${JOB_NAME}
+      actor.model.model_path=/models/openpi/base_models/pi05_base
+      rollout.model.model_path=/models/openpi/base_models/pi05_base
+      runner.max_steps=200
+      runner.save_interval=40
+gpu_count: 1
+estimated_vram_gb: 36
+order: 34
+public: true

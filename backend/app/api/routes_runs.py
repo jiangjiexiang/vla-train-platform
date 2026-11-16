@@ -56,6 +56,8 @@ def estimate_run(
     service: PlatformService = Depends(get_service),
 ) -> dict[str, Any]:
     """预估训练时长。填完参数就能知道要等多久，不用提交后干猜。"""
+    if not payload.get("dataset_id"):
+        return {"estimated_seconds": None, "estimated_text": "—", "source": "unknown", "samples": 0}
     return service.estimate_run(RunRequest(**payload))
 
 

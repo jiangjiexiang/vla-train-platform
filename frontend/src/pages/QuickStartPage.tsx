@@ -80,7 +80,7 @@ const STEPS = [
 export function QuickStartPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const preselectedId = (location.state as QuickStartLocationState | null)?.datasetId;
 
   const [datasets, setDatasets] = useState<DatasetMeta[]>([]);
@@ -91,7 +91,7 @@ export function QuickStartPage() {
   const [datasetError, setDatasetError] = useState<string | null>(null);
   const [recipeError, setRecipeError] = useState<string | null>(null);
   const [keyword, setKeyword] = useState('');
-  const [datasetId, setDatasetId] = useState<string | null>(preselectedId ?? null);
+  const [datasetIds, setDatasetIds] = useState<string[]>(preselectedId ? [preselectedId] : []);
   const [recipeId, setRecipeId] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<{ title: string; description: string } | null>(null);
   // 预检结果：error 直接拦住，warning/info 交由用户在弹窗里确认
@@ -103,11 +103,12 @@ export function QuickStartPage() {
   const applyDatasets = (items: DatasetMeta[]) => {
     setDatasets(items);
     // 预选/已选的数据集可能已被删除（或变成不可用），失效时直接清掉选择
-    setDatasetId((current) => {
-      if (!current) return current;
-      const found = items.find((item) => item.id === current);
-      return found && isDatasetUsable(found) ? current : null;
-    });
+    setDatasetIds((current) =>
+      current.filter((id) => {
+        const found = items.find((item) => item.id === id);
+        return Boolean(found && isDatasetUsable(found));
+      }),
+    );
   };
 
   const loadDatasets = async (refresh = false) => {
@@ -158,14 +159,20 @@ export function QuickStartPage() {
     return [...list].sort((a, b) => Number(isDatasetUsable(b)) - Number(isDatasetUsable(a)));
   }, [datasets, keyword]);
 
-  const selectedDataset = useMemo(
-    () => datasets.find((item) => item.id === datasetId) ?? null,
-    [datasets, datasetId],
+  const selectedDatasets = useMemo(
+    () => datasetIds.map((id) => datasets.find((item) => item.id === id)).filter((d): d is DatasetMeta => Boolean(d)),
+    [datasets, datasetIds],
   );
+  const selectedDataset = selectedDatasets[0] ?? null;
 
   const compatibleRecipes = useMemo(
-    () => recipes.filter((recipe) => isRecipeCompatible(recipe, selectedDataset)),
-    [recipes, selectedDataset],
+    () =>
+      recipes.filter((recipe) =>
+        selectedDatasets.length === 0
+          ? isRecipeCompatible(recipe, null)
+          : selectedDatasets.every((ds) => isRecipeCompatible(recipe, ds)),
+      ),
+    [recipes, selectedDatasets],
   );
 
   // 数据集一变，旧配方可能不再兼容：自动回落到第一个兼容配方
@@ -206,6 +213,7 @@ export function QuickStartPage() {
     const payload: RunRequest = {
       recipe_id: selectedRecipe.id,
       dataset_id: selectedDataset.id,
+      ...(datasetIds.length > 1 ? { dataset_ids: datasetIds } : {}),
       overrides: buildOverrides(selectedRecipe, values.params),
       priority: values.priority ?? 'normal',
     };
@@ -222,7 +230,13 @@ export function QuickStartPage() {
       message.success(`任务 ${job.name} 已加入训练队列`);
       navigate(`/jobs/${encodeURIComponent(job.name)}`);
     } catch (reason) {
-      if (!isUnauthorized(reason)) setSubmitError(describeSubmitError(reason));
+      if (!isUnauthorized(reason)) {
+        const info = describeSubmitError(reason);
+        setSubmitError(info);
+        if (/配额不足/.test(info.title)) {
+          modal.warning({ title: info.title, content: info.description, okText: '知道了' });
+        }
+      }
     } finally {
       setSubmitting(false);
     }
@@ -374,8 +388,12 @@ export function QuickStartPage() {
                 <DatasetCard
                   key={dataset.id}
                   dataset={dataset}
-                  selected={dataset.id === datasetId}
-                  onSelect={() => setDatasetId(dataset.id)}
+                  selected={datasetIds.includes(dataset.id)}
+                  onSelect={() =>
+                    setDatasetIds((prev) =>
+                      prev.includes(dataset.id) ? prev.filter((id) => id !== dataset.id) : [...prev, dataset.id],
+                    )
+                  }
                 />
               ))}
             </div>

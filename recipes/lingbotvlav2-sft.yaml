@@ -1,0 +1,114 @@
+id: lingbotvlav2-sft
+name: LingBot-VLA 2.0 SFT（6B）
+description: >-
+  使用官方 lingbot-vla-v2 训练脚本对 LingBot-VLA 2.0 (6B) 做 SFT 微调（默认 robotwin.yaml）。
+  复用 rlinf:embodied-full-v2 镜像，通过 host_paths 挂载宿主机 lingbotvla 环境、
+  LingBot-VLA-2.0-6B 代码及 baselines 权重（lingbot-vla-v2-6b + Qwen3-VL-4B-Instruct）。
+image: docker.io/library/rlinf:embodied-full-v2
+entrypoint: >-
+  cd /opt/LingBot-VLA-2.0-6B/lingbot-vla-v2 &&
+  PATH=/opt/lingbot-env/bin:$PATH PYTHONPATH=/opt/LingBot-VLA-2.0-6B/lingbot-vla-v2:$PYTHONPATH
+  bash train.sh tasks/vla/train_lingbotvla.py ./configs/vla/robotwin/robotwin.yaml
+dataset_formats:
+  - lerobot-v3.0
+  - lerobot-v2.1
+  - lerobot-v2.0
+env:
+  HF_HUB_OFFLINE: "1"
+  HF_DATASETS_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  DISABLE_TELEMETRY: "1"
+host_paths:
+  - name: lingbot-env
+    host_path: /yyl/jiangjiexiang/envs/lingbotvla
+    mount_path: /opt/lingbot-env
+    read_only: true
+  - name: lingbot-v2-code
+    host_path: /yyl/jiangjiexiang/training_code/LingBot-VLA-2.0-6B
+    mount_path: /opt/LingBot-VLA-2.0-6B
+    read_only: false
+template:
+  schema_version: 1
+  params:
+    - key: model_path
+      flag: --model.model_path
+      label: 基座模型路径
+      type: str
+      default: /opt/LingBot-VLA-2.0-6B/baselines/lingbot-vla-v2-6b
+    - key: tokenizer_path
+      flag: --model.tokenizer_path
+      label: Tokenizer 路径
+      type: str
+      default: /opt/LingBot-VLA-2.0-6B/baselines/Qwen3-VL-4B-Instruct
+    - key: train_path
+      flag: --data.train_path
+      label: 训练数据路径
+      type: str
+      default: ${DATASET_ROOT}
+      help: 默认指向平台选中的数据集 ${DATASET_ROOT}，也可填多数据集清单 .txt 文件
+    - key: output_dir
+      flag: --train.output_dir
+      label: 输出目录
+      type: str
+      default: /checkpoints/${JOB_NAME}
+    - key: micro_batch_size
+      flag: --train.micro_batch_size
+      label: Micro Batch Size（单卡）
+      type: int
+      default: 8
+      min: 1
+    - key: global_batch_size
+      flag: --train.global_batch_size
+      label: Global Batch Size
+      type: int
+      default: 64
+      min: 1
+    - key: lr
+      flag: --train.lr
+      label: 学习率
+      type: float
+      default: 1.0e-4
+    - key: max_steps
+      flag: --train.max_steps
+      label: 最大训练步数
+      type: int
+      default: 2000
+      min: 1
+    - key: save_steps
+      flag: --train.save_steps
+      label: 保存间隔（步）
+      type: int
+      default: 500
+      min: 1
+    - key: gradient_checkpointing
+      flag: --train.enable_gradient_checkpointing
+      label: 梯度检查点（省显存）
+      type: bool
+      default: true
+      true_value: "true"
+      false_value: "false"
+    - key: extra_args
+      kind: extra
+      type: str
+      label: 其他参数
+      default: ""
+  extra_args:
+    label: 其他参数
+    help: 可追加如 --data.data_name multi 等其他参数
+    default: ""
+defaults:
+  model_path: /opt/LingBot-VLA-2.0-6B/baselines/lingbot-vla-v2-6b
+  tokenizer_path: /opt/LingBot-VLA-2.0-6B/baselines/Qwen3-VL-4B-Instruct
+  train_path: ${DATASET_ROOT}
+  output_dir: /checkpoints/${JOB_NAME}
+  micro_batch_size: 8
+  global_batch_size: 64
+  lr: 1.0e-4
+  max_steps: 2000
+  save_steps: 500
+  gradient_checkpointing: true
+gpu_count: 8
+estimated_vram_gb: 48
+order: 43
+public: true

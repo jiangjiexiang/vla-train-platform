@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import yaml
 import copy
 import json
 import re
@@ -41,6 +42,7 @@ from .maintenance import MaintenanceServiceMixin
 from .maintenance import _dir_usage as _dir_usage
 from .quotas import ACTIVE_STATUSES, Quota, QuotaStore, Usage, check_quota, effective_quota
 from .sessions import SessionStore
+from .users import UserStore
 
 if TYPE_CHECKING:
     from ..params_templates import ParamsTemplate
@@ -74,8 +76,9 @@ class PlatformService(
         self.kubernetes = kubernetes
         # 会话与配额表和历史库共用一个 SQLite 文件（契约 1.3 / 1.5）。
         # 只有 ldap 模式签发会话令牌；其它模式下拒绝一切会话令牌（契约 1.3）。
-        self.sessions = sessions or SessionStore(settings.db_path, enabled=settings.auth_mode == "ldap")
+        self.sessions = sessions or SessionStore(settings.db_path, enabled=settings.auth_mode in ("ldap", "local"))
         self.quotas = quotas or QuotaStore(settings.db_path)
+        self.users = UserStore(settings.db_path)
         # 审计日志：只记变更类操作，写失败绝不阻塞业务
         self.audit = AuditStore(settings.db_path)
         # 当前操作者，由 API 层在每个请求开始时设置（审计用）
@@ -182,7 +185,18 @@ class PlatformService(
 
     def list_users(self) -> dict[str, Any]:
         """合并活跃会话、配额覆盖和任务提交者，不额外维护用户表。"""
+        from ..local_users import parse_local_users
+
         names: dict[str, dict[str, Any]] = dict(self.sessions.known_users())
+        for uname, uinfo in self.users.list_all().items():
+            names.setdefault(uname, uinfo)
+            names[uname]["role"] = uinfo["role"]
+            names[uname]["source"] = "local"
+        for uname, uentry in parse_local_users(self.settings.local_users).entries.items():
+            names.setdefault(
+                uname,
+                {"username": uname, "role": uentry.role, "source": "local", "last_seen_at": None},
+            )
         if self.settings.auth_mode == "token":
             names.setdefault(
                 "token", {"username": "token", "role": ROLE_ADMIN, "source": "token", "last_seen_at": None}
@@ -202,8 +216,11 @@ class PlatformService(
         job_items = self._list_jobs(self.kubernetes.list_namespace_pods())["items"]
         for item in job_items:
             username = item.get("owner") or ""
+            if username == "anonymous" and self.settings.auth_mode != "off":
+                continue
             if username and username not in names:
-                names[username] = {"username": username, "role": ROLE_USER, "source": "ldap", "last_seen_at": None}
+                source = "local" if self.settings.auth_mode == "local" else "ldap"
+                names[username] = {"username": username, "role": ROLE_USER, "source": source, "last_seen_at": None}
         items = [
             self.user_view(
                 info["username"],
@@ -214,6 +231,40 @@ class PlatformService(
             for info in sorted(names.values(), key=lambda item: item["username"])
         ]
         return {"items": items}
+
+    def create_user(
+        self,
+        username: str,
+        password: str,
+        role: str = ROLE_USER,
+        max_gpus: int | None = None,
+        max_active_jobs: int | None = None,
+    ) -> dict[str, Any]:
+        from ..local_users import parse_local_users
+
+        if parse_local_users(self.settings.local_users).get(username) is not None:
+            raise ServiceError(409, "user_exists", f"用户 {username} 已在环境变量配置中存在")
+        created = self.users.create(username, password, role)
+        if max_gpus is not None or max_active_jobs is not None:
+            self.set_quota(username, max_gpus, max_active_jobs)
+        self.audit.record("user.create", actor=self._current_actor, target=username, detail={"role": role})
+        return self.user_view(created.username, created.role, "local", _format_time(created.updated_at))
+
+    def update_user(
+        self,
+        username: str,
+        *,
+        role: str | None = None,
+        password: str | None = None,
+    ) -> dict[str, Any]:
+        updated = self.users.update(username, role=role, password=password)
+        self.audit.record("user.update", actor=self._current_actor, target=username, detail={"role": updated.role})
+        return self.user_view(updated.username, updated.role, "local", _format_time(updated.updated_at))
+
+    def delete_user(self, username: str) -> dict[str, Any]:
+        self.users.delete(username)
+        self.audit.record("user.delete", actor=self._current_actor, target=username, detail={})
+        return {"deleted": username}
 
     # ------------------------------------------------------------------
     # 训练配方与一键训练
@@ -266,13 +317,70 @@ class PlatformService(
             raise ServiceError(404, f"recipe {recipe_id} not found")
         yaml_text, source = raw
         record = self.history.get_recipe_override(recipe_id)
+        fields: dict[str, Any] | None = None
+        try:
+            doc = yaml.safe_load(yaml_text)
+            if isinstance(doc, dict):
+                tmpl = doc.get("template") if isinstance(doc.get("template"), dict) else {}
+                raw_params = tmpl.get("params") if isinstance(tmpl.get("params"), list) else []
+                defaults_map = doc.get("defaults") if isinstance(doc.get("defaults"), dict) else {}
+                fields = {
+                    "name": doc.get("name", ""),
+                    "description": doc.get("description", ""),
+                    "image": doc.get("image", ""),
+                    "entrypoint": doc.get("entrypoint", ""),
+                    "gpu_count": doc.get("gpu_count", 1),
+                    "estimated_vram_gb": doc.get("estimated_vram_gb"),
+                    "public": doc.get("public", True),
+                    "order": doc.get("order", 100),
+                    "params": raw_params,
+                    "defaults": defaults_map,
+                }
+        except yaml.YAMLError:
+            fields = None
         return {
             "id": recipe_id,
             "source": source,
             "yaml": yaml_text,
+            "fields": fields,
             "updated_at": record["updated_at"] if record else None,
             "updated_by": record["updated_by"] if record else None,
         }
+
+    def save_recipe_fields(self, recipe_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+        """根据管理员表单字段更新配方 YAML 并走统一校验落库。"""
+        raw = self._recipe_store().raw_text(recipe_id)
+        if raw is None:
+            raise ServiceError(404, f"recipe {recipe_id} not found")
+        doc = yaml.safe_load(raw[0])
+        if not isinstance(doc, dict):
+            raise ServiceError(422, "invalid_recipe_yaml", "当前配方 YAML 无法解析为映射")
+        for key in ("name", "description", "image", "entrypoint", "gpu_count", "estimated_vram_gb", "public", "order"):
+            if key in fields:
+                if fields[key] is None and key in ("estimated_vram_gb",):
+                    doc.pop(key, None)
+                else:
+                    doc[key] = fields[key]
+        param_defaults = fields.get("param_defaults")
+        if isinstance(param_defaults, dict):
+            tmpl = doc.get("template")
+            if isinstance(tmpl, dict) and isinstance(tmpl.get("params"), list):
+                defaults_map = doc.get("defaults") if isinstance(doc.get("defaults"), dict) else {}
+                for p in tmpl["params"]:
+                    if not isinstance(p, dict):
+                        continue
+                    pkey = p.get("key")
+                    if pkey in param_defaults:
+                        val = param_defaults[pkey]
+                        p["default"] = val
+                        if p.get("kind") == "extra" and isinstance(tmpl.get("extra_args"), dict):
+                            tmpl["extra_args"]["default"] = "" if val is None else str(val)
+                        elif pkey in defaults_map or val is not None:
+                            defaults_map[pkey] = val
+                if defaults_map:
+                    doc["defaults"] = defaults_map
+        rendered_yaml = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+        return self.save_recipe_override(recipe_id, rendered_yaml)
 
     def save_recipe_override(self, recipe_id: str, yaml_text: str) -> dict[str, Any]:
         """保存完整 YAML 覆盖。校验全部通过才落库——非法输入 422，绝不写坏配置。"""
@@ -385,7 +493,9 @@ class PlatformService(
         from .preflight import preflight as run_preflight
 
         recipe = self.get_recipe(request.recipe_id)
-        dataset = self.get_dataset(request.dataset_id)
+        ds_ids = request.resolved_dataset_ids()
+        datasets_list = [self.get_dataset(d) for d in ds_ids]
+        dataset = datasets_list[0]
         summary = self.cluster_summary()
         return run_preflight(
             dataset=dataset,
@@ -404,7 +514,9 @@ class PlatformService(
         查重名、生成编号和创建必须串行，避免并发提交生成同一个任务名。
         """
         recipe = self.get_recipe(request.recipe_id)
-        dataset = self.get_dataset(request.dataset_id)
+        ds_ids = request.resolved_dataset_ids()
+        datasets_list = [self.get_dataset(d) for d in ds_ids]
+        dataset = datasets_list[0]
         preflight_result = self.preflight_run(request)
         if not preflight_result["ok"]:
             errors = [check for check in preflight_result["checks"] if check["level"] == "error"]
@@ -417,7 +529,7 @@ class PlatformService(
                 "run.create",
                 actor=self._current_actor,
                 target=spec.name,
-                detail={"recipe": recipe.id, "dataset": request.dataset_id, "overrides": request.overrides},
+                detail={"recipe": recipe.id, "dataset": request.dataset_id, "datasets": request.resolved_dataset_ids(), "overrides": request.overrides},
             )
             return self.submit(spec, owner=owner)
 
@@ -551,7 +663,18 @@ class PlatformService(
                 "container_waiting": waiting["state"],
                 "container_reason": waiting["reason"],
             }
-        raw = self.kubernetes.read_pod_log(pod_name, tail_lines)
+        try:
+            raw = self.kubernetes.read_pod_log(pod_name, tail_lines)
+        except ServiceError as exc:
+            if "400 Bad Request" in str(exc) or pod.get("status", {}).get("phase") == "Pending":
+                return {
+                    "name": name,
+                    "pod_name": pod_name,
+                    "logs": "训练容器正在初始化或启动中，暂未产生日志，请稍后刷新。",
+                    "container_waiting": "waiting",
+                    "container_reason": "PodInitializing",
+                }
+            raise
         return {
             "name": name,
             "pod_name": pod_name,

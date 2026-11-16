@@ -34,8 +34,10 @@ def login(
     if settings.auth_mode == "local":
         from ..local_users import LocalUserRegistry, parse_local_users
 
-        registry: LocalUserRegistry = parse_local_users(settings.local_users)
-        user = registry.verify(request_model.username, request_model.password)
+        user = service.users.verify(request_model.username, request_model.password)
+        if user is None:
+            registry: LocalUserRegistry = parse_local_users(settings.local_users)
+            user = registry.verify(request_model.username, request_model.password)
         if user is None:
             # 与 LDAP 分支统一：不区分「用户不存在」和「密码错误」
             raise HTTPException(

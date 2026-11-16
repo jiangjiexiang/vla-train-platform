@@ -1,5 +1,27 @@
-import { App, Alert, Button, Card, InputNumber, Space, Table, Tag, Typography } from 'antd';
-import { ReloadOutlined, SaveOutlined, UndoOutlined } from '@ant-design/icons';
+import {
+  App,
+  Alert,
+  Button,
+  Card,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from 'antd';
+import {
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SaveOutlined,
+  UndoOutlined,
+} from '@ant-design/icons';
 import { useMemo, useState } from 'react';
 import type { ColumnsType } from 'antd/es/table';
 import { api, getErrorMessage, isAbortError, isForbidden } from '../api/client';
@@ -7,11 +29,11 @@ import { ErrorAlert } from '../components/ErrorAlert';
 import { ForbiddenPage } from '../components/ForbiddenPage';
 import { useAuth } from '../context/AuthContext';
 import { usePolling } from '../hooks/usePolling';
-import type { QuotaUpdate, QuotaUpdateResponse, UserSummary } from '../types/api';
+import type { QuotaUpdate, QuotaUpdateResponse, UserCreateRequest, UserSummary, UserUpdateRequest } from '../types/api';
 import { formatDateTime } from '../utils/format';
 
 const ROLE_LABELS: Record<string, string> = { admin: '管理员', user: '普通用户' };
-const SOURCE_LABELS: Record<string, string> = { off: '匿名', token: '共享令牌', ldap: 'LDAP' };
+const SOURCE_LABELS: Record<string, string> = { off: '匿名', token: '共享令牌', ldap: 'LDAP', local: '本地账号' };
 
 type QuotaField = keyof QuotaUpdate;
 
@@ -42,6 +64,12 @@ export function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [drafts, setDrafts] = useState<Record<string, QuotaDraft>>({});
   const [saving, setSaving] = useState<Record<string, boolean>>({});
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [editingUser, setEditingUser] = useState<UserSummary | null>(null);
+  const [updatingUser, setUpdatingUser] = useState(false);
+  const [createForm] = Form.useForm<UserCreateRequest>();
+  const [editForm] = Form.useForm<UserUpdateRequest>();
 
   const refresh = usePolling(async (signal) => {
     try {
@@ -119,6 +147,66 @@ export function UsersPage() {
     }
   };
 
+  const handleCreateUser = async () => {
+    try {
+      const values = await createForm.validateFields();
+      setCreating(true);
+      await api.createUser({
+        username: values.username.trim(),
+        password: values.password,
+        role: values.role,
+        max_gpus: values.max_gpus ?? null,
+        max_active_jobs: values.max_active_jobs ?? null,
+      });
+      message.success(`已添加用户 ${values.username}`);
+      setCreateOpen(false);
+      createForm.resetFields();
+      refresh();
+    } catch (reason) {
+      if (reason && typeof reason === 'object' && 'errorFields' in reason) return;
+      message.error(getErrorMessage(reason));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const openEditModal = (user: UserSummary) => {
+    setEditingUser(user);
+    editForm.setFieldsValue({ role: user.role === 'admin' ? 'admin' : 'user', password: '' });
+  };
+
+  const handleUpdateUser = async () => {
+    if (!editingUser) return;
+    try {
+      const values = await editForm.validateFields();
+      const payload: UserUpdateRequest = { role: values.role };
+      if (values.password && values.password.trim()) {
+        payload.password = values.password;
+      }
+      setUpdatingUser(true);
+      await api.updateUser(editingUser.username, payload);
+      message.success(`已更新用户 ${editingUser.username}`);
+      setEditingUser(null);
+      editForm.resetFields();
+      refresh();
+    } catch (reason) {
+      if (reason && typeof reason === 'object' && 'errorFields' in reason) return;
+      message.error(getErrorMessage(reason));
+    } finally {
+      setUpdatingUser(false);
+    }
+  };
+
+  const handleDeleteUser = async (username: string) => {
+    try {
+      await api.deleteUser(username);
+      message.success(`已删除用户 ${username}`);
+      refresh();
+    } catch (reason) {
+      message.error(getErrorMessage(reason));
+    }
+  };
+
   const columns = useMemo<ColumnsType<UserSummary>>(
     () => [
       { title: '用户名', dataIndex: 'username', key: 'username', fixed: 'left', width: 160 },
@@ -185,9 +273,10 @@ export function UsersPage() {
         title: '操作',
         key: 'actions',
         fixed: 'right',
-        width: 170,
+        width: 260,
         render: (_, user) => {
           const dirty = isDirty(draftFor(user), user);
+          const isLocal = user.source === 'local';
           return (
             <Space size={4}>
               <Button
@@ -209,6 +298,26 @@ export function UsersPage() {
               >
                 重置
               </Button>
+              {isLocal && (
+                <>
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<EditOutlined />}
+                    onClick={() => openEditModal(user)}
+                  >
+                    编辑
+                  </Button>
+                  <Popconfirm
+                    title={`确定删除用户 ${user.username}？`}
+                    onConfirm={() => void handleDeleteUser(user.username)}
+                  >
+                    <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                      删除
+                    </Button>
+                  </Popconfirm>
+                </>
+              )}
             </Space>
           );
         },
@@ -227,9 +336,14 @@ export function UsersPage() {
       <div className="page-heading">
         <div>
           <Typography.Title level={2}>用户与配额</Typography.Title>
-          <Typography.Text type="secondary">查看平台用户、实时资源占用，并调整每用户的 GPU 与活跃任务上限</Typography.Text>
+          <Typography.Text type="secondary">添加/管理平台用户、查看实时资源占用，并调整每用户的 GPU 与活跃任务上限</Typography.Text>
         </div>
-        <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
+        <Space>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            添加用户
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
+        </Space>
       </div>
       <Alert
         type="info"
@@ -245,11 +359,87 @@ export function UsersPage() {
           columns={columns}
           dataSource={users}
           loading={loading && users.length === 0}
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1280 }}
           pagination={false}
           locale={{ emptyText: '暂无用户记录' }}
         />
       </Card>
+
+      <Modal
+        title="添加用户"
+        open={createOpen}
+        onOk={() => void handleCreateUser()}
+        onCancel={() => {
+          setCreateOpen(false);
+          createForm.resetFields();
+        }}
+        confirmLoading={creating}
+        okText="创建"
+        cancelText="取消"
+      >
+        <Form form={createForm} layout="vertical" initialValues={{ role: 'user' }}>
+          <Form.Item
+            name="username"
+            label="用户名"
+            rules={[
+              { required: true, message: '请输入用户名' },
+              { pattern: /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, message: '仅支持字母、数字、点、下划线和连字符' },
+            ]}
+          >
+            <Input placeholder="例如 alice" />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label="初始密码"
+            rules={[{ required: true, message: '请输入初始密码' }]}
+          >
+            <Input.Password placeholder="请输入初始密码" />
+          </Form.Item>
+          <Form.Item name="role" label="角色" rules={[{ required: true }]}>
+            <Select
+              options={[
+                { value: 'user', label: '普通用户' },
+                { value: 'admin', label: '管理员' },
+              ]}
+            />
+          </Form.Item>
+          <Space style={{ width: '100%' }} size={16}>
+            <Form.Item name="max_gpus" label="GPU 配额（留空不限）">
+              <InputNumber min={0} precision={0} placeholder="不限" style={{ width: 200 }} />
+            </Form.Item>
+            <Form.Item name="max_active_jobs" label="活跃任务配额（留空不限）">
+              <InputNumber min={0} precision={0} placeholder="不限" style={{ width: 200 }} />
+            </Form.Item>
+          </Space>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={editingUser ? `编辑用户：${editingUser.username}` : '编辑用户'}
+        open={Boolean(editingUser)}
+        onOk={() => void handleUpdateUser()}
+        onCancel={() => {
+          setEditingUser(null);
+          editForm.resetFields();
+        }}
+        confirmLoading={updatingUser}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item name="role" label="角色" rules={[{ required: true }]}>
+            <Select
+              options={[
+                { value: 'user', label: '普通用户' },
+                { value: 'admin', label: '管理员' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="password" label="重置密码（留空则不修改）">
+            <Input.Password placeholder="留空则保持原密码" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }

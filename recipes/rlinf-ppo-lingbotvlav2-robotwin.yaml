@@ -50,4 +50,4 @@ template:
 gpu_count: 4
 estimated_vram_gb: 48
 order: 33
-public: false
+public: true

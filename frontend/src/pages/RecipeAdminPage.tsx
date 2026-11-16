@@ -1,4 +1,21 @@
-import { Alert, App, Button, Card, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd';
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Divider,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Popconfirm,
+  Space,
+  Switch,
+  Table,
+  Tabs,
+  Tag,
+  Typography,
+} from 'antd';
 import { EditOutlined, HistoryOutlined, ReloadOutlined, UndoOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import type { ColumnsType } from 'antd/es/table';
@@ -7,7 +24,7 @@ import { api, getErrorMessage, isAbortError, isForbidden } from '../api/client';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { ForbiddenPage } from '../components/ForbiddenPage';
 import { useAuth } from '../context/AuthContext';
-import type { AdminRecipe, RecipeHistoryEntry } from '../types/api';
+import type { AdminRecipe, AdminRecipeFields, AdminRecipeParamField, RecipeHistoryEntry } from '../types/api';
 import { formatDateTime } from '../utils/format';
 
 const SOURCE_TAGS: Record<string, { color: string; label: string }> = {
@@ -25,6 +42,9 @@ const ACTION_LABELS: Record<string, string> = {
 interface EditorState {
   id: string;
   yaml: string;
+  fields: AdminRecipeFields | null;
+  mode: 'form' | 'yaml';
+  paramValues: Record<string, string | number | boolean | null>;
   saving: boolean;
   // 422 的校验错误直接展示在编辑框上方，管理员改完再存
   error: string | null;
@@ -46,6 +66,7 @@ export function RecipeAdminPage() {
   const [loading, setLoading] = useState(true);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [history, setHistory] = useState<HistoryState | null>(null);
+  const [form] = Form.useForm();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -72,7 +93,34 @@ export function RecipeAdminPage() {
   const openEditor = async (id: string) => {
     try {
       const detail = await api.adminGetRecipe(id);
-      setEditor({ id, yaml: detail.yaml, saving: false, error: null });
+      const fields = detail.fields ?? null;
+      const paramValues: Record<string, string | number | boolean | null> = {};
+      if (fields?.params) {
+        for (const p of fields.params) {
+          const val = p.default ?? fields.defaults?.[p.key] ?? null;
+          paramValues[p.key] = val;
+        }
+      }
+      if (fields) {
+        form.setFieldsValue({
+          name: fields.name,
+          description: fields.description,
+          image: fields.image,
+          entrypoint: fields.entrypoint,
+          gpu_count: fields.gpu_count,
+          estimated_vram_gb: fields.estimated_vram_gb ?? null,
+          public: fields.public ?? true,
+        });
+      }
+      setEditor({
+        id,
+        yaml: detail.yaml,
+        fields,
+        mode: fields ? 'form' : 'yaml',
+        paramValues,
+        saving: false,
+        error: null,
+      });
     } catch (reason) {
       message.error(getErrorMessage(reason));
     }
@@ -82,11 +130,25 @@ export function RecipeAdminPage() {
     if (!editor) return;
     setEditor({ ...editor, saving: true, error: null });
     try {
-      await api.adminSaveRecipe(editor.id, editor.yaml);
+      if (editor.mode === 'form' && editor.fields) {
+        const values = await form.validateFields();
+        await api.adminSaveRecipe(editor.id, {
+          fields: {
+            ...values,
+            param_defaults: editor.paramValues,
+          },
+        });
+      } else {
+        await api.adminSaveRecipe(editor.id, editor.yaml);
+      }
       message.success(`配方 ${editor.id} 已保存，后续提交立即生效`);
       setEditor(null);
       void load();
     } catch (reason) {
+      if (reason && typeof reason === 'object' && 'errorFields' in reason) {
+        setEditor({ ...editor, saving: false });
+        return;
+      }
       // 校验失败不关闭弹窗，错误原因留在编辑框上方
       setEditor({ ...editor, saving: false, error: getErrorMessage(reason) });
     }
@@ -125,6 +187,42 @@ export function RecipeAdminPage() {
       message.error(getErrorMessage(reason));
       setHistory({ ...history, rollingBack: false });
     }
+  };
+
+  const renderParamInput = (param: AdminRecipeParamField) => {
+    if (!editor) return null;
+    const value = editor.paramValues[param.key] ?? null;
+    const updateVal = (next: string | number | boolean | null) =>
+      setEditor((prev) =>
+        prev ? { ...prev, paramValues: { ...prev.paramValues, [param.key]: next } } : prev,
+      );
+
+    if (param.type === 'bool') {
+      return (
+        <Switch
+          checked={Boolean(value)}
+          onChange={(checked) => updateVal(checked)}
+        />
+      );
+    }
+    if (param.type === 'int' || param.type === 'float') {
+      return (
+        <InputNumber
+          style={{ width: '100%' }}
+          min={param.min}
+          max={param.max}
+          precision={param.type === 'int' ? 0 : undefined}
+          value={typeof value === 'number' ? value : value !== null && value !== '' ? Number(value) : null}
+          onChange={(v) => updateVal(v)}
+        />
+      );
+    }
+    return (
+      <Input
+        value={value === null || value === undefined ? '' : String(value)}
+        onChange={(e) => updateVal(e.target.value)}
+      />
+    );
   };
 
   const columns: ColumnsType<AdminRecipe> = [
@@ -176,25 +274,21 @@ export function RecipeAdminPage() {
       render: (_, recipe) => (
         <Space size={4}>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => void openEditor(recipe.id)}>
-            编辑 YAML
-          </Button>
-          <Button type="link" size="small" icon={<HistoryOutlined />} onClick={() => void openHistory(recipe.id)}>
-            历史
+            编辑
           </Button>
           <Popconfirm
             title={`恢复 ${recipe.id} 为内置默认？`}
-            description="删除管理员覆盖，立即生效；历史记录仍保留，可再回滚。"
+            description="会删除当前覆盖，后续提交重新使用内置配方；历史里仍可回滚。"
+            disabled={recipe.source === 'builtin'}
             onConfirm={() => void restoreDefault(recipe.id)}
           >
-            <Button
-              type="link"
-              size="small"
-              icon={<UndoOutlined />}
-              disabled={recipe.source !== 'override'}
-            >
+            <Button type="link" size="small" disabled={recipe.source === 'builtin'}>
               恢复默认
             </Button>
           </Popconfirm>
+          <Button type="link" size="small" icon={<HistoryOutlined />} onClick={() => void openHistory(recipe.id)}>
+            历史
+          </Button>
         </Space>
       ),
     },
@@ -210,18 +304,11 @@ export function RecipeAdminPage() {
         <div>
           <Typography.Title level={2}>配方管理</Typography.Title>
           <Typography.Text type="secondary">
-            以完整 YAML 覆盖内置训练配方，保存即生效；内置默认随镜像发布，不受覆盖影响
+            可视化修改配方默认参数与运行配置，保存即生效；内置默认随镜像发布，不受覆盖影响
           </Typography.Text>
         </div>
         <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
       </div>
-      <Alert
-        type="info"
-        showIcon
-        className="section-card"
-        message="覆盖保存在平台数据库，不受 Web 容器重启或 /app/recipes 只读影响"
-        description="保存前会做完整校验（YAML 语法、配方字段、镜像名、参数模板），不合法的修改不会落库。误改可在「历史」里回滚。"
-      />
       <ErrorAlert error={error} onRetry={() => void load()} title="配方加载失败" />
       <Card>
         <Table<AdminRecipe>
@@ -249,14 +336,77 @@ export function RecipeAdminPage() {
         {editor && (
           <Space direction="vertical" size={8} style={{ width: '100%' }}>
             {editor.error && <Alert type="error" showIcon message="保存失败" description={editor.error} />}
-            <Typography.Text type="secondary">
-              完整 YAML；id 必须保持为 {editor.id}，其余字段均可调整。
-            </Typography.Text>
-            <textarea
-              aria-label="配方 YAML"
-              className="yaml-editor"
-              value={editor.yaml}
-              onChange={(event) => setEditor({ ...editor, yaml: event.target.value })}
+            <Tabs
+              activeKey={editor.mode}
+              onChange={(key) => setEditor({ ...editor, mode: key as 'form' | 'yaml' })}
+              items={[
+                ...(editor.fields
+                  ? [
+                      {
+                        key: 'form',
+                        label: '表单编辑',
+                        children: (
+                          <Form form={form} layout="vertical">
+                            <Form.Item name="name" label="配方名称" rules={[{ required: true, message: '请输入配方名称' }]}>
+                              <Input />
+                            </Form.Item>
+                            <Form.Item name="description" label="配方说明">
+                              <Input.TextArea rows={2} />
+                            </Form.Item>
+                            <Form.Item name="image" label="训练镜像" rules={[{ required: true, message: '请输入镜像名' }]}>
+                              <Input />
+                            </Form.Item>
+                            <Form.Item name="entrypoint" label="入口命令" rules={[{ required: true, message: '请输入入口命令' }]}>
+                              <Input.TextArea rows={2} />
+                            </Form.Item>
+                            <Space size={16} wrap>
+                              <Form.Item name="gpu_count" label="默认 GPU 数" rules={[{ required: true }]}>
+                                <InputNumber min={1} max={64} precision={0} />
+                              </Form.Item>
+                              <Form.Item name="estimated_vram_gb" label="预估显存 (GB)">
+                                <InputNumber min={1} precision={0} placeholder="可选" />
+                              </Form.Item>
+                              <Form.Item name="public" label="对普通用户公开" valuePropName="checked">
+                                <Switch />
+                              </Form.Item>
+                            </Space>
+                            {editor.fields.params && editor.fields.params.length > 0 && (
+                              <>
+                                <Divider orientation="left" plain>默认训练参数</Divider>
+                                {editor.fields.params.map((param) => (
+                                  <Form.Item
+                                    key={param.key}
+                                    label={param.label || param.key}
+                                    extra={param.help}
+                                  >
+                                    {renderParamInput(param)}
+                                  </Form.Item>
+                                ))}
+                              </>
+                            )}
+                          </Form>
+                        ),
+                      },
+                    ]
+                  : []),
+                {
+                  key: 'yaml',
+                  label: 'YAML 原文',
+                  children: (
+                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                      <Typography.Text type="secondary">
+                        完整 YAML；id 必须保持为 {editor.id}，其余字段均可调整。
+                      </Typography.Text>
+                      <textarea
+                        aria-label="配方 YAML"
+                        className="yaml-editor"
+                        value={editor.yaml}
+                        onChange={(event) => setEditor({ ...editor, yaml: event.target.value })}
+                      />
+                    </Space>
+                  ),
+                },
+              ]}
             />
           </Space>
         )}

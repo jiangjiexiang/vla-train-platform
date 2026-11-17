@@ -393,7 +393,8 @@ export interface AdminRecipeParamField {
   key: string;
   flag?: string | null;
   label?: string;
-  type?: 'str' | 'int' | 'float' | 'bool';
+  type?: 'str' | 'int' | 'float' | 'bool' | 'enum' | 'path';
+  options?: string[];
   default?: string | number | boolean | null;
   help?: string;
   min?: number;

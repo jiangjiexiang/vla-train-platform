@@ -9,6 +9,7 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Select,
   Space,
   Switch,
   Table,
@@ -197,6 +198,15 @@ export function RecipeAdminPage() {
         prev ? { ...prev, paramValues: { ...prev.paramValues, [param.key]: next } } : prev,
       );
 
+    if (param.type === 'enum' && param.options && param.options.length > 0) {
+      return (
+        <Select
+          value={value === null || value === undefined ? undefined : String(value)}
+          onChange={(v) => updateVal(v)}
+          options={param.options.map((opt) => ({ value: opt, label: opt }))}
+        />
+      );
+    }
     if (param.type === 'bool') {
       return (
         <Switch

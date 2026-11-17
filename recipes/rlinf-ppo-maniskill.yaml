@@ -11,6 +11,7 @@ entrypoint: >-
   python /workspace/RLinf/examples/embodiment/train_embodied_agent.py
   --config-path /workspace/RLinf/examples/embodiment/config
   --config-name maniskill_ppo_openvlaoft_quickstart
+  runner.logger.log_path=/checkpoints/${JOB_NAME}
 dataset_formats:
   - lerobot-v3.0
   - lerobot-v2.1
@@ -39,25 +40,84 @@ host_paths:
 template:
   schema_version: 1
   params:
+    - key: actor_model_path
+      flag: actor.model.model_path=
+      label: Actor 模型权重路径
+      type: str
+      default: /models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
+    - key: rollout_model_path
+      flag: rollout.model.model_path=
+      label: Rollout 模型权重路径
+      type: str
+      default: /models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
+    - key: use_reward_model
+      flag: reward.use_reward_model=
+      label: 启用独立 Reward Model
+      type: bool
+      default: false
+      true_value: "True"
+      false_value: "False"
+    - key: reward_type
+      flag: algorithm.reward_type=
+      label: Reward 粒度
+      type: enum
+      options: ["chunk_level", "step_level"]
+      default: chunk_level
+    - key: reward_coef
+      flag: algorithm.reward_coef=
+      label: Reward 缩放系数
+      type: float
+      default: 1.0
+    - key: adv_type
+      flag: algorithm.adv_type=
+      label: 优势估计方法
+      type: enum
+      options: ["gae", "grpo"]
+      default: gae
+    - key: kl_beta
+      flag: algorithm.kl_beta=
+      label: KL 惩罚系数 (kl_beta)
+      type: float
+      default: 0.01
+    - key: num_envs
+      flag: env.train.total_num_envs=
+      label: 并行仿真环境数
+      type: int
+      default: 8
+      min: 1
+      max: 256
+    - key: max_steps
+      flag: runner.max_steps=
+      label: 最大训练步数
+      type: int
+      default: 200
+      min: 1
+    - key: save_interval
+      flag: runner.save_interval=
+      label: 保存间隔（步）
+      type: int
+      default: 40
+      min: 1
     - key: extra_args
       kind: extra
       type: str
-      label: Hydra 覆盖参数
-      default: >-
-        runner.logger.log_path=/checkpoints/${JOB_NAME}
-        actor.model.model_path=/models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
-        rollout.model.model_path=/models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
-        runner.max_steps=200
-        runner.save_interval=40
+      label: 其他 Hydra 参数
+      default: ""
   extra_args:
-    label: Hydra 覆盖参数
-    help: 可覆盖 runner.max_steps、env.train.total_num_envs、actor.model.model_path 等 Hydra 参数
-    default: >-
-      runner.logger.log_path=/checkpoints/${JOB_NAME}
-      actor.model.model_path=/models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
-      rollout.model.model_path=/models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
-      runner.max_steps=200
-      runner.save_interval=40
+    label: 其他 Hydra 参数
+    help: 可追加其他 Hydra 覆盖参数
+    default: ""
+defaults:
+  actor_model_path: /models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
+  rollout_model_path: /models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
+  use_reward_model: false
+  reward_type: chunk_level
+  reward_coef: 1.0
+  adv_type: gae
+  kl_beta: 0.01
+  num_envs: 8
+  max_steps: 200
+  save_interval: 40
 gpu_count: 1
 estimated_vram_gb: 32
 order: 30

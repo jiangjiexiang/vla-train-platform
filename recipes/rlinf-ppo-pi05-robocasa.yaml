@@ -44,12 +44,24 @@ template:
     - key: actor_model_path
       flag: actor.model.model_path=
       label: Actor 模型权重路径
-      type: str
+      type: enum
+      options:
+        - /models/openpi/base_models/pi05_base
+        - /models/openpi/finetuned_models/pi05_h01
+        - /models/openpi/finetuned_models/pi05_h01_subtask123_mix
+        - /models/openpi/finetuned_models/pi05_h01_subtask3_mix
+        - /models/openpi/finetuned_models/pi05_turtle
       default: /models/openpi/base_models/pi05_base
     - key: rollout_model_path
       flag: rollout.model.model_path=
       label: Rollout 模型权重路径
-      type: str
+      type: enum
+      options:
+        - /models/openpi/base_models/pi05_base
+        - /models/openpi/finetuned_models/pi05_h01
+        - /models/openpi/finetuned_models/pi05_h01_subtask123_mix
+        - /models/openpi/finetuned_models/pi05_h01_subtask3_mix
+        - /models/openpi/finetuned_models/pi05_turtle
       default: /models/openpi/base_models/pi05_base
     - key: use_reward_model
       flag: reward.use_reward_model=
@@ -91,13 +103,13 @@ template:
       flag: runner.max_steps=
       label: 最大训练步数
       type: int
-      default: 200
+      default: 30000
       min: 1
     - key: save_interval
       flag: runner.save_interval=
       label: 保存间隔（步）
       type: int
-      default: 40
+      default: 5000
       min: 1
     - key: extra_args
       kind: extra
@@ -117,9 +129,9 @@ defaults:
   adv_type: gae
   kl_beta: 0.01
   num_envs: 32
-  max_steps: 200
-  save_interval: 40
-gpu_count: 1
+  max_steps: 30000
+  save_interval: 5000
+gpu_count: 8
 estimated_vram_gb: 36
 order: 31
 public: true

@@ -53,15 +53,20 @@ template:
       default: NEW_EMBODIMENT
     - key: modality_config_path
       flag: --modality-config-path
-      label: Modality 配置文件路径
-      type: str
+      label: 机器人 Modality 配置
+      type: enum
+      options:
+        - /opt/GR00T-N1.7-3B/GR00T_N1.7/x2robot_config.py
+        - /opt/GR00T-N1.7-3B/Isaac-GR00T/examples/SO100/so100_config.py
+        - /opt/GR00T-N1.7-3B/Isaac-GR00T/examples/mask-guided-background-suppression/so101_config.py
+        - /opt/GR00T-N1.7-3B/Isaac-GR00T/examples/rebot-arm-dm/rebot_config.py
       default: /opt/GR00T-N1.7-3B/GR00T_N1.7/x2robot_config.py
-      help: 需与数据集的相机/关节字段匹配，默认指向 x2robot_config.py
+      help: 选择对应机器人的 Modality 配置（x2robot / SO100 / SO101 / ReBot）
     - key: max_steps
       flag: --max-steps
       label: 最大训练步数
       type: int
-      default: 2000
+      default: 30000
       min: 1
     - key: global_batch_size
       flag: --global-batch-size
@@ -78,7 +83,7 @@ template:
       flag: --save-steps
       label: 保存间隔（步）
       type: int
-      default: 250
+      default: 5000
       min: 1
     - key: dataloader_num_workers
       flag: --dataloader-num-workers
@@ -99,10 +104,10 @@ defaults:
   base_model_path: /opt/GR00T-N1.7-3B/GR00T_N1.7/checkpoints/GR00T-N1.7-3B
   embodiment_tag: NEW_EMBODIMENT
   modality_config_path: /opt/GR00T-N1.7-3B/GR00T_N1.7/x2robot_config.py
-  max_steps: 2000
+  max_steps: 30000
   global_batch_size: 64
   learning_rate: 2.0e-5
-  save_steps: 250
+  save_steps: 5000
   dataloader_num_workers: 4
 gpu_count: 8
 estimated_vram_gb: 40

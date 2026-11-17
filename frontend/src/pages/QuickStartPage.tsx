@@ -251,9 +251,11 @@ export function QuickStartPage() {
   const handleSubmit = async () => {
     const payload = buildPayload();
     if (!payload) return;
-    // 表单校验不通过时 input 自身已提示，这里只拦下提交
-    const invalid = form.getFieldsError().some((field) => field.errors.length > 0);
-    if (invalid) return;
+    try {
+      await form.validateFields();
+    } catch {
+      return;
+    }
 
     setSubmitError(null);
     setSubmitting(true);
@@ -475,6 +477,7 @@ export function QuickStartPage() {
 
           <Collapse
             ghost
+            defaultActiveKey={['params']}
             className="quickstart-advanced"
             items={[
               {

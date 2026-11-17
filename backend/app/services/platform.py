@@ -637,12 +637,20 @@ class PlatformService(
     def logs(self, name: str, tail_lines: int) -> dict[str, Any]:
         job = self.kubernetes.get_job(name)
         if job is None:
-            # 对象被回收后日志不可取，但任务存在过，不应报 404。
             self._require_job_existed(name)
+            snap = self.history.get_snapshot(name)
+            if snap and snap.get("logs"):
+                lines = snap["logs"].splitlines()
+                clipped = "\n".join(lines[-tail_lines:]) if tail_lines > 0 else snap["logs"]
+                return {
+                    "name": name,
+                    "pod_name": None,
+                    "logs": clipped,
+                }
             return {
                 "name": name,
                 "pod_name": None,
-                "logs": "任务已经结束，训练 Pod 已被回收，日志不再可取。\n"
+                "logs": "训练 Pod 已被回收，且未采集到历史日志快照。\n"
                 "需要排查历史问题时可以看「事件」和「时间线」，那里保留了任务的生命周期记录。",
             }
         pods = self.kubernetes.list_job_pods(name)
@@ -658,10 +666,14 @@ class PlatformService(
         waiting = _container_waiting(pod)
         if waiting is not None:
             # waiting 时调 K8s 日志接口只会得到 400，直接返回容器状态更有用。
+            wait_msg = _waiting_log_message(waiting, _pod_image(pod))
+            snap = self.history.get_snapshot(name)
+            if not (snap and snap.get("logs")):
+                self.history.save_snapshot(name, logs=wait_msg)
             return {
                 "name": name,
                 "pod_name": pod_name,
-                "logs": _waiting_log_message(waiting, _pod_image(pod)),
+                "logs": wait_msg,
                 "container_waiting": waiting["state"],
                 "container_reason": waiting["reason"],
             }
@@ -677,10 +689,13 @@ class PlatformService(
                     "container_reason": "PodInitializing",
                 }
             raise
+        normalized = normalize_log_newlines(raw)
+        if normalized:
+            self.history.save_snapshot(name, logs=normalized)
         return {
             "name": name,
             "pod_name": pod_name,
-            "logs": normalize_log_newlines(raw),
+            "logs": normalized,
         }
 
     def job_checkpoints(self, name: str, spec_owner: str | None = None) -> dict[str, Any]:

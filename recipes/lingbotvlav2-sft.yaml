@@ -41,6 +41,13 @@ template:
       label: Tokenizer 路径
       type: str
       default: /opt/LingBot-VLA-2.0-6B/baselines/Qwen3-VL-4B-Instruct
+    - key: data_name
+      flag: --data.data_name
+      label: 机器人配置 (robot_config)
+      type: enum
+      options: ["robam_x2robot", "robotwin", "agilex_cobot_magic", "multi"]
+      default: robam_x2robot
+      help: 对应 configs/robot_configs/<name>.yaml；多数据集 .txt 清单时选 multi
     - key: train_path
       flag: --data.train_path
       label: 训练数据路径
@@ -73,13 +80,13 @@ template:
       flag: --train.max_steps
       label: 最大训练步数
       type: int
-      default: 2000
+      default: 30000
       min: 1
     - key: save_steps
       flag: --train.save_steps
       label: 保存间隔（步）
       type: int
-      default: 500
+      default: 5000
       min: 1
     - key: gradient_checkpointing
       flag: --train.enable_gradient_checkpointing
@@ -98,6 +105,7 @@ template:
     help: 可追加如 --data.data_name multi 等其他参数
     default: ""
 defaults:
+  data_name: robam_x2robot
   model_path: /opt/LingBot-VLA-2.0-6B/baselines/lingbot-vla-v2-6b
   tokenizer_path: /opt/LingBot-VLA-2.0-6B/baselines/Qwen3-VL-4B-Instruct
   train_path: ${DATASET_ROOT}
@@ -105,8 +113,8 @@ defaults:
   micro_batch_size: 8
   global_batch_size: 64
   lr: 1.0e-4
-  max_steps: 2000
-  save_steps: 500
+  max_steps: 30000
+  save_steps: 5000
   gradient_checkpointing: true
 gpu_count: 8
 estimated_vram_gb: 48

@@ -34,6 +34,25 @@ host_paths:
 template:
   schema_version: 1
   params:
+    - key: openpi_config_name
+      flag: actor.model.openpi.config_name=
+      label: 机器人 OpenPI 配置名（必选）
+      type: enum
+      required: true
+      options:
+        - pi05_turtle
+        - pi05_h01
+        - pi05_x2robot
+        - pi05_franka_state
+        - pi05_dualfranka_tcp_rot6d
+        - pi05_yam_joint
+        - pi05_so101_joint
+        - pi05_libero_mem
+        - pi05_behavior
+        - pi0_aloha_robotwin
+        - pi0_libero
+        - pi0_realworld
+      help: 请选择对应机器人的 OpenPI 配置（如 pi05_turtle / pi05_h01 / pi05_x2robot）
     - key: model_path
       flag: actor.model.model_path=
       label: 基座模型路径
@@ -60,13 +79,13 @@ template:
       flag: runner.max_steps=
       label: 最大训练步数
       type: int
-      default: 1000
+      default: 30000
       min: 1
     - key: save_interval
       flag: runner.save_interval=
       label: 保存间隔（步）
       type: int
-      default: 200
+      default: 5000
       min: 1
     - key: extra_args
       kind: extra
@@ -82,8 +101,8 @@ defaults:
   micro_batch_size: 2
   global_batch_size: 16
   lr: 7.91e-6
-  max_steps: 1000
-  save_interval: 200
+  max_steps: 30000
+  save_interval: 5000
 gpu_count: 8
 estimated_vram_gb: 36
 order: 40

@@ -100,13 +100,13 @@ template:
       flag: runner.max_steps=
       label: 最大训练步数
       type: int
-      default: 200
+      default: 30000
       min: 1
     - key: save_interval
       flag: runner.save_interval=
       label: 保存间隔（步）
       type: int
-      default: 40
+      default: 5000
       min: 1
     - key: extra_args
       kind: extra
@@ -128,9 +128,9 @@ defaults:
   adv_type: gae
   kl_beta: 0.01
   num_envs: 8
-  max_steps: 200
-  save_interval: 40
-gpu_count: 1
+  max_steps: 30000
+  save_interval: 5000
+gpu_count: 8
 estimated_vram_gb: 40
 order: 32
 public: true

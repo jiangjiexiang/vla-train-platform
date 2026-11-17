@@ -68,6 +68,7 @@ class HistoryStore:
                     name TEXT PRIMARY KEY,
                     timeline_json TEXT,
                     events_json TEXT,
+                    logs_text TEXT,
                     updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS recipe_override_history (
@@ -112,6 +113,8 @@ class HistoryStore:
         """
         if not _has_column(connection, "submissions", "owner"):
             connection.execute("ALTER TABLE submissions ADD COLUMN owner TEXT")
+        if not _has_column(connection, "job_snapshots", "logs_text"):
+            connection.execute("ALTER TABLE job_snapshots ADD COLUMN logs_text TEXT")
 
     def record_submission(self, spec: SubmitSpec, submitted_at: str) -> None:
         with self._connect() as connection:
@@ -374,6 +377,46 @@ class HistoryStore:
         return owners
 
 
+    def save_snapshot(
+        self,
+        name: str,
+        *,
+        timeline: dict[str, Any] | None = None,
+        events: list[dict[str, Any]] | None = None,
+        logs: str | None = None,
+    ) -> None:
+        tl_json = json.dumps(timeline, ensure_ascii=False) if timeline is not None else None
+        ev_json = json.dumps(events, ensure_ascii=False) if events is not None else None
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO job_snapshots (name, timeline_json, events_json, logs_text, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    timeline_json = COALESCE(excluded.timeline_json, job_snapshots.timeline_json),
+                    events_json = COALESCE(excluded.events_json, job_snapshots.events_json),
+                    logs_text = COALESCE(excluded.logs_text, job_snapshots.logs_text),
+                    updated_at = excluded.updated_at
+                """,
+                (name, tl_json, ev_json, logs, utc_now()),
+            )
+
+    def get_snapshot(self, name: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT timeline_json, events_json, logs_text, updated_at FROM job_snapshots WHERE name = ?",
+                (name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "timeline": json.loads(row["timeline_json"]) if row["timeline_json"] else None,
+            "events": json.loads(row["events_json"]) if row["events_json"] else None,
+            "logs": row["logs_text"],
+            "updated_at": row["updated_at"],
+        }
+
+
 def _has_column(connection: sqlite3.Connection, table: str, column: str) -> bool:
     return column in {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
 
@@ -396,44 +439,3 @@ def _cancellation_dict(row: sqlite3.Row) -> dict[str, Any]:
         "cancelled_at": row["cancelled_at"],
         "status": row["status"] or "CANCELLED",
     }
-
-    def save_snapshot(
-        self,
-        name: str,
-        *,
-        timeline: dict[str, Any] | None = None,
-        events: list[dict[str, Any]] | None = None,
-    ) -> None:
-        current = self.get_snapshot(name)
-        tl_json = json.dumps(timeline, ensure_ascii=False) if timeline is not None else (
-            json.dumps(current["timeline"], ensure_ascii=False) if current and current.get("timeline") is not None else None
-        )
-        ev_json = json.dumps(events, ensure_ascii=False) if events is not None else (
-            json.dumps(current["events"], ensure_ascii=False) if current and current.get("events") is not None else None
-        )
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO job_snapshots (name, timeline_json, events_json, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(name) DO UPDATE SET
-                    timeline_json = COALESCE(excluded.timeline_json, job_snapshots.timeline_json),
-                    events_json = COALESCE(excluded.events_json, job_snapshots.events_json),
-                    updated_at = excluded.updated_at
-                """,
-                (name, tl_json, ev_json, utc_now()),
-            )
-
-    def get_snapshot(self, name: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT timeline_json, events_json, updated_at FROM job_snapshots WHERE name = ?",
-                (name,),
-            ).fetchone()
-        if row is None:
-            return None
-        return {
-            "timeline": json.loads(row["timeline_json"]) if row["timeline_json"] else None,
-            "events": json.loads(row["events_json"]) if row["events_json"] else None,
-            "updated_at": row["updated_at"],
-        }

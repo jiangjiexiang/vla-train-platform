@@ -214,13 +214,13 @@ class PlatformService(
                 {"username": username, "role": ROLE_USER, "source": "ldap", "last_seen_at": record.get("updated_at")},
             )
         job_items = self._list_jobs(self.kubernetes.list_namespace_pods())["items"]
-        for item in job_items:
-            username = item.get("owner") or ""
-            if username == "anonymous" and self.settings.auth_mode != "off":
-                continue
-            if username and username not in names:
-                source = "local" if self.settings.auth_mode == "local" else "ldap"
-                names[username] = {"username": username, "role": ROLE_USER, "source": source, "last_seen_at": None}
+        if self.settings.auth_mode != "local":
+            for item in job_items:
+                username = item.get("owner") or ""
+                if username == "anonymous" and self.settings.auth_mode != "off":
+                    continue
+                if username and username not in names:
+                    names[username] = {"username": username, "role": ROLE_USER, "source": "ldap", "last_seen_at": None}
         items = [
             self.user_view(
                 info["username"],
@@ -263,6 +263,8 @@ class PlatformService(
 
     def delete_user(self, username: str) -> dict[str, Any]:
         self.users.delete(username)
+        self.quotas.delete_override(username)
+        self.sessions.delete_for_user(username)
         self.audit.record("user.delete", actor=self._current_actor, target=username, detail={})
         return {"deleted": username}
 
@@ -696,13 +698,18 @@ class PlatformService(
         job = self.kubernetes.get_job(name)
         if job is None:
             self._require_job_existed(name)
+            snap = self.history.get_snapshot(name)
+            if snap and snap.get("timeline"):
+                return {"name": name, **snap["timeline"]}
             return {"name": name, "current_stage": "finished", "items": []}
         pods = self.kubernetes.list_job_pods(name)
         workload = self._matching_workload(job, self.kubernetes.list_workloads(), pods)
         status = str(self._job_response(job, workload, pods)["status"])
         pod = self._select_pod(pods)
         result = build_timeline(job=job, workload=workload, pod=pod, status=status)
-        return {"name": name, "status": status, **result}
+        payload = {"status": status, **result}
+        self.history.save_snapshot(name, timeline=payload)
+        return {"name": name, **payload}
 
     def job_diagnosis(self, name: str) -> dict[str, Any]:
         """归一化失败原因。只读，不写库。"""
@@ -777,6 +784,9 @@ class PlatformService(
         job = self.kubernetes.get_job(name)
         if job is None:
             self._require_job_existed(name)
+            snap = self.history.get_snapshot(name)
+            if snap and snap.get("events") is not None:
+                return {"name": name, "items": snap["events"]}
             return {"name": name, "items": []}
         pod_names = [
             pod.get("metadata", {}).get("name", "")
@@ -785,6 +795,8 @@ class PlatformService(
         raw = self.kubernetes.list_events([name, *pod_names])
         items = [_event_item(event) for event in raw]
         items.sort(key=lambda item: item.get("last_seen") or "", reverse=True)
+        if items:
+            self.history.save_snapshot(name, events=items)
         return {"name": name, "items": items}
 
     def gpu_metrics(self) -> dict[str, Any]:

@@ -1,7 +1,7 @@
 id: rlinf-sft-openpi
-name: RLinf SFT（OpenPI π0 / π0.5）
+name: RLinf SFT（OpenPI π0.5）
 description: >-
-  用 RLinf v2 对 OpenPI（π0 / π0.5）做全参数 SFT 微调（openpi 环境）。
+  用 RLinf v2 对 OpenPI π0.5 做全参数 SFT 微调（openpi 环境）。
   自动挂载平台选中的数据集（${DATASET_ROOT}），默认基座权重 /models/openpi/base_models/pi05_base。
 image: docker.io/library/rlinf:embodied-full-v2
 entrypoint: >-
@@ -75,7 +75,7 @@ template:
       default: ""
   extra_args:
     label: 其他 Hydra 参数
-    help: 可追加如 +model@actor.model=pi0_5 等 Hydra 覆盖参数
+    help: 可追加其他 Hydra 覆盖参数；模型系列固定为 π0.5
     default: ""
 defaults:
   model_path: /models/openpi/base_models/pi05_base

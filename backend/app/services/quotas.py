@@ -54,6 +54,8 @@ class QuotaStore:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=10000")
         return connection
 
     def _initialize(self) -> None:
@@ -105,6 +107,11 @@ class QuotaStore:
         }
 
 
+    def delete_override(self, username: str) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM user_quotas WHERE username = ?", (username,))
+
+
 def effective_quota(settings: Settings, override: dict[str, Any] | None) -> Quota:
     if override is None:
         return Quota(
@@ -122,7 +129,7 @@ def check_quota(quota: Quota, usage: Usage, gpus: int) -> None:
     if quota.max_gpus is not None:
         requested = usage.gpu_in_use + max(0, gpus)
         if requested > quota.max_gpus:
-            raise ServiceError(422, f"GPU quota exceeded: {usage.gpu_in_use} used of {quota.max_gpus} allowed")
+            raise ServiceError(422, f"GPU quota exceeded: requested {gpus}, {usage.gpu_in_use} used of {quota.max_gpus} allowed")
     if quota.max_active_jobs is not None:
         if usage.active_jobs + 1 > quota.max_active_jobs:
             raise ServiceError(

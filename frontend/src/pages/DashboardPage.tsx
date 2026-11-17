@@ -1,4 +1,4 @@
-import { Button, Card, Col, Empty, Progress, Row, Space, Spin, Statistic, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Col, Empty, Progress, Row, Space, Spin, Statistic, Table, Tag, Typography } from 'antd';
 import { CloudServerOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -175,13 +175,37 @@ export function DashboardPage() {
 
         <Card title="GPU 实时使用情况" className="section-card">
           {summary?.gpu_metrics?.available ? (
-            <Table<GpuMetric>
-              rowKey="index"
-              columns={gpuMetricColumns}
-              dataSource={summary.gpu_metrics.items}
+            <>
+              {summary.gpu_allocated === 0 &&
+                summary.gpu_metrics.items.some((g) => g.memory_used_mib > 1024) && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message="检测到 GPU 显存正被平台外进程占用（当前平台已分配 0 卡）"
+                    description="上方「GPU 已分配」统计平台调度占用的卡数，下表来自宿主机 nvidia-smi 实时采集；若显存已被外部进程占用，提交训练可能报 OOM。"
+                  />
+                )}
+              <Table<GpuMetric>
+                rowKey="index"
+                columns={[
+                  ...gpuMetricColumns,
+                  {
+                    title: '占用来源',
+                    key: 'owner_source',
+                    width: 140,
+                    render: (_, row) => {
+                      if (row.memory_used_mib <= 512) return <Tag color="green">空闲</Tag>;
+                      if ((summary?.gpu_allocated ?? 0) === 0) return <Tag color="orange">平台外进程</Tag>;
+                      return <Tag color="blue">平台任务 / 宿主机</Tag>;
+                    },
+                  },
+                ]}
+                dataSource={summary.gpu_metrics.items}
               pagination={false}
               locale={{ emptyText: <Empty description="未检测到 GPU 实时指标" /> }}
-            />
+              />
+            </>
           ) : (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="实时指标暂不可用，请检查 vla-gpu-metrics 服务" />
           )}

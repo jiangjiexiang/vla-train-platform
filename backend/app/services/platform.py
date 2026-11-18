@@ -42,6 +42,7 @@ from .maintenance import MaintenanceServiceMixin
 from .maintenance import _dir_usage as _dir_usage
 from .quotas import ACTIVE_STATUSES, Quota, QuotaStore, Usage, check_quota, effective_quota
 from .sessions import SessionStore
+from .robots import RobotStore
 from .users import UserStore
 
 if TYPE_CHECKING:
@@ -79,6 +80,7 @@ class PlatformService(
         self.sessions = sessions or SessionStore(settings.db_path, enabled=settings.auth_mode in ("ldap", "local"))
         self.quotas = quotas or QuotaStore(settings.db_path)
         self.users = UserStore(settings.db_path)
+        self.robots = RobotStore(settings.db_path)
         # 审计日志：只记变更类操作，写失败绝不阻塞业务
         self.audit = AuditStore(settings.db_path)
         # 当前操作者，由 API 层在每个请求开始时设置（审计用）
@@ -337,6 +339,8 @@ class PlatformService(
                     "order": doc.get("order", 100),
                     "params": raw_params,
                     "defaults": defaults_map,
+                    "env": doc.get("env") if isinstance(doc.get("env"), dict) else {},
+                    "host_paths": doc.get("host_paths") if isinstance(doc.get("host_paths"), list) else [],
                 }
         except yaml.YAMLError:
             fields = None
@@ -349,6 +353,22 @@ class PlatformService(
             "updated_by": record["updated_by"] if record else None,
         }
 
+    def create_recipe(self, new_id: str, clone_from: str, name: str | None = None) -> dict[str, Any]:
+        store = self._recipe_store()
+        if store.raw_text(new_id) is not None:
+            raise ServiceError(409, "recipe_exists", f"配方 {new_id} 已存在")
+        src = store.raw_text(clone_from)
+        if src is None:
+            raise ServiceError(404, f"模板配方 {clone_from} 不存在")
+        doc = yaml.safe_load(src[0])
+        if not isinstance(doc, dict):
+            raise ServiceError(422, "模板配方无法解析")
+        doc["id"] = new_id
+        if name:
+            doc["name"] = name
+        rendered_yaml = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+        return self.save_recipe_override(new_id, rendered_yaml, allow_new=True)
+
     def save_recipe_fields(self, recipe_id: str, fields: dict[str, Any]) -> dict[str, Any]:
         """根据管理员表单字段更新配方 YAML 并走统一校验落库。"""
         raw = self._recipe_store().raw_text(recipe_id)
@@ -357,7 +377,7 @@ class PlatformService(
         doc = yaml.safe_load(raw[0])
         if not isinstance(doc, dict):
             raise ServiceError(422, "invalid_recipe_yaml", "当前配方 YAML 无法解析为映射")
-        for key in ("name", "description", "image", "entrypoint", "gpu_count", "estimated_vram_gb", "public", "order"):
+        for key in ("name", "description", "image", "entrypoint", "gpu_count", "estimated_vram_gb", "public", "order", "env", "host_paths"):
             if key in fields:
                 if fields[key] is None and key in ("estimated_vram_gb",):
                     doc.pop(key, None)
@@ -384,9 +404,9 @@ class PlatformService(
         rendered_yaml = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
         return self.save_recipe_override(recipe_id, rendered_yaml)
 
-    def save_recipe_override(self, recipe_id: str, yaml_text: str) -> dict[str, Any]:
+    def save_recipe_override(self, recipe_id: str, yaml_text: str, *, allow_new: bool = False) -> dict[str, Any]:
         """保存完整 YAML 覆盖。校验全部通过才落库——非法输入 422，绝不写坏配置。"""
-        recipe = self._validate_recipe_yaml(recipe_id, yaml_text)
+        recipe = self._validate_recipe_yaml(recipe_id, yaml_text, allow_new=allow_new)
         self.history.put_recipe_override(recipe_id, yaml_text, utc_now(), self._current_actor)
         self.audit.record(
             "recipe.override.put",
@@ -404,6 +424,8 @@ class PlatformService(
         )
         if restored:
             self.audit.record("recipe.override.restore", actor=self._current_actor, target=recipe_id)
+        if self._recipe_store().raw_text(recipe_id) is None:
+            return {"id": recipe_id, "source": "deleted", "yaml": "", "restored": restored}
         detail = self.admin_recipe_detail(recipe_id)
         detail["restored"] = restored
         return detail
@@ -457,15 +479,15 @@ class PlatformService(
         return self.admin_recipe_detail(recipe_id)
 
     def _require_builtin_recipe(self, recipe_id: str) -> None:
-        """覆盖只允许作用于随镜像发布的内置配方，不能凭空新建 id。"""
-        builtin = RecipeStore().get(recipe_id)
-        if builtin is None or builtin.source == "error":
+        """校验配方存在（内置或管理员新建的库内配方）。"""
+        if self._recipe_store().raw_text(recipe_id) is None:
             raise ServiceError(404, f"recipe {recipe_id} not found")
 
-    def _validate_recipe_yaml(self, recipe_id: str, yaml_text: str) -> Recipe:
+    def _validate_recipe_yaml(self, recipe_id: str, yaml_text: str, *, allow_new: bool = False) -> Recipe:
         import yaml
 
-        self._require_builtin_recipe(recipe_id)
+        if not allow_new:
+            self._require_builtin_recipe(recipe_id)
         if len(yaml_text.encode("utf-8")) > MAX_TEMPLATE_BYTES:
             raise ServiceError(422, f"配方 YAML 不能超过 {MAX_TEMPLATE_BYTES} 字节")
         try:

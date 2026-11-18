@@ -240,14 +240,27 @@ def test_succeeded_and_failed_are_sent_cancelled_is_not():
     opener = Recorder()
     notifier = Notifier(settings, opener=opener)
 
+    notifier.notify_job(JOB, "RUNNING")
     notifier.notify_job(JOB, "SUCCEEDED")
     notifier.notify_job(JOB, "FAILED")
     assert notifier.notify_job(JOB, "CANCELLED") == []
-    assert notifier.notify_job(JOB, "RUNNING") == []
     assert notifier.notify_job(JOB, "QUEUED") == []
 
-    assert len(opener.calls) == 2
-    assert [payload["event"] for _, payload, _ in opener.calls] == ["SUCCEEDED", "FAILED"]
+    assert len(opener.calls) == 3
+    assert [payload["event"] for _, payload, _ in opener.calls] == ["RUNNING", "SUCCEEDED", "FAILED"]
+
+
+def test_dingtalk_signing_appends_timestamp_and_sign():
+    settings = make_settings(
+        dingtalk_webhook="https://oapi.dingtalk.com/robot/send?access_token=abc",
+        dingtalk_secret="SECtestsecret",
+    )
+    opener = Recorder()
+    notifier = Notifier(settings, opener=opener)
+    results = notifier.notify_job(JOB, "RUNNING")
+    assert results and results[0]["ok"] is True
+    called_url = opener.calls[0][0]
+    assert "&timestamp=" in called_url and "&sign=" in called_url
 
 
 # ----------------------------------------------------------------------

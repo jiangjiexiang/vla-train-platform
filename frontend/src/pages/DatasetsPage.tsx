@@ -4,8 +4,11 @@ import {
   Col,
   Descriptions,
   Drawer,
+  App,
   Empty,
+  Form,
   Input,
+  Modal,
   Row,
   Space,
   Statistic,
@@ -18,6 +21,7 @@ import {
   DatabaseOutlined,
   FileSearchOutlined,
   PlayCircleOutlined,
+  PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
@@ -54,7 +58,11 @@ export function DatasetsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keyword, setKeyword] = useState('');
+  const { message } = App.useApp();
   const [active, setActive] = useState<DatasetMeta | null>(null);
+  const [registerOpen, setRegisterOpen] = useState(false);
+  const [registering, setRegistering] = useState(false);
+  const [regForm] = Form.useForm<{ path: string; id?: string }>();
 
   const load = async (refresh = false) => {
     if (refresh) setRefreshing(true);
@@ -96,10 +104,11 @@ export function DatasetsPage() {
       dataIndex: 'name',
       key: 'name',
       fixed: 'left',
+      width: 280,
       render: (_, item) => (
-        <Space direction="vertical" size={0}>
-          <Typography.Text strong>{item.name}</Typography.Text>
-          <Typography.Text type="secondary" className="cell-secondary">{item.path}</Typography.Text>
+        <Space direction="vertical" size={2} style={{ maxWidth: 256 }}>
+          <Typography.Text strong ellipsis={{ tooltip: item.name }}>{item.name}</Typography.Text>
+          <Typography.Text type="secondary" className="cell-secondary" ellipsis={{ tooltip: item.path }}>{item.path}</Typography.Text>
         </Space>
       ),
     },
@@ -107,7 +116,7 @@ export function DatasetsPage() {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 110,
+      width: 100,
       render: (status: string) => <DatasetStatusTag status={status} />,
     },
     {
@@ -121,54 +130,57 @@ export function DatasetsPage() {
       title: '集数',
       dataIndex: 'episodes',
       key: 'episodes',
-      width: 90,
+      width: 100,
       align: 'right',
-      render: (value: number) => formatCount(value),
+      render: (value: number) => <span style={{ whiteSpace: 'nowrap' }}>{formatCount(value)}</span>,
     },
     {
       title: '帧数',
       dataIndex: 'frames',
       key: 'frames',
-      width: 110,
+      width: 120,
       align: 'right',
-      render: (value: number) => formatCount(value),
+      render: (value: number) => <span style={{ whiteSpace: 'nowrap' }}>{formatCount(value)}</span>,
     },
     {
       title: '时长',
       dataIndex: 'duration_seconds',
       key: 'duration',
-      width: 110,
-      render: (value: number) => formatMinutes(value),
+      width: 140,
+      align: 'right',
+      render: (value: number) => <span style={{ whiteSpace: 'nowrap' }}>{formatMinutes(value)}</span>,
     },
     {
       title: '相机',
       dataIndex: 'cameras',
       key: 'cameras',
-      width: 80,
+      width: 90,
+      align: 'center',
       render: (cameras: string[]) => (
-        <Tooltip title={listText(cameras)}>{cameras?.length ?? 0} 路</Tooltip>
+        <Tooltip title={listText(cameras)}><span style={{ whiteSpace: 'nowrap' }}>{cameras?.length ?? 0} 路</span></Tooltip>
       ),
     },
     {
       title: '维度 (state / action)',
       key: 'dims',
-      width: 150,
-      render: (_, item) => `${item.state_dim} / ${item.action_dim}`,
+      width: 160,
+      align: 'center',
+      render: (_, item) => <span style={{ whiteSpace: 'nowrap' }}>{`${item.state_dim} / ${item.action_dim}`}</span>,
     },
     {
       title: '体积',
       dataIndex: 'size_bytes',
       key: 'size',
-      width: 100,
+      width: 115,
       align: 'right',
-      render: (value: number) => formatBytes(value),
+      render: (value: number) => <span style={{ whiteSpace: 'nowrap' }}>{formatBytes(value)}</span>,
     },
     {
       title: '扫描时间',
       dataIndex: 'scanned_at',
       key: 'scanned_at',
-      width: 180,
-      render: (value: string) => formatDateTime(value),
+      width: 190,
+      render: (value: string) => <span style={{ whiteSpace: 'nowrap' }}>{formatDateTime(value)}</span>,
     },
     {
       title: '操作',
@@ -208,6 +220,13 @@ export function DatasetsPage() {
             onChange={(event) => setKeyword(event.target.value)}
           />
           <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setRegisterOpen(true)}
+          >
+            注册数据集
+          </Button>
+          <Button
             icon={<ReloadOutlined />}
             loading={refreshing}
             onClick={() => void load(true)}
@@ -239,11 +258,10 @@ export function DatasetsPage() {
       <Card className="section-card" title={<Space><FileSearchOutlined /> 数据集列表</Space>}>
         <Table<DatasetMeta>
           rowKey="id"
-          size="middle"
           loading={loading}
           columns={columns}
           dataSource={filtered}
-          scroll={{ x: 1400 }}
+          scroll={{ x: 1520 }}
           pagination={{ pageSize: 20, showSizeChanger: false, hideOnSinglePage: true }}
           locale={{ emptyText: <Empty description="没有数据集" /> }}
           onRow={(record) => ({
@@ -318,6 +336,51 @@ export function DatasetsPage() {
           </Space>
         )}
       </Drawer>
+
+      <Modal
+        title="注册数据集"
+        open={registerOpen}
+        okText="注册并扫描"
+        cancelText="取消"
+        confirmLoading={registering}
+        onOk={async () => {
+          try {
+            const values = await regForm.validateFields();
+            setRegistering(true);
+            await api.registerDataset({
+              path: values.path.trim(),
+              ...(values.id?.trim() ? { id: values.id.trim() } : {}),
+            });
+            message.success("数据集注册成功");
+            setRegisterOpen(false);
+            regForm.resetFields();
+            void load(false);
+          } catch (reason) {
+            if (reason && typeof reason === 'object' && 'errorFields' in reason) return;
+            message.error(getErrorMessage(reason));
+          } finally {
+            setRegistering(false);
+          }
+        }}
+        onCancel={() => {
+          setRegisterOpen(false);
+          regForm.resetFields();
+        }}
+      >
+        <Form form={regForm} layout="vertical">
+          <Form.Item
+            name="path"
+            label="数据集路径"
+            rules={[{ required: true, message: "请输入数据集路径" }]}
+            extra="支持容器内路径（如 /datasets/my_data）或宿主机路径（如 /data/vla-platform/datasets/my_data）"
+          >
+            <Input placeholder="/datasets/my_robot_data" />
+          </Form.Item>
+          <Form.Item name="id" label="数据集 ID（可选，默认取目录名）">
+            <Input placeholder="留空自动使用目录名" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }

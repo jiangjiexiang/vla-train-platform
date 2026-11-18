@@ -4,6 +4,10 @@ import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, Hea
   AdminRecipeListResponse,
   AdminRecipeDetail,
   RecipeHistoryResponse,
+  RobotCreateRequest,
+  RobotListResponse,
+  RobotProfile,
+  RobotUpdateRequest,
 } from '../types/api';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE || '/api/v1').replace(/\/+$/, '');
@@ -232,6 +236,33 @@ export const api = {
   adminRecipeHistory: (id: string, signal?: AbortSignal) =>
     request<RecipeHistoryResponse>(`/admin/recipes/${encodeURIComponent(id)}/history`, { signal }),
   // 409 = 没有可回滚的历史版本
+  registerDataset: (payload: { path: string; id?: string }) =>
+    request<DatasetMeta>('/datasets', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  adminCreateRecipe: (payload: { id: string; clone_from: string; name?: string }) =>
+    request<AdminRecipeDetail>('/admin/recipes', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listRobots: (signal?: AbortSignal) =>
+    request<RobotListResponse>('/robots', { signal }),
+  adminCreateRobot: (payload: RobotCreateRequest) =>
+    request<RobotProfile>('/admin/robots', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  adminUpdateRobot: (id: string, payload: RobotUpdateRequest) =>
+    request<RobotProfile>(`/admin/robots/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  adminDeleteRobot: (id: string) =>
+    request<{ deleted: string }>(`/admin/robots/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
   adminRollbackRecipe: (id: string) =>
     request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}/rollback`, { method: 'POST' }),
 

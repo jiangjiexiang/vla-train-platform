@@ -348,7 +348,7 @@ describe('QuickStartPage 辅助函数', () => {
     expect(isRecipeCompatible(SMOLVLA, READY)).toBe(true);
     expect(isRecipeCompatible(OPENPI, READY)).toBe(false);
     expect(isRecipeCompatible(OPENPI, NOISY)).toBe(true);
-    expect(isRecipeCompatible(SMOLVLA, null)).toBe(false);
+    expect(isRecipeCompatible(SMOLVLA, null)).toBe(true);
   });
 
   it('buildOverrides 只保留改动与填写过的参数', () => {

@@ -68,9 +68,17 @@ class JobNotificationStore:
 
         return sqlite3.connect(self.path, timeout=10)
 
-    def has(self, name: str) -> bool:
+    def has(self, name: str, event: str | None = None) -> bool:
         with self._connect() as connection:
-            row = connection.execute("SELECT 1 FROM job_notifications WHERE name = ?", (name,)).fetchone()
+            if event in TERMINAL_STATUSES:
+                row = connection.execute(
+                    "SELECT 1 FROM job_notifications WHERE name = ? AND event IN ('SUCCEEDED', 'FAILED')",
+                    (name,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT 1 FROM job_notifications WHERE name = ?", (name,)
+                ).fetchone()
         return row is not None
 
     def record(self, name: str, event: str, notified_at: str) -> None:
@@ -124,6 +132,7 @@ class JobWatcher:
         # 记的是「首轮扫描时就已终态」的任务名，之后一直跳过它们。
         self._primed = False
         self._preexisting: set[str] = set()
+        self._preexisting_events: set[tuple[str, str]] = set()
 
     # ------------------------------------------------------------------
     def scan_once(self) -> dict[str, Any]:
@@ -156,20 +165,20 @@ class JobWatcher:
                 continue
 
             if priming:
-                # 第一轮（进程刚启动）看到的终态任务，可能是平台重启前就
-                # 已经跑完/失败的。补发会在每次重启时把历史任务重刷一遍群，
-                # 所以只登记不发送。
-                self._preexisting.add(name)
+                # 第一轮（进程刚启动）看到的任务不补发启动/历史终态通知；
+                # 正在运行的任务在之后结束时仍会补发终态通知。
+                if status in TERMINAL_STATUSES:
+                    self._preexisting.add(name)
+                else:
+                    self._preexisting_events.add((name, status))
                 stats["skipped"] += 1
                 continue
-            if name in self._preexisting:
-                # 老任务：首轮就已终态，永不补发。但首轮里还在跑、之后才
-                # 结束的任务名不在这里，必须照常通知。
+            if name in self._preexisting or (name, status) in self._preexisting_events:
                 stats["skipped"] += 1
                 continue
 
             try:
-                already = self.store.has(name)
+                already = self.store.has(name, status)
             except Exception as exc:  # noqa: BLE001 - 读不到记账状态就跳过本轮，不冒险重发
                 logger.warning("job watcher: read notification state for %s failed: %s", name, exc)
                 stats["failed"] += 1
@@ -264,10 +273,17 @@ def _terminal_status(job: dict[str, Any]) -> str | None:
         kind = str(condition.get("type") or "").upper()
         if kind in TERMINAL_STATUSES:
             hits.append(kind)
-    if not hits:
-        return None
-    # 同时存在时失败优先：宁可报失败也不要漏报。
-    return "FAILED" if "FAILED" in hits else hits[0]
+    if hits:
+        # 同时存在时失败优先：宁可报失败也不要漏报。
+        return "FAILED" if "FAILED" in hits else hits[0]
+    for condition in conditions:
+        if not isinstance(condition, dict):
+            continue
+        flag = condition.get("status")
+        is_true = flag is True or str(flag).lower() == "true"
+        if is_true and str(condition.get("type") or "").upper() == "RUNNING":
+            return "RUNNING"
+    return None
 
 
 def _job_payload(service: Any, job: dict[str, Any], name: str, status: str) -> dict[str, Any]:

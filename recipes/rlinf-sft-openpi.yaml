@@ -12,7 +12,6 @@ entrypoint: >-
   runner.logger.log_path=/checkpoints/${JOB_NAME}
   data.train_data_paths=${DATASET_ROOT}
 dataset_formats:
-  - lerobot-v3.0
   - lerobot-v2.1
   - lerobot-v2.0
 env:
@@ -58,6 +57,12 @@ template:
       label: 基座模型路径
       type: str
       default: /models/openpi/base_models/pi05_base
+    - key: norm_stats_path
+      flag: actor.model.openpi_data.norm_stats_path=
+      label: 归一化统计文件（可选，留空自动计算）
+      type: str
+      default: ""
+      help: 可选指定 norm_stats.json 路径；留空时自动从数据集或日志目录计算生成
     - key: micro_batch_size
       flag: actor.micro_batch_size=
       label: Micro Batch Size（单卡）

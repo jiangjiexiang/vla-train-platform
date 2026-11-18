@@ -16,7 +16,7 @@ export const PRIORITY_OPTIONS: Array<{ value: Priority; label: string }> = [
 
 /** 配方能否吃下这个数据集：格式必须精确匹配（与后端 check_compatibility 一致）。 */
 export function isRecipeCompatible(recipe: Recipe, dataset: DatasetMeta | null): boolean {
-  if (!dataset) return false;
+  if (!dataset) return true;
   return (recipe.dataset_formats ?? []).includes(dataset.format);
 }
 

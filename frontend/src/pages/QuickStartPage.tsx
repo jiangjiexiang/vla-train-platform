@@ -21,6 +21,7 @@ import {
   DatabaseOutlined,
   FireOutlined,
   ReloadOutlined,
+  RobotOutlined,
   RocketOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
@@ -72,10 +73,28 @@ export interface QuickStartLocationState {
 }
 
 const STEPS = [
+  { title: '选机器人', description: '匹配相机与动作空间' },
+  { title: '选配方', description: '先选训练方案' },
   { title: '选数据集', description: '确认格式与规模' },
-  { title: '选配方', description: '现成的训练方案' },
   { title: '加入队列', description: '平台自动补全参数' },
 ];
+
+interface RobotOption {
+  id: string;
+  label: string;
+  hint: string;
+  cameraKeywords: string[];
+  paramDefaults: Record<string, string>;
+}
+
+const ALL_ROBOT_OPTION: RobotOption = {
+  id: 'all',
+  label: '全部机器人',
+  hint: '展示所有已扫描数据集',
+  cameraKeywords: [],
+  paramDefaults: {},
+};
+
 
 export function QuickStartPage() {
   const navigate = useNavigate();
@@ -90,6 +109,8 @@ export function QuickStartPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [datasetError, setDatasetError] = useState<string | null>(null);
   const [recipeError, setRecipeError] = useState<string | null>(null);
+  const [robots, setRobots] = useState<RobotOption[]>([ALL_ROBOT_OPTION]);
+  const [robotId, setRobotId] = useState<string>('all');
   const [keyword, setKeyword] = useState('');
   const [datasetIds, setDatasetIds] = useState<string[]>(preselectedId ? [preselectedId] : []);
   const [recipeId, setRecipeId] = useState<string | null>(null);
@@ -130,6 +151,24 @@ export function QuickStartPage() {
   useEffect(() => {
     void loadDatasets(false);
     const controller = new AbortController();
+    if (typeof api.listRobots === 'function') {
+      api
+        .listRobots(controller.signal)
+        .then((data) => {
+          if (controller.signal.aborted) return;
+          const items = (data?.items ?? []).map((item) => ({
+            id: item.id,
+            label: item.name,
+            hint: item.description || '',
+            cameraKeywords: item.camera_keywords ?? [],
+            paramDefaults: item.param_defaults ?? {},
+          }));
+          setRobots([ALL_ROBOT_OPTION, ...items]);
+        })
+        .catch(() => {
+          // 兼容未配置或测试环境：回退仅保留「全部机器人」
+        });
+    }
     api
       .listRecipes()
       .then((data) => {
@@ -149,15 +188,28 @@ export function QuickStartPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const activeRobot = useMemo(
+    () => robots.find((r) => r.id === robotId) ?? robots[0] ?? ALL_ROBOT_OPTION,
+    [robots, robotId],
+  );
+
   const filteredDatasets = useMemo(() => {
     const text = keyword.trim().toLowerCase();
-    const list = text
+    let list = text
       ? datasets.filter((item) =>
           item.name.toLowerCase().includes(text) || item.id.toLowerCase().includes(text))
       : datasets;
+    if (activeRobot.cameraKeywords.length > 0) {
+      const matched = list.filter((d) =>
+        (d.cameras ?? []).some((cam) =>
+          activeRobot.cameraKeywords.some((kw) => cam.toLowerCase().includes(kw.toLowerCase())),
+        ),
+      );
+      if (matched.length > 0) list = matched;
+    }
     // 可用的排前面，不可用的沉底，避免坏数据挡住视线
     return [...list].sort((a, b) => Number(isDatasetUsable(b)) - Number(isDatasetUsable(a)));
-  }, [datasets, keyword]);
+  }, [datasets, keyword, activeRobot]);
 
   const selectedDatasets = useMemo(
     () => datasetIds.map((id) => datasets.find((item) => item.id === id)).filter((d): d is DatasetMeta => Boolean(d)),
@@ -199,7 +251,7 @@ export function QuickStartPage() {
     setPreflight(null);
   }, [selectedRecipeId]);
 
-  const currentStep = !selectedDataset ? 0 : !selectedRecipe ? 1 : 2;
+  const currentStep = !selectedRecipe ? (robotId === 'all' ? 0 : 1) : !selectedDataset ? 2 : 3;
   const canSubmit = Boolean(selectedDataset && selectedRecipe) && !submitting;
 
   /** 组装 /runs 与 /runs/preflight 共用的请求体。 */
@@ -352,10 +404,85 @@ export function QuickStartPage() {
         {preflight && <PreflightList checks={preflight.checks} />}
       </Modal>
 
-      {/* ---- 第一步：数据集 ---- */}
+      {/* ---- 第一步：机器人 ---- */}
       <Card
         className="section-card"
-        title={<Space><DatabaseOutlined /> 第一步 · 选择数据集</Space>}
+        title={<Space><RobotOutlined /> 第一步 · 选择机器人</Space>}
+      >
+        <Radio.Group
+          value={robotId}
+          onChange={(e) => setRobotId(e.target.value)}
+          style={{ width: '100%' }}
+        >
+          <Row gutter={[12, 12]}>
+            {robots.map((robot) => (
+              <Col xs={24} sm={12} md={8} key={robot.id}>
+                <Radio.Button
+                  value={robot.id}
+                  style={{
+                    width: '100%',
+                    height: 'auto',
+                    padding: '10px 14px',
+                    textAlign: 'left',
+                    lineHeight: 1.4,
+                    borderRadius: 8,
+                  }}
+                >
+                  <div><Typography.Text strong>{robot.label}</Typography.Text></div>
+                  <div><Typography.Text type="secondary" style={{ fontSize: 12 }}>{robot.hint}</Typography.Text></div>
+                </Radio.Button>
+              </Col>
+            ))}
+          </Row>
+        </Radio.Group>
+      </Card>
+
+      {/* ---- 第二步：配方 ---- */}
+      <Card
+        className="section-card"
+        title={<Space><FireOutlined /> 第二步 · 选择训练配方</Space>}
+        extra={selectedDataset ? (
+          <Typography.Text type="secondary">
+            已选 {selectedDataset.name}（{selectedDataset.format}），{compatibleRecipes.length} 个配方兼容
+          </Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">
+            共 {compatibleRecipes.length} 个配方可选
+          </Typography.Text>
+        )}
+      >
+        <ErrorAlert error={recipeError} onRetry={() => window.location.reload()} title="配方加载失败" />
+        {loadingRecipes ? (
+          <Spin />
+        ) : compatibleRecipes.length === 0 ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="没有兼容的配方"
+            description={
+              selectedDataset
+                ? `当前没有配方支持 ${selectedDataset.format || 'unknown'} 格式，请换一个数据集，或联系管理员补充配方。`
+                : '当前没有可用的训练配方，请联系管理员检查配置。'
+            }
+          />
+        ) : (
+          <div role="radiogroup" aria-label="训练配方" className="pick-grid pick-grid-recipes">
+            {compatibleRecipes.map((recipe) => (
+              <RecipeCard
+                key={recipe.id}
+                recipe={recipe}
+                selected={recipe.id === recipeId}
+                onSelect={() => setRecipeId(recipe.id)}
+              />
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* ---- 第三步：数据集 ---- */}
+      <Card
+        className="section-card"
+        title={<Space><DatabaseOutlined /> 第三步 · 选择数据集（可多选）</Space>}
         extra={(
           <Space size={8}>
             <Input
@@ -403,46 +530,10 @@ export function QuickStartPage() {
         </Spin>
       </Card>
 
-      {/* ---- 第二步：配方 ---- */}
-      <Card
-        className="section-card"
-        title={<Space><FireOutlined /> 第二步 · 选择训练配方</Space>}
-        extra={selectedDataset ? (
-          <Typography.Text type="secondary">
-            已选 {selectedDataset.name}（{selectedDataset.format}），{compatibleRecipes.length} 个配方兼容
-          </Typography.Text>
-        ) : null}
-      >
-        <ErrorAlert error={recipeError} onRetry={() => window.location.reload()} title="配方加载失败" />
-        {!selectedDataset ? (
-          <Empty description="先在上方选一个数据集，这里会列出兼容的训练配方" />
-        ) : loadingRecipes ? (
-          <Spin />
-        ) : compatibleRecipes.length === 0 ? (
-          <Alert
-            type="warning"
-            showIcon
-            message="没有兼容的配方"
-            description={`当前没有配方支持 ${selectedDataset.format || 'unknown'} 格式，请换一个数据集，或联系管理员补充配方。`}
-          />
-        ) : (
-          <div role="radiogroup" aria-label="训练配方" className="pick-grid pick-grid-recipes">
-            {compatibleRecipes.map((recipe) => (
-              <RecipeCard
-                key={recipe.id}
-                recipe={recipe}
-                selected={recipe.id === recipeId}
-                onSelect={() => setRecipeId(recipe.id)}
-              />
-            ))}
-          </div>
-        )}
-      </Card>
-
       {/* ---- 第三步：加入队列 ---- */}
       <Card
         className="section-card"
-        title={<Space><RocketOutlined /> 第三步 · 加入训练队列</Space>}
+        title={<Space><RocketOutlined /> 第四步 · 加入训练队列</Space>}
         extra={selectedRecipe ? <Tag color="blue">{selectedRecipe.name}</Tag> : null}
       >
         <Form
@@ -487,10 +578,17 @@ export function QuickStartPage() {
                   : '高级参数（该配方没有可调参数）',
                 children: selectedRecipe ? (
                   <ParamsPanel
-                    key={selectedRecipe.id}
+                    key={`${selectedRecipe.id}:${robotId}`}
                     form={form}
                     recipe={selectedRecipe}
-                    defaults={recipeInitialParams(selectedRecipe)}
+                    defaults={{
+                      ...recipeInitialParams(selectedRecipe),
+                      ...Object.fromEntries(
+                        Object.entries(activeRobot.paramDefaults).filter(([k]) =>
+                          visibleParams(recipeTemplate(selectedRecipe)).some((p) => p.key === k),
+                        ),
+                      ),
+                    }}
                   />
                 ) : (
                   <Typography.Text type="secondary">请先选择数据集和配方</Typography.Text>

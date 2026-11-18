@@ -413,6 +413,8 @@ export interface AdminRecipeFields {
   order?: number;
   params?: AdminRecipeParamField[];
   defaults?: Record<string, string | number | boolean | null>;
+  env?: Record<string, string>;
+  host_paths?: Array<{ name: string; host_path: string; mount_path: string; read_only?: boolean }>;
 }
 
 export interface AdminRecipeDetail {
@@ -598,4 +600,51 @@ export interface UserCreateRequest {
 export interface UserUpdateRequest {
   role?: 'admin' | 'user';
   password?: string;
+}
+
+
+export interface RobotProfile {
+  id: string;
+  name: string;
+  description: string;
+  camera_keywords: string[];
+  param_defaults: Record<string, string>;
+  camera_top?: string;
+  camera_left?: string;
+  camera_right?: string;
+  state_dim?: number;
+  action_dim?: number;
+  sort_order: number;
+  updated_at?: string;
+}
+
+export interface RobotListResponse {
+  items: RobotProfile[];
+}
+
+export interface RobotCreateRequest {
+  id: string;
+  name: string;
+  description?: string;
+  camera_keywords?: string[];
+  param_defaults?: Record<string, string>;
+  camera_top?: string;
+  camera_left?: string;
+  camera_right?: string;
+  state_dim?: number;
+  action_dim?: number;
+  sort_order?: number;
+}
+
+export interface RobotUpdateRequest {
+  name?: string;
+  description?: string;
+  camera_keywords?: string[];
+  param_defaults?: Record<string, string>;
+  camera_top?: string;
+  camera_left?: string;
+  camera_right?: string;
+  state_dim?: number;
+  action_dim?: number;
+  sort_order?: number;
 }

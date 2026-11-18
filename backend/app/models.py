@@ -341,3 +341,42 @@ class RunSubmitRequest(BaseModel):
 
 
 RunRequest = RunSubmitRequest
+
+
+class RobotCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=48, pattern=r"^[a-z0-9][a-z0-9_-]{0,47}$")
+    name: str = Field(min_length=1, max_length=64)
+    description: str = Field(default="", max_length=200)
+    camera_keywords: list[str] = Field(default_factory=list)
+    param_defaults: dict[str, Any] = Field(default_factory=dict)
+    camera_top: str = Field(default="observation.images.faceImg", max_length=128)
+    camera_left: str = Field(default="observation.images.leftImg", max_length=128)
+    camera_right: str = Field(default="observation.images.rightImg", max_length=128)
+    state_dim: int = Field(default=20, ge=1, le=256)
+    action_dim: int = Field(default=20, ge=1, le=256)
+    sort_order: int = Field(default=100, ge=0, le=9999)
+
+
+class RobotUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=200)
+    camera_keywords: list[str] | None = None
+    param_defaults: dict[str, Any] | None = None
+    camera_top: str | None = Field(default=None, max_length=128)
+    camera_left: str | None = Field(default=None, max_length=128)
+    camera_right: str | None = Field(default=None, max_length=128)
+    state_dim: int | None = Field(default=None, ge=1, le=256)
+    action_dim: int | None = Field(default=None, ge=1, le=256)
+    sort_order: int | None = Field(default=None, ge=0, le=9999)
+
+
+class RecipeCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=48, pattern=r"^[a-z0-9][a-z0-9-]{0,47}$")
+    clone_from: str = Field(min_length=1, max_length=48)
+    name: str | None = Field(default=None, min_length=1, max_length=80)

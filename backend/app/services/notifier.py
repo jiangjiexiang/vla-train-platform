@@ -15,20 +15,25 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 logger = logging.getLogger("vla-platform")
 
 # 只发这两种终态。CANCELLED 是用户主动取消的，发通知纯属噪音。
-NOTIFIABLE_EVENTS = ("SUCCEEDED", "FAILED")
+NOTIFIABLE_EVENTS = ("RUNNING", "SUCCEEDED", "FAILED")
 
 _EVENT_TITLES = {
+    "RUNNING": "训练任务开始",
     "SUCCEEDED": "训练任务成功",
     "FAILED": "训练任务失败",
 }
@@ -44,6 +49,7 @@ class Notifier:
 
     def __init__(self, settings: Any, *, opener: Any = None) -> None:
         self.dingtalk_webhook = (getattr(settings, "dingtalk_webhook", "") or "").strip()
+        self.dingtalk_secret = (getattr(settings, "dingtalk_secret", "") or "").strip()
         self.wecom_webhook = (getattr(settings, "wecom_webhook", "") or "").strip()
         self.generic_webhook = (getattr(settings, "generic_webhook", "") or "").strip()
         self.timeout = float(getattr(settings, "notify_timeout_seconds", 5.0) or 5.0)
@@ -91,17 +97,26 @@ class Notifier:
     # ------------------------------------------------------------------
     # 三种渠道
     # ------------------------------------------------------------------
-    def _send_dingtalk(self, url: str, job: dict[str, Any], event: str) -> dict[str, Any]:
-        """钉钉群机器人 markdown 消息。
+    @staticmethod
+    def _sign_dingtalk_url(url: str, secret: str, *, timestamp_ms: int | None = None) -> str:
+        ts = str(timestamp_ms if timestamp_ms is not None else round(time.time() * 1000))
+        string_to_sign = f"{ts}\n{secret}"
+        hmac_code = hmac.new(
+            secret.encode("utf-8"),
+            string_to_sign.encode("utf-8"),
+            digestmod=hashlib.sha256,
+        ).digest()
+        sign = quote_plus(base64.b64encode(hmac_code))
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}timestamp={ts}&sign={sign}"
 
-        格式：{"msgtype": "markdown", "markdown": {"title": ..., "text": ...}}
-        签名校验（加签机器人）未实现——那需要在 URL 上拼 timestamp/sign，
-        配置成 keyword 或 IP 白名单机器人即可。
-        """
+    def _send_dingtalk(self, url: str, job: dict[str, Any], event: str) -> dict[str, Any]:
+        """钉钉群机器人 markdown 消息，支持可选 SEC 加签。"""
         title = self._title(job, event)
+        target_url = self._sign_dingtalk_url(url, self.dingtalk_secret) if self.dingtalk_secret else url
         return self._post(
             "dingtalk",
-            url,
+            target_url,
             {"msgtype": "markdown", "markdown": {"title": title, "text": self._markdown(job, event)}},
         )
 
@@ -262,7 +277,8 @@ def _localize(value: Any) -> str:
         return text
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    tz_cn = timezone(timedelta(hours=8))
+    return parsed.astimezone(tz_cn).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _format_duration(seconds: Any) -> str:

@@ -389,11 +389,40 @@ export interface AdminRecipeListResponse {
   items: AdminRecipe[];
 }
 
+export interface AdminRecipeParamField {
+  key: string;
+  flag?: string | null;
+  label?: string;
+  type?: 'str' | 'int' | 'float' | 'bool' | 'enum' | 'path';
+  options?: string[];
+  default?: string | number | boolean | null;
+  help?: string;
+  min?: number;
+  max?: number;
+  kind?: string;
+}
+
+export interface AdminRecipeFields {
+  name: string;
+  description: string;
+  image: string;
+  entrypoint: string;
+  gpu_count: number;
+  estimated_vram_gb?: number | null;
+  public: boolean;
+  order?: number;
+  params?: AdminRecipeParamField[];
+  defaults?: Record<string, string | number | boolean | null>;
+  env?: Record<string, string>;
+  host_paths?: Array<{ name: string; host_path: string; mount_path: string; read_only?: boolean }>;
+}
+
 export interface AdminRecipeDetail {
   id: string;
   source: string;
   // 生效中的完整 YAML（覆盖优先，否则内置文件原文），编辑器直接回填
   yaml: string;
+  fields?: AdminRecipeFields | null;
   updated_at: string | null;
   updated_by: string | null;
   // 仅 DELETE（恢复默认）响应携带
@@ -417,6 +446,7 @@ export interface RecipeHistoryResponse {
 export interface RunRequest {
   recipe_id: string;
   dataset_id: string;
+  dataset_ids?: string[];
   // 留空（不传）由后端生成 <recipe>-<dataset>-<序号>
   name?: string | null;
   // 键名是 ParamSpec.key；未知 key 会被后端以 422 拒绝
@@ -556,4 +586,65 @@ export interface FailureSummary {
   classified: number;
   unknown: number;
   reasons: FailureReason[];
+}
+
+
+export interface UserCreateRequest {
+  username: string;
+  password: string;
+  role: 'admin' | 'user';
+  max_gpus?: number | null;
+  max_active_jobs?: number | null;
+}
+
+export interface UserUpdateRequest {
+  role?: 'admin' | 'user';
+  password?: string;
+}
+
+
+export interface RobotProfile {
+  id: string;
+  name: string;
+  description: string;
+  camera_keywords: string[];
+  param_defaults: Record<string, string>;
+  camera_top?: string;
+  camera_left?: string;
+  camera_right?: string;
+  state_dim?: number;
+  action_dim?: number;
+  sort_order: number;
+  updated_at?: string;
+}
+
+export interface RobotListResponse {
+  items: RobotProfile[];
+}
+
+export interface RobotCreateRequest {
+  id: string;
+  name: string;
+  description?: string;
+  camera_keywords?: string[];
+  param_defaults?: Record<string, string>;
+  camera_top?: string;
+  camera_left?: string;
+  camera_right?: string;
+  state_dim?: number;
+  action_dim?: number;
+  sort_order?: number;
+}
+
+export interface RobotUpdateRequest {
+  name?: string;
+  description?: string;
+  camera_keywords?: string[];
+  param_defaults?: Record<string, string>;
+  camera_top?: string;
+  camera_left?: string;
+  camera_right?: string;
+  state_dim?: number;
+  action_dim?: number;
+  sort_order?: number;
 }

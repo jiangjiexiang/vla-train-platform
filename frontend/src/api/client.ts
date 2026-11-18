@@ -1,9 +1,13 @@
-import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, HealthResponse, Job, JobDiagnosisResponse, JobEventsResponse, JobListResponse, JobLogs, JobMetricsResponse, JobStatus, JobTimelineResponse, JobCheckpointsResponse, LoginResponse, PlatformConfig, PreflightResponse, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, Recipe, RecipeListResponse, RunRequest, SubmitJobRequest, UserListResponse, ImageListResponse, ImageParamsResponse,
+import type { ClusterSummary, CurrentUser, DatasetListResponse, DatasetMeta, HealthResponse, Job, JobDiagnosisResponse, JobEventsResponse, JobListResponse, JobLogs, JobMetricsResponse, JobStatus, JobTimelineResponse, JobCheckpointsResponse, LoginResponse, PlatformConfig, PreflightResponse, QuotaUpdate, QuotaUpdateResponse, QueueListResponse, Recipe, RecipeListResponse, RunRequest, SubmitJobRequest, UserCreateRequest, UserListResponse, UserSummary, UserUpdateRequest, ImageListResponse, ImageParamsResponse,
   TensorboardResponse,
   FailureSummary,
   AdminRecipeListResponse,
   AdminRecipeDetail,
   RecipeHistoryResponse,
+  RobotCreateRequest,
+  RobotListResponse,
+  RobotProfile,
+  RobotUpdateRequest,
 } from '../types/api';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE || '/api/v1').replace(/\/+$/, '');
@@ -161,6 +165,20 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(quota),
     }),
+  createUser: (payload: UserCreateRequest) =>
+    request<UserSummary>('/users', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateUser: (username: string, payload: UserUpdateRequest) =>
+    request<UserSummary>(`/users/${encodeURIComponent(username)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteUser: (username: string) =>
+    request<{ deleted: string }>(`/users/${encodeURIComponent(username)}`, {
+      method: 'DELETE',
+    }),
 
   getClusterSummary: (signal?: AbortSignal) =>
     request<ClusterSummary>('/cluster/summary', { signal }),
@@ -208,16 +226,43 @@ export const api = {
   adminGetRecipe: (id: string, signal?: AbortSignal) =>
     request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}`, { signal }),
   // 422 = YAML/配方/模板校验失败，响应 detail 是面向管理员的错误说明
-  adminSaveRecipe: (id: string, yaml: string) =>
+  adminSaveRecipe: (id: string, payload: string | { fields: Record<string, unknown> }) =>
     request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: JSON.stringify({ yaml }),
+      body: JSON.stringify(typeof payload === 'string' ? { yaml: payload } : payload),
     }),
   adminRestoreRecipe: (id: string) =>
     request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   adminRecipeHistory: (id: string, signal?: AbortSignal) =>
     request<RecipeHistoryResponse>(`/admin/recipes/${encodeURIComponent(id)}/history`, { signal }),
   // 409 = 没有可回滚的历史版本
+  registerDataset: (payload: { path: string; id?: string }) =>
+    request<DatasetMeta>('/datasets', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  adminCreateRecipe: (payload: { id: string; clone_from: string; name?: string }) =>
+    request<AdminRecipeDetail>('/admin/recipes', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listRobots: (signal?: AbortSignal) =>
+    request<RobotListResponse>('/robots', { signal }),
+  adminCreateRobot: (payload: RobotCreateRequest) =>
+    request<RobotProfile>('/admin/robots', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  adminUpdateRobot: (id: string, payload: RobotUpdateRequest) =>
+    request<RobotProfile>(`/admin/robots/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  adminDeleteRobot: (id: string) =>
+    request<{ deleted: string }>(`/admin/robots/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
   adminRollbackRecipe: (id: string) =>
     request<AdminRecipeDetail>(`/admin/recipes/${encodeURIComponent(id)}/rollback`, { method: 'POST' }),
 

@@ -50,6 +50,8 @@ class SessionStore:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=10000")
         return connection
 
     def _initialize(self) -> None:
@@ -166,3 +168,7 @@ class SessionStore:
                     "last_seen_at": row["last_seen_at"],
                 }
         return users
+
+    def delete_for_user(self, username: str) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM sessions WHERE username = ?", (username,))

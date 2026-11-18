@@ -12,7 +12,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Path, Query
 
 from ..auth import AuthContext, require_admin, set_admin_actor
-from ..models import RecipeYamlUpdate
+from ..models import RecipeCreate, RecipeYamlUpdate
 from ..recipes.loader import RECIPE_ID_PATTERN
 from ..services.platform import PlatformService
 from .dependencies import get_service
@@ -21,6 +21,15 @@ router = APIRouter(prefix="/api/v1/admin")
 
 # 配方 id 出现在 URL 路径里，格式与 loader 的校验保持一致。
 RecipeId = Annotated[str, Path(min_length=1, max_length=48, pattern=RECIPE_ID_PATTERN.pattern)]
+
+
+@router.post("/recipes", status_code=201)
+def admin_create_recipe(
+    payload: RecipeCreate,
+    _admin: AuthContext = Depends(set_admin_actor),
+    service: PlatformService = Depends(get_service),
+) -> dict[str, Any]:
+    return service.create_recipe(payload.id, payload.clone_from, payload.name)
 
 
 @router.get("/recipes", dependencies=[Depends(require_admin)])
@@ -46,7 +55,9 @@ def admin_save_recipe(
     service: PlatformService = Depends(get_service),
 ) -> dict[str, Any]:
     """保存完整 YAML 覆盖。校验不过返回 422，不落库。"""
-    return service.save_recipe_override(recipe_id, payload.yaml)
+    if payload.yaml is not None:
+        return service.save_recipe_override(recipe_id, payload.yaml)
+    return service.save_recipe_fields(recipe_id, payload.fields or {})
 
 
 @router.delete("/recipes/{recipe_id}")

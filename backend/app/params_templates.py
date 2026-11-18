@@ -21,7 +21,7 @@ MAX_OPTIONS = 50
 
 KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 # flag 允许 --a-b、--a_b、--config.name 这类形式（openpi 用点号分段）
-FLAG_PATTERN = re.compile(r"^--[A-Za-z0-9][-A-Za-z0-9_.]*$")
+FLAG_PATTERN = re.compile(r"^(?:--[A-Za-z0-9][-A-Za-z0-9_.]*|[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*=)$")
 
 # 镜像名：name[:tag][@sha256:digest]，允许 registry/namespace 层
 # 镜像名：registry[:port]/path/name[:tag][@sha256:digest]

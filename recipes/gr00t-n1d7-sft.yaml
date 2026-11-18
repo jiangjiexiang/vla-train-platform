@@ -1,0 +1,115 @@
+id: gr00t-n1d7-sft
+name: GR00T N1.7 SFT（Isaac-GR00T）
+description: >-
+  使用 Isaac-GR00T 官方微调脚本对 GR00T-N1.7-3B 做 SFT 基线训练。
+  复用 rlinf:embodied-full-v2 镜像，通过 host_paths 挂载宿主机 gr00t-n1.7 环境、
+  GR00T-N1.7-3B 代码与本地预训练权重，自动绑定平台选中的数据集（${DATASET_ROOT}）与产物目录（/checkpoints/${JOB_NAME}）。
+image: docker.io/library/rlinf:embodied-full-v2
+entrypoint: >-
+  cd /opt/GR00T-N1.7-3B/Isaac-GR00T &&
+  NPROC=$(nvidia-smi -L | wc -l) &&
+  /opt/gr00t-env/bin/torchrun --nproc_per_node=$NPROC gr00t/experiment/launch_finetune.py
+  --dataset-path ${DATASET_ROOT}
+  --output-dir /checkpoints/${JOB_NAME}
+  --num-gpus $NPROC
+dataset_formats:
+  - lerobot-v3.0
+  - lerobot-v2.1
+  - lerobot-v2.0
+env:
+  PYTHONPATH: /opt/GR00T-N1.7-3B/Isaac-GR00T
+  HF_HUB_CACHE: /opt/hf_cache
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  CUDA_HOME: /opt/gr00t-env
+host_paths:
+  - name: gr00t-env
+    host_path: /yyl/jiangjiexiang/envs/gr00t-n1.7
+    mount_path: /opt/gr00t-env
+    read_only: true
+  - name: gr00t-code
+    host_path: /yyl/jiangjiexiang/training_code/GR00T-N1.7-3B
+    mount_path: /opt/GR00T-N1.7-3B
+    read_only: false
+  - name: gr00t-hf-cache
+    host_path: /yyl/jiangjiexiang/training_checkpoints/gr00t_ckpt/hf_cache
+    mount_path: /opt/hf_cache
+    read_only: true
+template:
+  schema_version: 1
+  params:
+    - key: base_model_path
+      flag: --base-model-path
+      label: 基座模型路径
+      type: str
+      default: /opt/GR00T-N1.7-3B/GR00T_N1.7/checkpoints/GR00T-N1.7-3B
+      help: 默认为宿主机已下载的 GR00T-N1.7-3B 权重
+    - key: embodiment_tag
+      flag: --embodiment-tag
+      label: Embodiment 标签
+      type: str
+      default: NEW_EMBODIMENT
+    - key: modality_config_path
+      flag: --modality-config-path
+      label: 机器人 Modality 配置
+      type: enum
+      options:
+        - /opt/GR00T-N1.7-3B/GR00T_N1.7/x2robot_config.py
+        - /opt/GR00T-N1.7-3B/Isaac-GR00T/examples/SO100/so100_config.py
+        - /opt/GR00T-N1.7-3B/Isaac-GR00T/examples/mask-guided-background-suppression/so101_config.py
+        - /opt/GR00T-N1.7-3B/Isaac-GR00T/examples/rebot-arm-dm/rebot_config.py
+      default: /opt/GR00T-N1.7-3B/GR00T_N1.7/x2robot_config.py
+      help: 选择对应机器人的 Modality 配置（x2robot / SO100 / SO101 / ReBot）
+    - key: max_steps
+      flag: --max-steps
+      label: 最大训练步数
+      type: int
+      default: 30000
+      min: 1
+    - key: global_batch_size
+      flag: --global-batch-size
+      label: Global Batch Size
+      type: int
+      default: 64
+      min: 1
+    - key: learning_rate
+      flag: --learning-rate
+      label: 学习率
+      type: float
+      default: 2.0e-5
+    - key: save_steps
+      flag: --save-steps
+      label: 保存间隔（步）
+      type: int
+      default: 5000
+      min: 1
+    - key: dataloader_num_workers
+      flag: --dataloader-num-workers
+      label: DataLoader Workers
+      type: int
+      default: 4
+      min: 0
+    - key: extra_args
+      kind: extra
+      type: str
+      label: 其他参数
+      default: ""
+  extra_args:
+    label: 其他参数
+    help: 可追加如 --tune-llm --tune-visual 等 Isaac-GR00T 参数
+    default: ""
+defaults:
+  base_model_path: /opt/GR00T-N1.7-3B/GR00T_N1.7/checkpoints/GR00T-N1.7-3B
+  embodiment_tag: NEW_EMBODIMENT
+  modality_config_path: /opt/GR00T-N1.7-3B/GR00T_N1.7/x2robot_config.py
+  max_steps: 30000
+  global_batch_size: 64
+  learning_rate: 2.0e-5
+  save_steps: 5000
+  dataloader_num_workers: 4
+gpu_count: 8
+estimated_vram_gb: 40
+order: 42
+public: true

@@ -91,7 +91,8 @@ def build_param_tokens(template: ParamsTemplate, values: dict[str, Any] | None =
             if token is not None:
                 tokens.append(token)
             continue
-        tokens.append(f"{param.flag} {shell_quote(_stringify(value))}")
+        sep = "" if param.flag.endswith("=") else " "
+        tokens.append(f"{param.flag}{sep}{shell_quote(_stringify(value))}")
     return tokens
 
 

@@ -159,12 +159,12 @@ def _container_start(pod: dict[str, Any]) -> str | None:
 
 
 def _iso(value: Any) -> str | None:
-    """K8s 客户端有时给 datetime，有时给字符串，统一成字符串。"""
+    """K8s 客户端有时给 datetime，有时给字符串，统一成 ISO-8601 Z 格式。"""
     if value is None:
         return None
     if isinstance(value, str):
-        return value
+        return value.replace("+00:00", "Z")
     isoformat = getattr(value, "isoformat", None)
     if callable(isoformat):
-        return isoformat()
-    return str(value)
+        return isoformat().replace("+00:00", "Z")
+    return str(value).replace("+00:00", "Z")

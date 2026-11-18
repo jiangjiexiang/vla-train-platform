@@ -1,0 +1,35 @@
+id: test-smoke
+name: 测试配方（环境与挂载冒烟验证）
+description: >-
+  轻量级 1 卡冒烟测试配方：验证容器启动、GPU CUDA 可用性、/datasets 与 /checkpoints 挂载，
+  并向平台实时曲线写入 5 步测试指标（约 5 秒自动完成）。
+image: docker.io/library/rlinf:embodied-full-v2
+entrypoint: >-
+  source switch_env openpi && python -c "import json, os, time, torch;
+  out = os.path.join('/checkpoints', os.environ.get('JOB_NAME', 'test'));
+  os.makedirs(out, exist_ok=True);
+  print('=== Smoke Test Start ===', flush=True);
+  print('JOB_NAME:', os.environ.get('JOB_NAME'), flush=True);
+  print('DATASET_ROOT:', os.environ.get('DATASET_ROOT'), flush=True);
+  print('DATASET_ROOTS:', os.environ.get('DATASET_ROOTS', ''), flush=True);
+  print('CUDA:', torch.cuda.is_available(), 'GPUs:', torch.cuda.device_count(), flush=True);
+  print('Datasets:', sorted(os.listdir('/datasets')) if os.path.isdir('/datasets') else [], flush=True);
+  mf = os.path.join(out, 'metrics.jsonl');
+  [print('step', s, open(mf, 'a').write(json.dumps({'step': s, 'loss': round(1.0/s, 4), 'lr': 1e-4, 'grad_norm': 0.5}) + '\n'), flush=True) or time.sleep(1) for s in range(1, 6)];
+  print('=== Smoke Test Done ===', flush=True)"
+dataset_formats:
+  - lerobot-v3.0
+  - lerobot-v2.1
+  - lerobot-v2.0
+template:
+  schema_version: 1
+  params:
+    - key: extra_args
+      kind: extra
+      type: str
+      label: 附加参数
+      default: ""
+gpu_count: 1
+estimated_vram_gb: 4
+order: 1
+public: true

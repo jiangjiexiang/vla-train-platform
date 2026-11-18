@@ -120,6 +120,7 @@ class Settings:
     # （不起后台线程、不建表、不发任何请求），行为与加这个功能之前完全一致。
     # 钉钉/企微的机器人 webhook；通用 webhook 是任意的 JSON POST 接收端。
     dingtalk_webhook: str = ""
+    dingtalk_secret: str = ""
     wecom_webhook: str = ""
     generic_webhook: str = ""
     # 轮询间隔（秒）：多久扫一次 K8s 里有没有任务到达终态。
@@ -243,6 +244,7 @@ class Settings:
                 os.environ.get("PLATFORM_GPU_METRICS_TTL", "2.0"), "PLATFORM_GPU_METRICS_TTL"
             ),
             dingtalk_webhook=os.environ.get("PLATFORM_DINGTALK_WEBHOOK", "").strip(),
+            dingtalk_secret=os.environ.get("PLATFORM_DINGTALK_SECRET", "").strip(),
             wecom_webhook=os.environ.get("PLATFORM_WECOM_WEBHOOK", "").strip(),
             generic_webhook=os.environ.get("PLATFORM_GENERIC_WEBHOOK", "").strip(),
             notify_interval_seconds=_parse_positive_float(

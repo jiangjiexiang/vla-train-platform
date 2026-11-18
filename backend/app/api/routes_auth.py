@@ -14,11 +14,56 @@ from ..services.platform import PlatformService
 from ..tensorboard import set_tensorboard_cookie
 from .dependencies import get_service
 
+import threading
+import time
+from collections import defaultdict
+
+_LOGIN_LOCK = threading.Lock()
+_LOGIN_FAILURES: dict[tuple[str, str], list[float]] = defaultdict(list)
+_LOGIN_WINDOW_SECONDS = 60.0
+_LOGIN_MAX_ATTEMPTS = 5
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if fwd:
+        return fwd
+    return request.client.host if request.client else "unknown"
+
+
+def _check_rate_limit(ip: str, username: str) -> None:
+    now = time.monotonic()
+    key = (ip, username)
+    with _LOGIN_LOCK:
+        recent = [t for t in _LOGIN_FAILURES.get(key, []) if now - t < _LOGIN_WINDOW_SECONDS]
+        _LOGIN_FAILURES[key] = recent
+        if len(recent) >= _LOGIN_MAX_ATTEMPTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many failed login attempts, please try again later",
+            )
+
+
+def _record_login_failure(ip: str, username: str) -> None:
+    now = time.monotonic()
+    key = (ip, username)
+    with _LOGIN_LOCK:
+        recent = [t for t in _LOGIN_FAILURES.get(key, []) if now - t < _LOGIN_WINDOW_SECONDS]
+        recent.append(now)
+        _LOGIN_FAILURES[key] = recent
+
+
+def _clear_login_failures(ip: str, username: str) -> None:
+    with _LOGIN_LOCK:
+        _LOGIN_FAILURES.pop((ip, username), None)
+
+
 router = APIRouter()
 
 
 @router.post("/auth/login")
 def login(
+    request: Request,
     request_model: LoginRequest,
     service: PlatformService = Depends(get_service),
     settings: Settings = Depends(get_settings),
@@ -31,18 +76,24 @@ def login(
 
     token/off 模式不支持账号密码登录——token 模式本来就是给机器用的。
     """
+    client_ip = _client_ip(request)
+    _check_rate_limit(client_ip, request_model.username)
     if settings.auth_mode == "local":
         from ..local_users import LocalUserRegistry, parse_local_users
 
-        registry: LocalUserRegistry = parse_local_users(settings.local_users)
-        user = registry.verify(request_model.username, request_model.password)
+        user = service.users.verify(request_model.username, request_model.password)
         if user is None:
+            registry: LocalUserRegistry = parse_local_users(settings.local_users)
+            user = registry.verify(request_model.username, request_model.password)
+        if user is None:
+            _record_login_failure(client_ip, request_model.username)
             # 与 LDAP 分支统一：不区分「用户不存在」和「密码错误」
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid username or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        _clear_login_failures(client_ip, request_model.username)
         session = service.sessions.issue(
             user.username, user.role, settings.session_ttl_hours, source="local", verified=False
         )

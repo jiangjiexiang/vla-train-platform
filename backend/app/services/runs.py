@@ -128,7 +128,11 @@ def build_run(
         default_command=service.settings.default_command,
     )
 
-    env = {"DATASET_ROOT": f"/datasets/{request.dataset_id}"}
+    all_ids = request.resolved_dataset_ids()
+    env = {
+        "DATASET_ROOT": f"/datasets/{all_ids[0]}",
+        "DATASET_ROOTS": ",".join(f"/datasets/{d}" for d in all_ids),
+    }
     env.update(recipe.env)
     env.update(request.env)
 

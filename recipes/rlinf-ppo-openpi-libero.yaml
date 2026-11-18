@@ -1,0 +1,137 @@
+id: rlinf-ppo-openpi-libero
+name: RLinf PPO（OpenPI π0.5 / LIBERO-Spatial）
+description: >-
+  用 RLinf v2 对 OpenPI π0.5 做 PPO 强化学习（LIBERO-Spatial 仿真，openpi 环境）。
+  默认使用宿主机挂载的 /models/openpi/base_models/pi05_base，可替换为 SFT 权重（如 /models/openpi/finetuned_models/... 或 /checkpoints/...）。
+  PPO 不使用数据集，提交时任选占位。
+image: docker.io/library/rlinf:embodied-full-v2
+entrypoint: >-
+  source switch_env openpi &&
+  bash /yyl/jiangjiexiang/runtime/nvidia-550.90.07/with_graphics.sh
+  python /workspace/RLinf/examples/embodiment/train_embodied_agent.py
+  --config-path /workspace/RLinf/examples/embodiment/config
+  --config-name libero_spatial_ppo_openpi_pi05
+  runner.logger.log_path=/checkpoints/${JOB_NAME}
+dataset_formats:
+  - lerobot-v3.0
+  - lerobot-v2.1
+  - lerobot-v2.0
+env:
+  ROBOT_PLATFORM: LIBERO
+  MUJOCO_GL: egl
+  PYOPENGL_PLATFORM: egl
+  PYTHONPATH: /workspace/RLinf
+  EMBODIED_PATH: /workspace/RLinf/examples/embodiment
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+host_paths:
+  - name: models
+    host_path: /models
+    mount_path: /models
+    read_only: true
+  - name: rlinf-v2
+    host_path: /yyl/jiangjiexiang/vla-train/RLinf-v2
+    mount_path: /workspace/RLinf
+    read_only: false
+  - name: nvidia-graphics
+    host_path: /yyl/jiangjiexiang/runtime/nvidia-550.90.07
+    mount_path: /yyl/jiangjiexiang/runtime/nvidia-550.90.07
+    read_only: true
+template:
+  schema_version: 1
+  params:
+    - key: actor_model_path
+      flag: actor.model.model_path=
+      label: Actor 模型权重路径
+      type: enum
+      options:
+        - /models/openpi/base_models/pi05_base
+        - /models/openpi/finetuned_models/pi05_h01
+        - /models/openpi/finetuned_models/pi05_h01_subtask123_mix
+        - /models/openpi/finetuned_models/pi05_h01_subtask3_mix
+        - /models/openpi/finetuned_models/pi05_turtle
+      default: /models/openpi/base_models/pi05_base
+      help: 可填 /models/openpi/base_models/pi05_base、/models/openpi/finetuned_models/pi05_h01 或 SFT 输出路径
+    - key: rollout_model_path
+      flag: rollout.model.model_path=
+      label: Rollout 模型权重路径
+      type: enum
+      options:
+        - /models/openpi/base_models/pi05_base
+        - /models/openpi/finetuned_models/pi05_h01
+        - /models/openpi/finetuned_models/pi05_h01_subtask123_mix
+        - /models/openpi/finetuned_models/pi05_h01_subtask3_mix
+        - /models/openpi/finetuned_models/pi05_turtle
+      default: /models/openpi/base_models/pi05_base
+    - key: use_reward_model
+      flag: reward.use_reward_model=
+      label: 启用独立 Reward Model
+      type: bool
+      default: false
+      true_value: "True"
+      false_value: "False"
+    - key: reward_type
+      flag: algorithm.reward_type=
+      label: Reward 粒度
+      type: enum
+      options: ["chunk_level", "step_level"]
+      default: chunk_level
+    - key: reward_coef
+      flag: algorithm.reward_coef=
+      label: Reward 缩放系数
+      type: float
+      default: 1.0
+    - key: adv_type
+      flag: algorithm.adv_type=
+      label: 优势估计方法
+      type: enum
+      options: ["gae", "grpo"]
+      default: gae
+    - key: kl_beta
+      flag: algorithm.kl_beta=
+      label: KL 惩罚系数 (kl_beta)
+      type: float
+      default: 0.01
+    - key: num_envs
+      flag: env.train.total_num_envs=
+      label: 并行仿真环境数
+      type: int
+      default: 64
+      min: 1
+      max: 256
+    - key: max_steps
+      flag: runner.max_steps=
+      label: 最大训练步数
+      type: int
+      default: 30000
+      min: 1
+    - key: save_interval
+      flag: runner.save_interval=
+      label: 保存间隔（步）
+      type: int
+      default: 5000
+      min: 1
+    - key: extra_args
+      kind: extra
+      type: str
+      label: 其他 Hydra 参数
+      default: ""
+  extra_args:
+    label: 其他 Hydra 参数
+    help: 可追加其他 Hydra 覆盖参数
+    default: ""
+defaults:
+  actor_model_path: /models/openpi/base_models/pi05_base
+  rollout_model_path: /models/openpi/base_models/pi05_base
+  use_reward_model: false
+  reward_type: chunk_level
+  reward_coef: 1.0
+  adv_type: gae
+  kl_beta: 0.01
+  num_envs: 64
+  max_steps: 30000
+  save_interval: 5000
+gpu_count: 8
+estimated_vram_gb: 36
+order: 34
+public: true

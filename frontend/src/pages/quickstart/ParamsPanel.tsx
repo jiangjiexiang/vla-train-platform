@@ -47,7 +47,7 @@ function QuickParamControl({ param }: { param: ParamSpec }) {
       return (
         <Select
           allowClear
-          placeholder={placeholder ?? '默认'}
+          placeholder={param.required ? '请选择' : (placeholder ?? '默认')}
           options={(param.options ?? []).map((option) => ({ value: option, label: option }))}
         />
       );

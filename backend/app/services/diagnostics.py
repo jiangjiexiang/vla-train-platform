@@ -58,6 +58,10 @@ DIAGNOSES: dict[str, tuple[str, str]] = {
         "checkpoint 写入失败",
         "/checkpoints 不可写。确认宿主机 /data/vla-platform/checkpoints 对容器用户可写",
     ),
+    "nonzero_exit": (
+        "进程异常退出",
+        "容器以非零状态退出，日志中未出现 Python traceback。请查看完整日志与「事件」中的退出码，确认启动命令、参数或依赖是否正常",
+    ),
     "python_error": (
         "训练脚本抛异常",
         "查看日志末尾的 traceback 定位出错行；常见原因是不兼容的参数名、缺依赖、权重路径不对",
@@ -265,12 +269,13 @@ def diagnose(
                     code, log_tail[start : match.end() + 120].strip(), image=image
                 )
 
-    # 4) 兜底：知道失败了但说不出原因
-    return _build(
-        "python_error",
-        message or reason or "任务以非零状态退出，日志中没有匹配到已知错误模式",
-        image=image,
-    )
+    # 4) 兜底：知道失败了但说不出原因（未匹配到 Python Traceback，不误判为 python_error）
+    evidence_text = message or reason or "任务以非零状态退出，日志中没有匹配到已知错误模式"
+    res = _build("nonzero_exit", evidence_text, image=image)
+    exit_match = re.search(r"exit(?:ed)?\s+with\s+code\s+(\d+)", f"{message or ""} {reason or ""}", re.I)
+    if exit_match:
+        res["summary"] = f"进程异常退出（退出码 {exit_match.group(1)}）"
+    return res
 
 
 def _build(

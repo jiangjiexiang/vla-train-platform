@@ -1,65 +1,124 @@
 id: rlinf-ppo-maniskill
-name: RLinf PPO（ManiSkill 仿真）
+name: RLinf PPO（OpenVLA-OFT / ManiSkill）
 description: >-
-  用 RLinf v0.4 在 ManiSkill 仿真里做 PPO 强化学习（默认 OpenVLA + PutCarrotOnPlateInScene，openvla 环境）。
-  PPO 是仿真在线采样训练，不使用数据集，提交时任选一个数据集占位即可。
-  默认单卡：actor/env/rollout 全部放在 GPU 0；多卡可自行改 placement。
-image: vla-rlinf:0.5-selfcontained
-entrypoint: bash /usr/local/bin/run_ppo.sh
-# PPO 不读数据集，这里列出全部格式只是让平台的「必选数据集」校验能通过。
+  用 RLinf v2 在 ManiSkill 仿真里做 PPO 强化学习（OpenVLA-OFT，openvla-oft 环境）。
+  使用宿主机挂载的 RLinf-OpenVLAOFT-ManiSkill-Base-Main 权重。
+  PPO 是仿真在线采样训练，不使用数据集，提交时任选占位即可。
+image: docker.io/library/rlinf:embodied-full-v2
+entrypoint: >-
+  source switch_env openvla-oft &&
+  bash /yyl/jiangjiexiang/runtime/nvidia-550.90.07/with_graphics.sh
+  python /workspace/RLinf/examples/embodiment/train_embodied_agent.py
+  --config-path /workspace/RLinf/examples/embodiment/config
+  --config-name maniskill_ppo_openvlaoft_quickstart
+  runner.logger.log_path=/checkpoints/${JOB_NAME}
 dataset_formats:
   - lerobot-v3.0
   - lerobot-v2.1
   - lerobot-v2.0
 env:
-  RLINF_ENV: openvla
+  ROBOT_PLATFORM: LIBERO
+  MUJOCO_GL: egl
+  PYOPENGL_PLATFORM: egl
+  PYTHONPATH: /workspace/RLinf
+  EMBODIED_PATH: /workspace/RLinf/examples/embodiment
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+host_paths:
+  - name: models
+    host_path: /models
+    mount_path: /models
+    read_only: true
+  - name: rlinf-v2
+    host_path: /yyl/jiangjiexiang/vla-train/RLinf-v2
+    mount_path: /workspace/RLinf
+    read_only: false
+  - name: nvidia-graphics
+    host_path: /yyl/jiangjiexiang/runtime/nvidia-550.90.07
+    mount_path: /yyl/jiangjiexiang/runtime/nvidia-550.90.07
+    read_only: true
 template:
   schema_version: 1
   params:
-    - key: config
-      flag: --config
-      label: RLinf 配置名
+    - key: actor_model_path
+      flag: actor.model.model_path=
+      label: Actor 模型权重路径
       type: str
-      default: maniskill_ppo_openvla_quickstart
-      help: examples/embodiment/config/ 下的配置名（不带 .yaml），如 maniskill_ppo_openvlaoft_quickstart
-    - key: model_path
-      flag: --model-path
-      label: 模型权重路径
+      default: /models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
+    - key: rollout_model_path
+      flag: rollout.model.model_path=
+      label: Rollout 模型权重路径
       type: str
-      default: /trainingworkspace/_models/openvla-7b-rlvla-warmup
-      help: PPO 热启动权重（SFT ckpt），默认走镜像内 /trainingworkspace/_models/openvla-7b-rlvla-warmup；若镜像未内置该权重需自行改路径
-    - key: max_steps
-      flag: --max-steps
-      label: 最大训练步数
-      type: int
-      default: 200
-      min: 1
-      help: 冒烟验证用 200；正式训练按需调大，-1 表示不限
-    - key: save_interval
-      flag: --save-interval
-      label: 保存 checkpoint 间隔（epoch）
-      type: int
-      default: 40
-      min: 1
+      default: /models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
+    - key: use_reward_model
+      flag: reward.use_reward_model=
+      label: 启用独立 Reward Model
+      type: bool
+      default: false
+      true_value: "True"
+      false_value: "False"
+    - key: reward_type
+      flag: algorithm.reward_type=
+      label: Reward 粒度
+      type: enum
+      options: ["chunk_level", "step_level"]
+      default: chunk_level
+    - key: reward_coef
+      flag: algorithm.reward_coef=
+      label: Reward 缩放系数
+      type: float
+      default: 1.0
+    - key: adv_type
+      flag: algorithm.adv_type=
+      label: 优势估计方法
+      type: enum
+      options: ["gae", "grpo"]
+      default: gae
+    - key: kl_beta
+      flag: algorithm.kl_beta=
+      label: KL 惩罚系数 (kl_beta)
+      type: float
+      default: 0.01
     - key: num_envs
-      flag: --num-envs
+      flag: env.train.total_num_envs=
       label: 并行仿真环境数
       type: int
-      default: 32
+      default: 8
       min: 1
       max: 256
-      help: 显存紧张时调小，如 16
-    - key: placement
-      flag: --placement
-      label: GPU 分配（component_placement）
+    - key: max_steps
+      flag: runner.max_steps=
+      label: 最大训练步数
+      type: int
+      default: 30000
+      min: 1
+    - key: save_interval
+      flag: runner.save_interval=
+      label: 保存间隔（步）
+      type: int
+      default: 5000
+      min: 1
+    - key: extra_args
+      kind: extra
       type: str
-      default: actor,env,rollout:0-0
-      help: 单卡保持默认；双卡可改 actor,env,rollout:0-1
+      label: 其他 Hydra 参数
+      default: ""
+  extra_args:
+    label: 其他 Hydra 参数
+    help: 可追加其他 Hydra 覆盖参数
+    default: ""
 defaults:
-  config: maniskill_ppo_openvla_quickstart
-  max_steps: 200
-  save_interval: 40
-  num_envs: 32
-gpu_count: 1
+  actor_model_path: /models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
+  rollout_model_path: /models/openvla-oft/RLinf-OpenVLAOFT-ManiSkill-Base-Main
+  use_reward_model: false
+  reward_type: chunk_level
+  reward_coef: 1.0
+  adv_type: gae
+  kl_beta: 0.01
+  num_envs: 8
+  max_steps: 30000
+  save_interval: 5000
+gpu_count: 8
+estimated_vram_gb: 32
 order: 30
 public: true

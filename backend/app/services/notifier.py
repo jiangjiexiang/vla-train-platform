@@ -23,7 +23,7 @@ import logging
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote_plus, urlparse
 
@@ -277,7 +277,8 @@ def _localize(value: Any) -> str:
         return text
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    tz_cn = timezone(timedelta(hours=8))
+    return parsed.astimezone(tz_cn).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _format_duration(seconds: Any) -> str:
